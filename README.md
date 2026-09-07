@@ -87,12 +87,13 @@ Environment variables:
 | `MESHIVE_MCP_ALLOWED_HOSTS` | Comma-separated `Host` allowlist; empty disables DNS-rebinding checks (use behind an ingress) |
 | `MESHIVE_API_KEY` | Fallback key, **stdio mode only** |
 
-Docker:
+Docker (public image, built from the `real` branch):
 
 ```bash
-docker build -t meshive-mcp .
-docker run -p 8080:8080 meshive-mcp
+docker run -p 8080:8080 meshive/meshive-mcp
 ```
+
+Or build it yourself with `docker build -t meshive-mcp .`.
 
 ## Development
 
