@@ -16,6 +16,11 @@
 
 ### 0.1 워크스페이스 해석
 - 모든 워크스페이스 단위 도구의 `workspace` 는 **선택**.
+- 값이 16자리 hex 면 id. 그 외 문자열은 **라벨**(workspace_name)로 보고 서버가 id 로 바꿔 준다(2026-09-07 실측: 모델이 라벨을
+  id 자리에 넣는 실수가 잦았다). 못 찾으면 `unknown_workspace` + 후보 목록, 라벨이 겹치면 `ambiguous_workspace`.
+- 목록 도구(pods, storages, servings)는 `"all"` 을 받아 모든 워크스페이스를 합쳐 준다(응답 `workspace: "all"`). tasks/assets 는
+  서버 페이징이 워크스페이스 단위라 `"all"` 을 거절한다.
+- 백엔드 403 "not a member of workspace" 는 `unknown_workspace` 로 번역한다(모델 입장에서는 잘못된 id).
 - 생략 시: 사용자 워크스페이스가 1개 → 그것을 사용. 여러 개 → `isError` 없이 아래를 반환하고 종료.
   ```json
   {"needs_input": "workspace", "workspaces": [{"name": "ws-a1b2", "label": "research"}, ...],
@@ -28,7 +33,8 @@
 - 백엔드에서 전체 목록을 주는 pods/tasks/machines/templates/servings 는 v1 에서 MCP 서버가 잘라 내고, 백엔드 `limit/cursor` 는 후속 작업으로 붙인다(커서 형식은 처음부터 동일하게).
 
 ### 0.3 응답 형식
-- `content[0].text` 에 compact JSON. 클라이언트가 지원하면 `structuredContent` 도 같이.
+- `content[0].text` 에 compact JSON(공백·줄바꿈 없음). 같은 객체를 `structuredContent` 로도 싣는다.
+- 백엔드 Decimal 문자열은 정규화한다: `"0E-8"` → `"0"`, `"0.87741500"` → `"0.877415"`. 정수 문자열(id 가능)은 손대지 않는다.
 - 원시 응답(`raw`)은 싣지 않는다. SDK 모델의 정규화 필드만.
 - 크기·비율 단위는 필드명에 포함(`vram_gb`, `usage_rate`, `price_per_hour_usd`).
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import json
 from typing import Any, Awaitable, Callable, TypeVar
 
 from mcp.server.mcpserver import MCPServer
@@ -16,8 +17,8 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotent
 
 
 def meshive_tool(server: MCPServer, name: str, *, annotations: ToolAnnotations):
-    """`server.tool` 위에 한 겹: 도구가 던진 ToolError 를 **접두어 없는 순수 JSON** 본문의
-    `isError` 결과로 바꾼다. SDK 기본 동작은 "Error executing tool <name>: ..." 을 앞에 붙이는데,
+    """`server.tool` 위에 한 겹: (1) 정상 결과를 compact JSON 텍스트 + structured_content 로,
+    (2) 도구가 던진 ToolError 를 **접두어 없는 순수 JSON** 본문의 `isError` 결과로 바꾼다. SDK 기본 동작은 "Error executing tool <name>: ..." 을 앞에 붙이는데,
     계약(§0.4)은 본문이 `{code, message, next_step}` JSON 그 자체여야 한다 — 모델이 파싱해서
     `next_step` 을 따르게 하려면 접두어가 없어야 한다.
     """
@@ -25,9 +26,12 @@ def meshive_tool(server: MCPServer, name: str, *, annotations: ToolAnnotations):
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any):
             try:
-                return await fn(*args, **kwargs)
+                result = await fn(*args, **kwargs)
             except ToolError as exc:
                 return CallToolResult(content=[TextContent(type="text", text=str(exc))], is_error=True)
+            # SDK 기본 직렬화는 indent=2 라 목록 응답이 부풀어 오른다(토큰). compact 로 직접 만든다.
+            text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+            return CallToolResult(content=[TextContent(type="text", text=text)], structured_content=result)
 
         server.tool(name=name, annotations=annotations)(wrapper)
         return fn

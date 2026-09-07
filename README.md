@@ -67,7 +67,7 @@ All tools in this version are read-only. `gpus` also works without an API key (p
 | `machines` | Machines you host, with earnings and live metrics |
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 
-Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
+`workspace` takes the id from the workspaces tool, a workspace label, or `"all"` on pods/storages/servings. Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
 
 ## Run it yourself

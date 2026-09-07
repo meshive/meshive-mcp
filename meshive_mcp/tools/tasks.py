@@ -18,7 +18,7 @@ def register(server: MCPServer) -> None:
                     cursor: str | None = None) -> dict[str, Any]:
         """List serverless tasks (one-off GPU jobs) in a workspace, or show one by `task_id` (looks like "task_...").
         Filter with `status` (queued, running, succeeded, failed, ...); the detail view includes cost and exit code.
-        Omit `workspace` if the user has only one workspace."""
+        `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
         async with meshive_client(ctx) as client:
             if task is not None:
                 return {"task": to_dict(await call(client.get_task, task))}

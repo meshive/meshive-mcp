@@ -5,11 +5,27 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _DROP = {"raw"}
+# 소수점 또는 지수가 있는 숫자 문자열만 건드린다. "457" 같은 정수 문자열은 id 일 수 있어 그대로 둔다.
+_DECIMAL_STR = re.compile(r"^-?(\d+\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)$")
+
+
+def normalize_number(value: str) -> str:
+    """백엔드 Decimal 문자열을 사람이 읽는 형태로: "0E-8" → "0", "0.87741500" → "0.877415"."""
+    if not _DECIMAL_STR.match(value):
+        return value
+    try:
+        d = Decimal(value).normalize()
+    except InvalidOperation:
+        return value
+    if d == 0:
+        return "0"
+    return format(d, "f")
 
 
 def to_dict(obj: Any) -> Any:
@@ -27,5 +43,7 @@ def to_dict(obj: Any) -> Any:
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, Decimal):
-        return str(obj)
+        return normalize_number(str(obj))
+    if isinstance(obj, str):
+        return normalize_number(obj)
     return obj

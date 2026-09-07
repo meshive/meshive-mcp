@@ -68,8 +68,14 @@ def translate(exc: BaseException) -> ToolError:
         return tool_error("invalid_api_key", exc.message or "Invalid API key.", NEXT_STEP_INVALID_KEY)
     if isinstance(exc, PermissionDeniedError):
         msg = exc.message or "Forbidden."
-        if "scope" in msg.lower():
+        low = msg.lower()
+        if "scope" in low:
             return tool_error("write_scope_required", msg, NEXT_STEP_WRITE_SCOPE)
+        if "member of workspace" in low or "not a member" in low:
+            # 백엔드는 존재하지 않는/남의 워크스페이스 id 를 403 으로 답한다 — 모델 입장에서는 "잘못된 id".
+            return tool_error("unknown_workspace", msg,
+                              "The workspace id is wrong or not the user's. Call the workspaces tool and use "
+                              "the `namespace_name` value (not the label).")
         return tool_error("forbidden", msg, NEXT_STEP_FORBIDDEN)
     if isinstance(exc, NotFoundError):
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)

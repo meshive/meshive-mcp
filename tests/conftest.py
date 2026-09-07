@@ -22,7 +22,7 @@ def _ws(name: str, label: str) -> Workspace:
 
 
 def _pod(name: str, status: str = "running") -> Pod:
-    return Pod.from_dict({"podName": name, "namespaceName": "ws-a", "userAlias": name,
+    return Pod.from_dict({"podName": name, "namespaceName": "0123456789abcdef", "userAlias": name,
                           "status": status, "rentalType": "demand", "pricePerHour": "0.5",
                           "isMaintenance": False, "createdAt": NOW.isoformat()})
 
@@ -34,7 +34,7 @@ class FakeMeshive:
         self.key = key
         self.label = label
         self.calls: list[tuple[str, tuple, dict]] = []
-        self.workspaces = [_ws("ws-a", "research")]
+        self.workspaces = [_ws("0123456789abcdef", "research")]
         self.pods = [_pod(f"pod-{i}", "running" if i % 2 else "stopped") for i in range(45)]
         self.raise_on: dict[str, BaseException] = {}
 
