@@ -48,6 +48,10 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # arm64 도 같이 — Apple Silicon 에서 `docker run meshive/meshive-mcp` 가 되게. 클러스터는 amd64.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -57,6 +61,6 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
