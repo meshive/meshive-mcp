@@ -165,3 +165,13 @@ def test_number_normalization():
     assert normalize_number("457") == "457"          # 정수 문자열(id 일 수 있음)은 그대로
     assert normalize_number("task_1e5") == "task_1e5"
     assert to_dict({"price_per_hour": "0E-8", "name": "x"}) == {"price_per_hour": "0", "name": "x"}
+
+
+async def test_system_pods_hidden_by_default(mcp_client, fake, with_key):
+    default = _payload(await mcp_client.call_tool("pods", {"limit": 100}))
+    assert default["total"] == 45 and not any(p["pod_name"].startswith("dl-") for p in default["items"])
+    assert all(p["is_system"] is False for p in default["items"])
+    shown = _payload(await mcp_client.call_tool("pods", {"limit": 100, "include_system": True}))
+    assert shown["total"] == 47
+    dl = [p for p in shown["items"] if p["pod_name"].startswith("dl-")]
+    assert len(dl) == 2 and all(p["is_system"] and p["price_per_hour"] == "0" for p in dl)

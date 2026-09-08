@@ -21,10 +21,10 @@ def _ws(name: str, label: str) -> Workspace:
     return Workspace.from_dict({"namespaceName": name, "workspaceName": label})
 
 
-def _pod(name: str, status: str = "running") -> Pod:
-    return Pod.from_dict({"podName": name, "namespaceName": "0123456789abcdef", "userAlias": name,
-                          "status": status, "rentalType": "demand", "pricePerHour": "0.5",
-                          "isMaintenance": False, "createdAt": NOW.isoformat()})
+def _pod(name: str, status: str = "running", *, downloader: bool = False) -> Pod:
+    return Pod.from_dict({"podName": name, "namespaceName": "0123456789abcdef", "userAlias": "" if downloader else name,
+                          "status": status, "rentalType": "demand", "pricePerHour": "0E-8" if downloader else "0.5",
+                          "isMaintenance": False, "createdAt": NOW.isoformat(), "isDownloader": downloader})
 
 
 class FakeMeshive:
@@ -36,6 +36,8 @@ class FakeMeshive:
         self.calls: list[tuple[str, tuple, dict]] = []
         self.workspaces = [_ws("0123456789abcdef", "research")]
         self.pods = [_pod(f"pod-{i}", "running" if i % 2 else "stopped") for i in range(45)]
+        # 시스템 downloader 파드 2개 — 기본 숨김 대상
+        self.pods += [_pod(f"dl-{i}", "running", downloader=True) for i in range(2)]
         self.raise_on: dict[str, BaseException] = {}
 
     def _rec(self, name: str, *a: Any, **kw: Any) -> None:
