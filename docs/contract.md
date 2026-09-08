@@ -96,8 +96,11 @@ list/get 은 id 인자 유무로 한 도구.
 | `machines` | `machine?`, `include_metrics?=false` | (호스트) machine_id,name,type,status,gpu,earning_hourly_usd,uptime_rate | `/machines`, `/machines/{id}`, `/metrics` |
 | `billing_history` | `kind: "credit"｜"earnings"`, `since?`, `until?`, `limit?`, `cursor?` | 항목 목록 + 합계 | `/credit/history`, `/earnings` |
 
-**신규 read 엔드포인트 필요(에이전트 필수 기능):**
-- `logs` 도구: `workspace?`, `pod?`｜`task?`, `tail?=200`, `since?` → 최근 로그 텍스트(최대 64KB, 초과 시 `truncated`). 백엔드 `GET /v1/sdk/pods/{p}/logs`, `GET /v1/sdk/tasks/{id}/logs` 신설. 에이전트가 "왜 안 되지"를 스스로 보려면 이것이 없으면 안 된다. → 읽기 도구 12개.
+**신규 read 엔드포인트(PR-B5 로 구현됨, 2026-09-08):**
+- `logs` 도구: `workspace?`, `pod?`｜`task?`, `tail?=200`(≤1000), `wait?=8`(≤15s), `container?` → `{pod_name, source: live|archive|external|none, lines[{line, ts?}], count, truncated, note}`,
+  본문 64KB 상한(앞에서 잘라 `truncated`). 백엔드 `GET /v1/sdk/pods/{p}/logs`(Watcher 링버퍼, 비어 있으면 구독으로 Watcher 를 깨워 `wait` 초 대기,
+  종료 task 파드는 R2 아카이브), `GET /v1/sdk/tasks/{id}/logs`(내부 태스크는 파드 경로, 외부 provider 는 `cursor` 증분; 응답에 `task_id, finished, next_cursor`).
+  `since` 는 제외(링버퍼가 최근 1000줄만 보관). → 읽기 도구 12개.
 
 ---
 
