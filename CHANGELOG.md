@@ -12,6 +12,10 @@
 - `estimate_pod` / `create_pod` no longer take `disk_gb`: the system disk is sized by the server (it always overrode
   the value after the estimate) and the estimate's `resources.disk_gb` shows the real size.
 - Requires `meshive` SDK 0.1.1.
+- CI: images are published only after the test and smoke jobs pass (the publish job moved into `ci.yml`). dev images
+  pin the SDK to the exact `meshive-python` dev commit resolved at build time instead of the moving `dev` branch, and
+  both commits are recorded as image labels (`org.opencontainers.image.revision`, `ai.meshive.sdk.revision`) and in
+  `/healthz` (`revision`, `sdk_version`, `sdk_revision`), so what is running can be matched to what was reviewed.
 
 - `start_pod`, `pause_serving` (when resuming) and `scale_serving` (when raising the replica range) now take
   `confirm` like the create/delete tools — resuming or increasing billing needs the user's go-ahead too.

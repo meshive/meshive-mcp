@@ -27,9 +27,16 @@ async def http():
             yield c
 
 
-async def test_healthz(http):
-    r = await http.get("/healthz")
-    assert r.status_code == 200 and r.json()["status"] == "ok"
+async def test_healthz(http, monkeypatch):
+    """배포 확인 계약: 이미지에 박힌 MCP/SDK 리비전과 설치된 SDK 버전이 그대로 보인다(리뷰 C2). 로컬 빌드는 null."""
+    import meshive
+    monkeypatch.setenv("MESHIVE_MCP_REVISION", "abc123")
+    monkeypatch.setenv("MESHIVE_SDK_REVISION", "def456")
+    body = (await http.get("/healthz")).json()
+    assert body["status"] == "ok" and body["revision"] == "abc123" and body["sdk_revision"] == "def456"
+    assert body["sdk_version"] == meshive.__version__
+    monkeypatch.delenv("MESHIVE_MCP_REVISION")
+    assert (await http.get("/healthz")).json()["revision"] is None
 
 
 async def test_get_mcp_is_not_a_stream(http):

@@ -18,6 +18,14 @@ RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then \
     fi
 
 FROM base
+# 어떤 MCP 커밋이 어떤 SDK 커밋으로 도는지 — 이미지 라벨과 /healthz(revision, sdk_revision) 양쪽에서 읽는다(리뷰 C2).
+# CI 가 채운다(ci.yml). 로컬 빌드는 비어 있고 /healthz 는 null 로 답한다.
+ARG MESHIVE_MCP_REVISION=""
+ARG MESHIVE_SDK_REVISION=""
+LABEL org.opencontainers.image.source="https://github.com/meshive/meshive-mcp" \
+      org.opencontainers.image.revision="$MESHIVE_MCP_REVISION" \
+      ai.meshive.sdk.revision="$MESHIVE_SDK_REVISION"
+ENV MESHIVE_MCP_REVISION="$MESHIVE_MCP_REVISION" MESHIVE_SDK_REVISION="$MESHIVE_SDK_REVISION"
 COPY --from=build /install /usr/local
 # 숫자 UID 로 지정 — k8s `runAsNonRoot` 는 이름(mcp)으로는 non-root 를 검증하지 못해 파드 생성이 실패한다.
 RUN useradd --system --uid 10001 --no-create-home mcp

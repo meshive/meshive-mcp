@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import os
+
+import meshive
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
@@ -79,7 +82,11 @@ def create_server() -> MCPServer:
 
     @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(_: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "version": __version__})
+        # 배포 확인용: 어떤 MCP 커밋이 어떤 SDK(버전·커밋)로 도는지. 리비전은 이미지 빌드 때 박힌다(Dockerfile, ci.yml).
+        return JSONResponse({"status": "ok", "version": __version__,
+                             "revision": os.environ.get("MESHIVE_MCP_REVISION") or None,
+                             "sdk_version": meshive.__version__,
+                             "sdk_revision": os.environ.get("MESHIVE_SDK_REVISION") or None})
 
     return server
 
