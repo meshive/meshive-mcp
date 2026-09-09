@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
+from .. import money
 from ..client import meshive_client
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve
@@ -37,7 +38,8 @@ def register(server: MCPServer) -> None:
                                                   "price_cap_per_hour_usd": str(price_cap_per_hour),
                                                   "max_hourly_cost_usd": format(ceiling.normalize(), "f")},
                                f"Deploy model #{model_registration_id} with up to {max_replicas} replica(s) at most "
-                               f"${price_cap_per_hour}/hour each (≤ ${ceiling.normalize():f}/hour total)?")
+                               f"{money.hourly(price_cap_per_hour)}/hour each "
+                               f"(≤ {money.hourly(ceiling)}/hour total)?")
             result = await call(client.deploy_serving, model_registration_id, workspace=ws, **kwargs)
         out = to_dict(result)
         out["next_step"] = "Deployment was accepted. Poll the servings tool until status is `active`; it returns the endpoint URL."
@@ -153,7 +155,8 @@ reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count
                 return ws
             if not confirm:
                 est = await call(client.estimate_task, name, script, workspace=ws, **kwargs)
-                cost = f"up to ${est.max_cost}" if est.max_cost is not None else "an amount that depends on the machine"
+                cost = (f"up to {money.usd(est.max_cost)}" if est.max_cost is not None
+                        else "an amount that depends on the machine")
                 return preview("submit_task", {"estimate": to_dict(est), "workspace": ws, "name": name},
                                f"Submit task '{name}' ({cost} for at most {max_duration}s)?")
             submitted = await call(client.submit_task, name, script, workspace=ws, **kwargs)

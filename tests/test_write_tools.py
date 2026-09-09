@@ -20,7 +20,10 @@ def _calls(fake, name):
 async def test_create_pod_without_confirm_only_estimates(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457, "gpu_model": "RTX 3060"}))
     assert body["confirmed"] is False and body["action"] == "create_pod"
-    assert body["estimate"]["price_per_hour"] == "0.068423" and "$0.068423/hour" in body["question"]
+    # 원본 숫자는 계산용으로 남기고, 사람에게 보일 문자열은 콘솔과 같은 3자리로 준다.
+    assert body["estimate"]["price_per_hour"] == "0.068423"
+    assert body["estimate"]["price_per_hour_display"] == "$0.068"
+    assert "$0.068/hour" in body["question"]
     assert "confirm=true" in body["next_step"] and body["workspace"] == WS
     assert _calls(fake, "estimate_pod") and not _calls(fake, "create_pod")
 
@@ -59,7 +62,8 @@ async def test_lifecycle_tools(mcp_client, fake, with_key):
 async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "any_node"}))
     assert prev["confirmed"] is False and prev["action"] == "start_pod" and prev["pod"]["pod_name"] == "pod-2"
-    assert "Billing resumes at $0.5/hour" in prev["question"] and "confirm=true" in prev["next_step"]
+    assert "Billing resumes at $0.500/hour" in prev["question"] and "confirm=true" in prev["next_step"]
+    assert prev["pod"]["price_per_hour_display"] == "$0.500"
     assert not _calls(fake, "start_pod")
     done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "any_node", "confirm": True}))
     assert done["resource"] == "pod" and "asynchronously" in done["next_step"]
@@ -115,7 +119,8 @@ async def test_task_tools(mcp_client, fake, with_key):
     assert est["max_cost"] == "0.068423" and "submit_task" in est["next_step"]
     prev = _payload(await mcp_client.call_tool("submit_task", {"name": "t", "script": "print(1)", "image": "img",
                                                                "gpu_model": "RTX 3060"}))
-    assert prev["confirmed"] is False and "up to $0.068423" in prev["question"] and not _calls(fake, "submit_task")
+    # max cost 는 시간당이 아니라 합계 상한 → 콘솔 formatUsd 와 같이 2자리.
+    assert prev["confirmed"] is False and "up to $0.07" in prev["question"] and not _calls(fake, "submit_task")
     done = _payload(await mcp_client.call_tool("submit_task", {"name": "t", "script": "print(1)", "image": "img",
                                                                "gpu_model": "RTX 3060", "confirm": True}))
     assert done["task"]["task_id"] == "task_1" and "logs with task=" in done["next_step"]

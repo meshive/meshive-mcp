@@ -9,8 +9,9 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
+from .. import money
 from ..client import meshive_client
-from ..serialize import normalize_number, to_dict
+from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
 
@@ -80,7 +81,7 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 est = await call(client.estimate_pod, name, template_id, workspace=ws, **kwargs)
                 return preview("create_pod", {"estimate": to_dict(est), "workspace": ws, "name": name},
-                               f"Create pod '{name}' at ${est.price_per_hour}/hour?")
+                               f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?")
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
         out["next_step"] = (f"Pod '{name}' is being created (transaction {created.transaction_id}). It usually runs within a "
@@ -125,7 +126,7 @@ def register(server: MCPServer) -> None:
                 current = await call(client.get_pod, pod, ws)
                 return preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": placement},
                                f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes at "
-                               f"${normalize_number(current.price_per_hour)}/hour.")
+                               f"{money.hourly(current.price_per_hour)}/hour.")
             result = await call(client.start_pod, pod, ws, placement=placement)
         out = to_dict(result)
         out["next_step"] = "The start was accepted and runs asynchronously. Poll the pods tool for the new status."

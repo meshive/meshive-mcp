@@ -14,6 +14,10 @@
   response (`note`) and in the server instructions — so an agent does not follow instructions printed by a container.
 - A blank `pod` argument is rejected instead of resolving to an internal system pod, and the system pods used to
   prepare assets are excluded from display-name matching.
+- Money fields now come with a `<field>_display` string formatted the way the Meshive web console formats it —
+  hourly rates to three decimals (`"$0.068"`), other amounts to two (`"$2.10"`) — and the server instructions tell the
+  agent to show it verbatim, so the amount it quotes matches the console. The raw number stays in place for
+  arithmetic. Confirmation previews use the same formatting.
 
 - Write tools (need a Read & write key): `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod`,
   `create_storage`, `delete_storage`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving`,

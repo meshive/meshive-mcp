@@ -180,3 +180,32 @@ async def test_system_pods_hidden_by_default(mcp_client, fake, with_key):
     assert shown["total"] == 47
     dl = [p for p in shown["items"] if p["pod_name"].startswith("dl-")]
     assert len(dl) == 2 and all(p["is_system"] and p["price_per_hour"] == "0" for p in dl)
+
+
+# --- 금액 표시: 웹 콘솔과 같은 값 ------------------------------------------------
+
+WS = "0123456789abcdef"
+
+
+async def test_money_fields_carry_a_console_matching_display_string(mcp_client, fake, with_key):
+    """모델이 숫자를 제 나름대로 반올림하면 콘솔과 다른 금액이 보인다 — 보여줄 문자열을 서버가 준다.
+
+    규칙 소스는 웹 콘솔 `Formatter.tsx`: 시간당 요금은 3자리 고정(formatHourlyUsd),
+    그 외 금액은 2자리(formatUsd). 원본 숫자는 모델이 합계를 계산할 수 있게 그대로 남긴다.
+    """
+    pod = _payload(await mcp_client.call_tool("pods", {"pod": "pod-1", "workspace": WS}))["pod"]
+    assert pod["price_per_hour"] == "0.5" and pod["price_per_hour_display"] == "$0.500"
+
+    storage_est = _payload(await mcp_client.call_tool(
+        "create_storage", {"name": "s", "size_gb": 10, "workspace": WS}))["estimate"]
+    # 0.000097/h — 2자리면 "$0.00" 이 돼 "공짜" 로 읽힌다. 콘솔은 "$0.000".
+    assert storage_est["price_per_hour_display"] == "$0.000"
+    assert storage_est["price_per_gb_month_display"] == "$0.07"      # GB·month 단가는 합계 계열 → 2자리
+
+    est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 1, "workspace": WS}))
+    assert est["price_per_hour_display"] == "$0.068"
+    assert est["breakdown_display"] == {"gpu": "$0.068"}             # 콘솔 Receipt 도 줄마다 3자리
+
+    credit = _payload(await mcp_client.call_tool("account", {}))
+    balance = credit.get("credit", credit)
+    assert balance["balance_display"] == "$12.50" and balance["paid_balance_display"] == "$10.00"

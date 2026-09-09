@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
+from .. import money
 from ..client import meshive_client
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve
@@ -31,7 +32,8 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 est = await call(client.estimate_storage, name, size_gb, workspace=ws, **kwargs)
                 return preview("create_storage", {"estimate": to_dict(est), "workspace": ws, "name": name},
-                               f"Create {size_gb} GB {est.storage_type} storage '{name}' at ${est.price_per_hour}/hour?")
+                               f"Create {size_gb} GB {est.storage_type} storage '{name}' at "
+                               f"{money.hourly(est.price_per_hour)}/hour?")
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)
         out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Find its pv_name in "

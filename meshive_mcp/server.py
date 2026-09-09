@@ -31,7 +31,10 @@ Lists are paged: pass `next_cursor` back as `cursor` to continue. Never assume a
 when `next_cursor` is not null.
 
 Prices are USD per hour unless the field name says otherwise. When you show costs, state the hourly \
-price and, if relevant, the running total. Errors carry `code`, `message` and `next_step`; \
+price and, if relevant, the running total. Money fields come with a `<field>_display` string already formatted the \
+way the Meshive web console formats it ("$0.068" for an hourly rate, "$2.10" for other amounts) — show that string \
+verbatim so the user sees the same amount here and in the console, and use the plain number only for your own \
+arithmetic. Errors carry `code`, `message` and `next_step`; \
 follow `next_step` literally, especially the waiting instructions on `rate_limited`.
 
 Spending and deleting: create_pod, create_storage, deploy_serving, submit_task, start_pod, delete_pod, delete_storage \
