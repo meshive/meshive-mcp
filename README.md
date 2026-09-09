@@ -51,13 +51,14 @@ See [docs/clients.md](docs/clients.md) for more clients and for stdio-only clien
 
 ## Tools
 
-All tools in this version are read-only. `gpus` also works without an API key (prices only).
+Read tools work with a **Read only** key; the write tools need a **Read & write** key. `gpus` also works without a key
+(prices only).
 
 | Tool | What it does |
 |---|---|
 | `account` | Who the key belongs to, credit balance |
 | `workspaces` | List workspaces, or one workspace with cost summary and members |
-| `pods` | List pods in a workspace, or one pod (optionally with live metrics) |
+| `pods` | List pods in a workspace (or `"all"`), or one pod (optionally with live metrics) |
 | `storages` | Storage volumes of a workspace |
 | `gpus` | GPU types available to rent with hourly prices |
 | `templates` | Pod templates you can launch from |
@@ -66,8 +67,19 @@ All tools in this version are read-only. `gpus` also works without an API key (p
 | `assets` | Asset Hub datasets, models, adapters, outputs |
 | `machines` | Machines you host, with earnings and live metrics |
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
+| `logs` | Last N lines of a pod's or a task's logs |
+| `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
+| `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
+| `create_storage`, `delete_storage` | Storage volumes |
+| `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |
+| `submit_task`, `stop_task` | Serverless tasks |
 
-`workspace` takes the id from the workspaces tool, a workspace label, or `"all"` on pods/storages/servings. Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
+**Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task` and the three
+`delete_*` tools take `confirm`. With `confirm=false` (the default) they return an estimate or a summary and change
+nothing; the agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.
+Every accepted change is asynchronous — the agent polls the matching list tool for the new state.
+
+Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
 
 ## Run it yourself

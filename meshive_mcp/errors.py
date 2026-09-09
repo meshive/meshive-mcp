@@ -15,6 +15,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from meshive.exceptions import (
     AuthenticationError,
     ConfigurationError,
+    ConflictError,
+    InsufficientCreditError,
     MeshiveAPIError,
     MeshiveError,
     NotFoundError,
@@ -58,6 +60,33 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
                       "Fix the argument and call the tool again.", **extra)
 
 
+# 409 의 종류는 서버 detail.title 로 구분된다 (WSB routers/sdk/write*.py). 부가 정보(availability, pricePerHourUsd,
+# linkedPods, available)는 detail 에 그대로 실려 있어 모델에게 넘긴다.
+_CONFLICT_CODES = {
+    "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
+                                   "details to the user and suggest a smaller request, a different GPU, or trying later. "
+                                   "Do not retry blindly."),
+    "name taken": ("name_taken", "A resource with this name already exists. Pick another name or use the existing one."),
+    "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
+                                               "whether to raise the cap or choose cheaper hardware."),
+    "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
+                                         "first (ask the user)."),
+    "request in progress": ("in_progress", "The same request is still being processed. Wait a few seconds, then check the "
+                                           "matching list tool instead of resubmitting."),
+    "vram tier required": ("vram_tier_required", "Pass `gpu_vram_gb` — this GPU model comes in several VRAM tiers "
+                                                 "(see `available`)."),
+}
+
+
+def _conflict(exc: ConflictError) -> ToolError:
+    title = (exc.title or "").strip().lower()
+    code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
+                                                              "before retrying."))
+    detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
+    extra = {k: v for k, v in (detail or {}).items() if k not in ("title", "message")} if isinstance(detail, dict) else {}
+    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **extra)
+
+
 def translate(exc: BaseException) -> ToolError:
     """SDK/네트워크 예외를 ToolError 로. 이미 ToolError 면 그대로."""
     if isinstance(exc, ToolError):
@@ -84,6 +113,11 @@ def translate(exc: BaseException) -> ToolError:
         return tool_error("rate_limited", exc.message or "Rate limit exceeded.",
                           f"Do not retry immediately. Wait at least {wait}s before calling any Meshive tool again.",
                           retry_after=wait)
+    if isinstance(exc, InsufficientCreditError):
+        return tool_error("insufficient_credit", exc.message or "Insufficient credit.",
+                          f"Ask the user to top up credit at {CONSOLE_URL} before retrying. Do not retry on your own.")
+    if isinstance(exc, ConflictError):
+        return _conflict(exc)
     if isinstance(exc, MeshiveAPIError):
         status = exc.status_code
         msg = exc.message or f"HTTP {status}"

@@ -14,6 +14,19 @@ from ..errors import translate
 T = TypeVar("T")
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+# 생성/배포/제출: 같은 호출을 반복하면 자원이 늘어난다(서버 Idempotency-Key 는 SDK 재시도용).
+CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
+# 정지/시작/재시작/스케일/일시정지: 반복해도 같은 상태로 수렴.
+MUTATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
+
+CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only then call this tool again with the same "
+                "arguments and confirm=true. Never set confirm=true on your own.")
+
+
+def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]:
+    """confirm=false 응답: 아무것도 만들지/지우지 않았음을 명시하고 다음 행동을 지시한다."""
+    return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
 def meshive_tool(server: MCPServer, name: str, *, annotations: ToolAnnotations):

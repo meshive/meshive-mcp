@@ -36,10 +36,13 @@ jobs:
           if [ "$GITHUB_REF_NAME" = "real" ]; then
             version="$(python3 -c 'import re,pathlib; print(re.search(r"\"([^\"]+)\"", pathlib.Path("meshive_mcp/_version.py").read_text()).group(1))')"
             tags="$IMAGE:latest,$IMAGE:$version,$IMAGE:real-$sha"
+            sdk_spec=""   # real 은 PyPI 의 meshive
           else
             tags="$IMAGE:dev,$IMAGE:dev-$sha"
+            sdk_spec="meshive @ git+https://github.com/meshive/meshive-python@dev"   # dev 는 SDK dev 브랜치
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "sdk_spec=$sdk_spec" >> "$GITHUB_OUTPUT"
           echo "$tags"
 
       - name: Login to Docker Hub
@@ -61,6 +64,8 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            MESHIVE_SDK_SPEC=${{ steps.tags.outputs.sdk_spec }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max

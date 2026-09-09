@@ -5,7 +5,11 @@ WORKDIR /app
 FROM base AS build
 COPY pyproject.toml README.md ./
 COPY meshive_mcp ./meshive_mcp
-RUN pip install --prefix=/install .
+# MESHIVE_SDK_SPEC 이 비어 있으면 PyPI 의 meshive 를, 아니면 그 스펙(예: "meshive @ git+https://github.com/meshive/meshive-python@dev")을
+# 먼저 설치한다 — SDK 가 PyPI 에 오르기 전에 dev 이미지가 SDK dev 브랜치를 따라가게.
+ARG MESHIVE_SDK_SPEC=""
+RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then pip install --prefix=/install "$MESHIVE_SDK_SPEC"; fi \
+    && pip install --prefix=/install .
 
 FROM base
 COPY --from=build /install /usr/local

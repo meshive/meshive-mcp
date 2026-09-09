@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Write tools (need a Read & write key): `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod`,
+  `create_storage`, `delete_storage`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving`,
+  `submit_task`, `stop_task`, plus read-only `estimate_pod`, `estimate_task` and `logs`. Spending/deleting tools
+  require `confirm=true` and otherwise only return an estimate or summary. 409s are mapped to `no_capacity`,
+  `name_taken`, `price_exceeds_cap`, `storage_in_use`, `in_progress`, `vram_tier_required`.
+- Requires the `meshive` SDK 0.1.x; dev images install it from the SDK's dev branch until it is on PyPI.
+
 - `workspace` accepts a workspace label as well as the id, and `"all"` on pods/storages/servings.
 - A wrong workspace id now returns `unknown_workspace` (with candidates) instead of `forbidden`.
 - Tool output is compact JSON with `structuredContent`; backend decimal strings like `0E-8` are normalized.
