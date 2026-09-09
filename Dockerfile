@@ -8,8 +8,14 @@ COPY meshive_mcp ./meshive_mcp
 # MESHIVE_SDK_SPEC 이 비어 있으면 PyPI 의 meshive 를, 아니면 그 스펙(예: "meshive @ git+https://github.com/meshive/meshive-python@dev")을
 # 먼저 설치한다 — SDK 가 PyPI 에 오르기 전에 dev 이미지가 SDK dev 브랜치를 따라가게.
 ARG MESHIVE_SDK_SPEC=""
-RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then pip install --prefix=/install "$MESHIVE_SDK_SPEC"; fi \
-    && pip install --prefix=/install .
+# git 은 spec 이 git+ 일 때만 필요하다(빌드 스테이지에만 설치, 런타임 이미지에는 없다).
+# 두 번에 나눠 설치하면 두 번째 pip 이 --prefix 아래를 못 보고 PyPI 에서 meshive 를 다시 찾는다 → 한 호출에 같이 넘긴다.
+RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+        && pip install --prefix=/install "$MESHIVE_SDK_SPEC" .; \
+    else \
+        pip install --prefix=/install .; \
+    fi
 
 FROM base
 COPY --from=build /install /usr/local
