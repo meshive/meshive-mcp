@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `scale_serving` now asks for `confirm` for **every** change that can raise the hourly cost — a larger replica range,
+  turning autoscale on, or a higher per-replica price cap — using the SDK's `Serving.scale_raises_cost` (the CLI uses
+  the same rule). Lowering the range, turning autoscale off or lowering the cap still applies immediately.
+- `logs` takes `cursor` for tasks on an external provider: omit it for the last `tail` lines (the server now returns the
+  newest lines, not the oldest buffered ones), pass the previous response's `next_cursor` to read only new lines. When
+  nobody has been watching a pod the server wakes the log watcher before answering; if it cannot, the `note` says the
+  lines may be behind.
+- `estimate_pod` / `create_pod` no longer take `disk_gb`: the system disk is sized by the server (it always overrode
+  the value after the estimate) and the estimate's `resources.disk_gb` shows the real size.
+- Requires `meshive` SDK 0.1.1.
+
 - `start_pod`, `pause_serving` (when resuming) and `scale_serving` (when raising the replica range) now take
   `confirm` like the create/delete tools — resuming or increasing billing needs the user's go-ahead too.
 - `name_taken` now tells the agent to check the list tool first when a create did not get a clear answer,

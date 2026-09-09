@@ -91,7 +91,7 @@ async def test_serving_tools(mcp_client, fake, with_key):
     assert done["id"] == "42" and _calls(fake, "deploy_serving")[0][2]["price_cap_per_hour"] == 1.5
     # scale: 범위를 키우면 confirm 이 필요하고(과금 증가), 줄이거나 autoscale/cap 만 바꾸면 즉시 적용
     up = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "max_replicas": 4}))
-    assert up["confirmed"] is False and up["requested"] == {"min_replicas": 1, "max_replicas": 4}
+    assert up["confirmed"] is False and up["requested"] == {"max_replicas": 4}
     assert "cost goes up" in up["question"] and not _calls(fake, "scale_serving")
     body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 4, "confirm": True, "operation_id": "test-operation-0001"}))
     assert body["action"] == "scale" and _calls(fake, "scale_serving")[0][2] == {"idempotency_key": "test-operation-0001", "min_replicas": None, "max_replicas": 4,
@@ -101,7 +101,7 @@ async def test_serving_tools(mcp_client, fake, with_key):
     assert down["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["max_replicas"] == 2
     only_cap = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "price_cap_per_hour": 0.9}))
     assert only_cap["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["price_cap_per_hour"] == 0.9
-    assert not _calls(fake, "get_serving")            # 범위를 안 건드리면 현재 상태 조회도 없다
+    assert _calls(fake, "get_serving")                # 비용 증가 여부는 현재 상태와 비교해 판정한다(리뷰 P2 #6)
     # pause 는 즉시, resume(paused=false) 은 confirm
     _payload(await mcp_client.call_tool("pause_serving", {"operation_id": "test-operation-0001", "serving": 42, "paused": True}))
     assert _calls(fake, "pause_serving")[0][2]["paused"] is True
@@ -211,3 +211,44 @@ async def test_name_taken_tells_agent_to_check_the_list_first(mcp_client, fake, 
     body = _payload(result)
     assert result.is_error and body["code"] == "name_taken"
     assert "list tool" in body["next_step"] and "before creating anything else" in body["next_step"]
+
+
+async def test_scale_serving_confirms_cap_raise_and_autoscale_on(mcp_client, fake, with_key):
+    """replica 범위만이 아니라 상한 인상·autoscale 켜기도 비용이 늘 수 있다 — 같은 confirm 게이트(리뷰 P2 #6)."""
+    from conftest import Serving
+    capped = Serving.from_dict({"id": 42, "namespaceName": WS, "modelName": "llama", "framework": "vllm", "status": "active",
+                                "currentReplicas": 2, "minReplicas": 1, "maxReplicas": 3, "autoScaleEnabled": False,
+                                "priceCapPerHour": "1.5"})
+    async def get_serving(self, sid):
+        self._rec("get_serving", sid); return capped
+    fake["setup"] = lambda inst: setattr(inst, "get_serving", get_serving.__get__(inst))
+    raise_cap = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "price_cap_per_hour": 2}))
+    assert raise_cap["confirmed"] is False and raise_cap["requested"] == {"price_cap_per_hour": 2}
+    assert "$2.000/hour per replica" in raise_cap["question"] and raise_cap["serving"]["price_cap_per_hour_display"] == "$1.500"
+    assert not _calls(fake, "scale_serving")
+    auto_on = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "autoscale": True}))
+    assert auto_on["confirmed"] is False and "autoscale on" in auto_on["question"] and not _calls(fake, "scale_serving")
+    lower = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "price_cap_per_hour": 1, "autoscale": False}))
+    assert lower["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["price_cap_per_hour"] == 1
+    done = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "price_cap_per_hour": 2, "confirm": True}))
+    assert done["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["price_cap_per_hour"] == 2
+
+
+async def test_logs_cursor_reads_external_task_increments(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("logs", {"task": "task_9", "cursor": 12}))
+    assert body["task_id"] == "task_9" and _calls(fake, "get_task_logs")[0][2] == {"tail": 200, "wait": None, "cursor": 12}
+    body = _payload(await mcp_client.call_tool("logs", {"task": "task_9"}))
+    assert _calls(fake, "get_task_logs")[0][2]["cursor"] is None            # 생략 = 마지막 tail 줄
+    bad = await mcp_client.call_tool("logs", {"pod": "pod-1", "cursor": 3})
+    assert bad.is_error and _payload(bad)["code"] == "invalid_argument"
+
+
+async def test_pod_tools_no_longer_take_disk_gb(mcp_client, fake, with_key):
+    """시스템 디스크는 서버 공식으로 고정된다(리뷰 P2 #10) — 받는 척하던 인자를 스키마에서 뺀다."""
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_pod", "create_pod"):
+        assert "disk_gb" not in tools[name].input_schema["properties"], name
+    # 모델이 그래도 보내면 MCP 가 스키마 밖 인자를 버린다 — SDK 시그니처에도 없어 서버까지 갈 길이 없다.
+    _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1, "disk_gb": 30, "confirm": True,
+                                                       "operation_id": "test-operation-0001"}))
+    assert "disk_gb" not in _calls(fake, "create_pod")[0][2]

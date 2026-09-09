@@ -50,20 +50,25 @@ def register(server: MCPServer) -> None:
                             max_replicas: int | None = None, autoscale: bool | None = None,
                             price_cap_per_hour: float | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Change a serving's replica range, autoscaling, or per-replica price cap. Pass only the fields to change.
-        Raising min_replicas or max_replicas raises the possible hourly cost, so such a call with confirm=false (default)
-        only returns the current and requested ranges and changes nothing; call again with confirm=true after the user
-        agreed. Lowering the range or changing only autoscale/price cap applies immediately."""
+        Any change that can raise the hourly cost — a larger replica range, turning autoscale on, or a higher per-replica
+        price cap — with confirm=false (default) only returns the current state and the requested change and changes
+        nothing; call again with confirm=true after the user agreed. Lowering the range, turning autoscale off, or
+        lowering the cap applies immediately."""
+        requested = {k: v for k, v in dict(min_replicas=min_replicas, max_replicas=max_replicas, autoscale=autoscale,
+                                            price_cap_per_hour=price_cap_per_hour).items() if v is not None}
         async with meshive_client(ctx) as client:
-            if not confirm and (min_replicas is not None or max_replicas is not None):
-                # 과금이 늘어나는 방향(현재보다 큰 min/max)만 확인을 요구한다 — 줄이는 호출은 즉시 적용.
+            if not confirm:
+                # 비용이 늘 수 있는 변경만 확인 — 판정은 SDK `Serving.scale_raises_cost` (CLI 와 같은 규칙, 리뷰 P2 #6).
                 current = await call(client.get_serving, serving)
-                new_min = current.min_replicas if min_replicas is None else min_replicas
-                new_max = current.max_replicas if max_replicas is None else max_replicas
-                if new_min > current.min_replicas or new_max > current.max_replicas:
-                    return preview("scale_serving", {"serving": to_dict(current),
-                                                     "requested": {"min_replicas": new_min, "max_replicas": new_max}},
+                if current.scale_raises_cost(**requested):
+                    new_min = current.min_replicas if min_replicas is None else min_replicas
+                    new_max = current.max_replicas if max_replicas is None else max_replicas
+                    cap = (f", cap {money.hourly(price_cap_per_hour)}/hour per replica" if price_cap_per_hour is not None
+                           else "")
+                    return preview("scale_serving", {"serving": to_dict(current), "requested": requested},
                                    f"Scale serving #{serving} from {current.min_replicas}-{current.max_replicas} to "
-                                   f"{new_min}-{new_max} replicas? Its possible hourly cost goes up.")
+                                   f"{new_min}-{new_max} replicas{cap}"
+                                   f"{', autoscale on' if autoscale else ''}? Its possible hourly cost goes up.")
             result = await call(client.scale_serving, serving, min_replicas=min_replicas, max_replicas=max_replicas,
                                 autoscale=autoscale, price_cap_per_hour=price_cap_per_hour)
         out = to_dict(result)

@@ -19,7 +19,7 @@ from . import money
 _DROP = {"raw"}
 
 # 시간당 요금은 어느 dataclass에 있든 필드명이 같다 → 이름 하나로 판정(콘솔 formatHourlyUsd, 3자리).
-_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour"}
+_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour"}
 # 그 외 금액은 이름만으로는 구분이 안 된다(예: DailyCost.pod 는 금액, WorkspaceResources.pod 는 개수)
 # → dataclass 이름과 함께 본다. 콘솔 formatUsd(2자리).
 _USD_FIELDS: dict[str, set[str]] = {

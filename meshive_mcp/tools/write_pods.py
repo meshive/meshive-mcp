@@ -17,7 +17,7 @@ from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool,
 
 _POD_ARGS_DOC = """`workspace` takes the id from the workspaces tool (a label also works). `template_id` comes from the templates tool.
 For a GPU pod pass `gpu_model` (from the gpus tool) and optionally `gpu_count`/`gpu_vram_gb`; omit `gpu_model` for a CPU pod.
-vCPU/RAM/disk default to the recommended sizes; `volumes` attaches existing storage as [{"storage": pv_name, "mount_path": "/data"}];
+vCPU/RAM default to the recommended sizes and the system disk is sized by the server (shown as `resources.disk_gb` in the estimate); `volumes` attaches existing storage as [{"storage": pv_name, "mount_path": "/data"}];
 `ports` is a list like [8888, {"port": 6006, "name": "tb", "external": false}]; `env` is a dict and `secret_keys` names the secret ones.
 `max_price_per_hour` caps the final COMPUTE hourly rate; an over-cap placement fails asynchronously.
 Attached/automatic storage and Asset Hub retention are billed separately and excluded from this cap."""
@@ -31,7 +31,7 @@ def register(server: MCPServer) -> None:
     async def estimate_pod(ctx: Context[Any, Any], name: str, template_id: int, workspace: str | None = None,
                            gpu_model: str | None = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
                            rental_type: str = "demand", vcpu: int | None = None, ram_gb: int | None = None,
-                           disk_gb: int | None = None, volumes: list[dict[str, str]] | None = None,
+                           volumes: list[dict[str, str]] | None = None,
                            env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
                            ports: list[Any] | None = None, command: str | None = None,
                            internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
@@ -45,7 +45,7 @@ def register(server: MCPServer) -> None:
                 return ws
             est = await call(client.estimate_pod, name, template_id, workspace=ws, **_pod_kwargs(
                 gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type, vcpu=vcpu,
-                ram_gb=ram_gb, disk_gb=disk_gb, volumes=volumes, env=env, secret_keys=secret_keys, ports=ports,
+                ram_gb=ram_gb, volumes=volumes, env=env, secret_keys=secret_keys, ports=ports,
                 command=command, internet_premium=internet_premium, uptime_premium=uptime_premium,
                 cpu_premium=cpu_premium, region=region, max_price_per_hour=max_price_per_hour))
         out = to_dict(est)
@@ -60,7 +60,7 @@ def register(server: MCPServer) -> None:
     async def create_pod(ctx: Context[Any, Any], name: str, template_id: int, workspace: str | None = None,
                          gpu_model: str | None = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
                          rental_type: str = "demand", vcpu: int | None = None, ram_gb: int | None = None,
-                         disk_gb: int | None = None, volumes: list[dict[str, str]] | None = None,
+                         volumes: list[dict[str, str]] | None = None,
                          env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
                          ports: list[Any] | None = None, command: str | None = None,
                          internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
@@ -71,7 +71,7 @@ def register(server: MCPServer) -> None:
         after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
         """
         kwargs = _pod_kwargs(gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type,
-                             vcpu=vcpu, ram_gb=ram_gb, disk_gb=disk_gb, volumes=volumes, env=env, secret_keys=secret_keys,
+                             vcpu=vcpu, ram_gb=ram_gb, volumes=volumes, env=env, secret_keys=secret_keys,
                              ports=ports, command=command, internet_premium=internet_premium,
                              uptime_premium=uptime_premium, cpu_premium=cpu_premium, region=region,
                              max_price_per_hour=max_price_per_hour)

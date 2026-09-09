@@ -15,8 +15,9 @@ dynamic = ["version"]
 dependencies = [
     # 2.x 는 FastMCP 가 MCPServer 로 바뀐 새 API. 1.x 코드와 호환되지 않으므로 상한을 둔다.
     "mcp>=2.1,<3",
-    # 0.1.x: 읽기 27 + 쓰기 18 메서드(파드/스토리지/서빙/태스크/로그). 쓰기 도구는 이 버전이 필요하다.
-    "meshive>=0.1.0rc1,<0.2",  # rc 명시 → pip 가 프리릴리스 허용(git dev·PyPI rc 모두 설치 가능). 정식 0.1.0 이후에도 무해
+    # 0.1.1: Serving.scale_raises_cost / autoscale / price_cap_per_hour, get_task_logs(cursor=) tail 계약, disk_gb 제거.
+    # scale_serving 의 승인 판정이 이 버전의 SDK 에 있다. real 이미지 빌드는 PyPI 에 이 릴리스가 있어야 통과한다.
+    "meshive>=0.1.1,<0.2",
     "httpx>=0.27",
 ]
 keywords = ["meshive", "mcp", "gpu", "cloud", "ai", "agent"]

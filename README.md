@@ -73,8 +73,9 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `submit_task`, `stop_task` | Serverless tasks |
 
 **Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task`, `start_pod` and
-the three `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when it raises
-the replica range. With `confirm=false` (the default) they return an estimate or a summary and change nothing; the
+the three `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when the change can
+raise the hourly cost (a larger replica range, autoscale on, a higher price cap). With `confirm=false` (the default) they
+return an estimate or a summary and change nothing; the
 agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.
 Every accepted change is asynchronous — the agent polls the matching list tool for the new state.
 
