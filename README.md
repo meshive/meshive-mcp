@@ -47,8 +47,6 @@ and export `MESHIVE_API_KEY=meshive_...` in your shell.
 }
 ```
 
-See [docs/clients.md](docs/clients.md) for more clients and for stdio-only clients.
-
 ## Tools
 
 Read tools work with a **Read only** key; the write tools need a **Read & write** key. `gpus` also works without a key
