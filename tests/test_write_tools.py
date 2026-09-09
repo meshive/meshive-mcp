@@ -183,6 +183,21 @@ async def test_pod_label_is_resolved_to_pod_name(mcp_client, fake, with_key):
     assert exact["id"] == "0123456789abcdef-0"
 
 
+async def test_blank_pod_label_never_resolves_to_a_system_pod(mcp_client, fake, with_key):
+    """회귀 지점: 빈/공백 `pod` 가 user_alias 가 빈 **시스템 downloader 파드**와 매치돼 stop/delete/logs 가
+    그 파드로 나갔다(2026-09-09 리뷰 P3 #10). 인자 누락은 downloader 를 건드리기 전에 끊는다."""
+    for blank in ("", "   "):
+        result = await mcp_client.call_tool("stop_pod", {"pod": blank, "workspace": WS})
+        assert result.is_error and _payload(result)["code"] == "invalid_argument", blank
+        assert not _calls(fake, "stop_pod"), blank
+
+    # downloader 는 라벨 매칭에서도 빠진다 — 라벨이 비어 있으니 후보로도 나오면 안 된다.
+    missing = await mcp_client.call_tool("stop_pod", {"pod": "dl-0-label", "workspace": WS})
+    body = _payload(missing)
+    assert missing.is_error and body["code"] == "not_found"
+    assert all(not str(c["pod_name"]).startswith("dl-") for c in body["pods"]), body["pods"]
+
+
 async def test_name_taken_tells_agent_to_check_the_list_first(mcp_client, fake, with_key):
     """응답을 못 받은 생성의 재시도가 409 Name Taken 으로 돌아오면 "다른 이름으로" 가 아니라 목록 확인을 먼저 시킨다."""
     fake["setup"] = lambda inst: inst.raise_on.update(

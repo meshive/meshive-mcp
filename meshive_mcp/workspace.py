@@ -15,7 +15,7 @@ from typing import Any
 from meshive import AsyncMeshive
 from meshive.models import Workspace
 
-from .errors import tool_error
+from .errors import invalid_argument, tool_error
 
 NEEDS_WORKSPACE = "workspace"
 ALL = "all"
@@ -91,18 +91,28 @@ def needs_input(value: Any) -> bool:
 _POD_NAME_RE = re.compile(r"^[0-9a-f]{16}-\d+$")
 
 
+def _is_downloader(pod: Any) -> bool:
+    """자산 준비용 시스템 파드. 라벨(user_alias)이 비어 있다."""
+    return bool(getattr(pod, "raw", {}).get("isDownloader"))
+
+
 async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
     """`pod` 가 pod_name(16 hex + "-N") 이면 그대로, 아니면 라벨(user_alias)로 보고 목록에서 찾는다.
     실측(2026-09-09): 모델이 방금 만든 파드를 라벨로 조회해 not_found 를 받고 목록을 다시 훑었다."""
     pod = (pod or "").strip()
+    if not pod:
+        # 빈 문자열을 라벨로 넘기면 user_alias 가 빈 **시스템 downloader 파드**와 매치돼 stop/delete/logs 가
+        # 그 파드로 나갔다(2026-09-09 리뷰 P3 #10). 인자 누락은 여기서 끊는다.
+        raise invalid_argument("`pod` is required — pass a pod_name or the pod's display name.")
     if _POD_NAME_RE.match(pod):
         return pod
     pods = await client.list_pods(workspace)
-    hits = [p for p in pods if (p.user_alias or "").lower() == pod.lower()]
+    # 라벨 매칭에서도 downloader 를 뺀다 — 후보 목록에서 이미 빼고 있었으니 매칭만 어긋나 있었다.
+    hits = [p for p in pods if not _is_downloader(p) and (p.user_alias or "").lower() == pod.lower()]
     if len(hits) == 1:
         return hits[0].pod_name
     candidates = [{"pod_name": p.pod_name, "name": p.user_alias, "status": p.status} for p in pods
-                  if not getattr(p, "raw", {}).get("isDownloader")]
+                  if not _is_downloader(p)]
     if not hits:
         raise tool_error("not_found", f"No pod named '{pod}' in workspace {workspace}.",
                          "Use one of the `pod_name` values listed here, or call the pods tool.", pods=candidates)

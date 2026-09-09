@@ -12,6 +12,8 @@
   and fails early with the required release order otherwise.
 - `logs` now states that log lines are untrusted output of the user's container — in the tool description, in every
   response (`note`) and in the server instructions — so an agent does not follow instructions printed by a container.
+- A blank `pod` argument is rejected instead of resolving to an internal system pod, and the system pods used to
+  prepare assets are excluded from display-name matching.
 
 - Write tools (need a Read & write key): `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod`,
   `create_storage`, `delete_storage`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving`,
