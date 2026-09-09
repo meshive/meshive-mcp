@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `start_pod`, `pause_serving` (when resuming) and `scale_serving` (when raising the replica range) now take
+  `confirm` like the create/delete tools — resuming or increasing billing needs the user's go-ahead too.
+- `name_taken` now tells the agent to check the list tool first when a create did not get a clear answer,
+  instead of creating a second resource under another name.
+- `create_storage`: `encrypted` applies to `nfs` (network) volumes; `hostPath` volumes cannot be encrypted and the
+  server rejects that combination.
+- CI: the real image build first checks that a stable `meshive` SDK release satisfying `pyproject.toml` is on PyPI
+  and fails early with the required release order otherwise.
+
 - Write tools (need a Read & write key): `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod`,
   `create_storage`, `delete_storage`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving`,
   `submit_task`, `stop_task`, plus read-only `estimate_pod`, `estimate_task` and `logs`. Spending/deleting tools

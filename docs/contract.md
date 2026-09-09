@@ -58,6 +58,9 @@
 - `confirm=false` 면 **아무것도 만들지 않고** 견적을 반환한다(= dry-run). 응답에 `"next_step": "Show this estimate to the user. Call again with confirm=true only after they agree."`
 - `confirm=true` 라도 `max_price_per_hour_usd` 가 있으면 서버 계산가가 그보다 크면 거절(`price_exceeds_cap`). 모델이 사용자에게 보여준 가격을 서버가 보증하는 장치.
 - 삭제 도구도 `confirm` 필수. false 면 삭제 대상 요약(연결 스토리지, 실행 중 여부)만 반환.
+- 과금을 **다시 시작·늘리는** 도구도 `confirm` 을 받는다(2026-09-09): `start_pod`(정지 파드 과금 재개 — false 면 파드 현재 상태·시간당
+  요금), `pause_serving(paused=false)`(재개), `scale_serving`(min/max_replicas 를 현재보다 키울 때 — false 면 현재/요청 범위).
+  줄이는 방향이나 autoscale·price cap 만 바꾸는 호출, `stop_pod`/`restart_pod`/`pause_serving(paused=true)`/`stop_task` 는 즉시 적용.
 
 ### 0.6 멱등성
 - 백엔드 POST 는 `Idempotency-Key` 헤더를 받아 24h 동안 같은 응답을 재생(Redis). SDK 가 호출마다 UUID 를 만들고 **자체 재시도(5xx/timeout)에서만 재사용**.
@@ -147,8 +150,9 @@ list/get 은 id 인자 유무로 한 도구.
 SDK: `create_pod(name, template_id, *, workspace=None, gpu_model=None, gpu_count=1, ..., wait=None) -> Pod`, `estimate_pod(...) -> PodEstimate`.
 
 #### `stop_pod` / `start_pod` / `restart_pod`
-- 입력: `workspace?`, `pod`(pod_name). `start_pod` 는 `placement?: "same_node"｜"any_node"` 추가(기본 same_node).
-- 출력: 갱신된 pod 단건 + `next_step`.
+- 입력: `workspace?`, `pod`(pod_name). `start_pod` 는 `placement?: "same_node"｜"any_node"`(기본 same_node) 와 `confirm`
+  추가 — false 면 파드 현재 상태·시간당 요금 요약만 돌려주고 시작하지 않는다(0.5 규약, 과금 재개).
+- 출력: 수락 결과(`ResourceAction`: resource/id/action/accepted/result) + `next_step`.
 - 백엔드: `POST /v1/sdk/pods/{p}/stop|start|restart` (기존 statefulset stop/start/restart 로 위임).
 - SDK: `stop_pod(pod, workspace=None)`, `start_pod(pod, workspace=None, placement="same_node")`, `restart_pod(...)`.
 
@@ -159,7 +163,7 @@ SDK: `create_pod(name, template_id, *, workspace=None, gpu_model=None, gpu_count
 
 ### 2.2 스토리지
 #### `create_storage`
-`workspace?`, `name`, `size_gb`, `storage_type: "nfs"｜"hostPath"`(기본 nfs), `encrypted?`(hostPath 만), `region?`, `max_price_per_hour_usd?`, `confirm`.
+`workspace?`, `name`, `size_gb`, `storage_type: "nfs"｜"hostPath"`(기본 nfs), `encrypted?`(**nfs 만** — hostPath+encrypted 는 백엔드가 422, 서비스도 hostPath 암호화를 거절), `region?`, `max_price_per_hour_usd?`, `confirm`.
 → 백엔드 `POST /v1/sdk/storages`. **확인 필요**: 웹은 스토리지를 파드 생성 볼륨 파라미터로 만드는지, 별도 PVC 생성인지(`routers/kubernetes/pvc.py` 는 `storage_class/access_modes` 를 받음). 이 도구의 최종 형태는 그 확인 뒤 확정.
 #### `delete_storage` (destructive)
 `workspace?`, `storage`, `confirm`. 연결된 파드가 있으면 409 + 파드 목록.
@@ -177,8 +181,10 @@ SDK: `create_pod(name, template_id, *, workspace=None, gpu_model=None, gpu_count
 | `confirm` | ✓ | false → 예상 replica 단가·상한 요약 |
 → 백엔드 `POST /v1/sdk/servings` (기존 `ServingDeployRequest` 로 위임). 응답: servings 단건.
 
-#### `scale_serving` — `serving`, `min_replicas?`, `max_replicas?`, `autoscale?` → `PATCH /v1/sdk/servings/{id}/scale`
-#### `pause_serving` — `serving`, `paused: bool` → `PATCH /v1/sdk/servings/{id}/pause`
+#### `scale_serving` — `serving`, `min_replicas?`, `max_replicas?`, `autoscale?`, `price_cap_per_hour?`, `confirm` → `PATCH /v1/sdk/servings/{id}/scale`
+- min/max 를 현재보다 키우는 호출은 `confirm=false` 면 현재/요청 범위 요약만(0.5 규약). 줄이거나 autoscale·cap 만 바꾸면 즉시.
+#### `pause_serving` — `serving`, `paused: bool`, `confirm` → `PATCH /v1/sdk/servings/{id}/pause`
+- `paused=false`(재개) 는 `confirm=false` 면 서빙 현재 상태 요약만. `paused=true` 는 즉시.
 #### `delete_serving` (destructive) — `serving`, `confirm` → `DELETE /v1/sdk/servings/{id}`
 
 ### 2.4 서버리스 task

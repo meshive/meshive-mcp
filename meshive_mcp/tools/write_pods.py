@@ -1,7 +1,7 @@
 """쓰기 도구 — 파드 (write 스코프). 계약 §2.1.
 
-돈이 드는 create_pod 와 되돌릴 수 없는 delete_pod 는 `confirm` 게이트를 **서버(이 도구)가** 강제한다:
-confirm=false(기본) 면 견적/요약만 돌려주고 아무것도 하지 않는다. 모델의 주의력에 기대지 않는다.
+돈이 드는 create_pod·start_pod(정지 파드 과금 재개) 와 되돌릴 수 없는 delete_pod 는 `confirm` 게이트를 **서버(이 도구)가**
+강제한다: confirm=false(기본) 면 견적/요약만 돌려주고 아무것도 하지 않는다. 모델의 주의력에 기대지 않는다.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 from mcp.server.mcpserver import Context, MCPServer
 
 from ..client import meshive_client
-from ..serialize import to_dict
+from ..serialize import normalize_number, to_dict
 from ..workspace import needs_input, resolve, resolve_pod
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
 
@@ -111,11 +111,25 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "start_pod", annotations=MUTATE)
     async def start_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
-                        placement: str = "same_node") -> dict[str, Any]:
-        """Start a stopped pod; hourly billing resumes. `placement` "same_node" (default) restarts on the original machine
-        and may wait if it is busy; "any_node" moves to another machine immediately (local hostPath storage stays behind).
-        Asynchronous — poll pods for `running`."""
-        return await _lifecycle(ctx, "start_pod", pod, workspace, "start", placement=placement)
+                        placement: str = "same_node", confirm: bool = False) -> dict[str, Any]:
+        """Start a stopped pod; hourly billing resumes. With confirm=false (default) it only returns the pod's current
+        state and hourly price and changes nothing; call again with confirm=true after the user agreed to pay again.
+        `placement` "same_node" (default) restarts on the original machine and may wait if it is busy; "any_node" moves
+        to another machine immediately (local hostPath storage stays behind). Asynchronous — poll pods for `running`."""
+        async with meshive_client(ctx) as client:
+            ws = await resolve(client, workspace)
+            if needs_input(ws):
+                return ws
+            pod = await resolve_pod(client, ws, pod)
+            if not confirm:
+                current = await call(client.get_pod, pod, ws)
+                return preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": placement},
+                               f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes at "
+                               f"${normalize_number(current.price_per_hour)}/hour.")
+            result = await call(client.start_pod, pod, ws, placement=placement)
+        out = to_dict(result)
+        out["next_step"] = "The start was accepted and runs asynchronously. Poll the pods tool for the new status."
+        return out
 
     @meshive_tool(server, "restart_pod", annotations=MUTATE)
     async def restart_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:

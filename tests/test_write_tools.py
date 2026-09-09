@@ -49,12 +49,22 @@ async def test_delete_pod_preview_then_delete(mcp_client, fake, with_key):
 
 
 async def test_lifecycle_tools(mcp_client, fake, with_key):
-    for tool, method, extra in (("stop_pod", "stop_pod", {}), ("start_pod", "start_pod", {"placement": "any_node"}),
-                                ("restart_pod", "restart_pod", {})):
-        body = _payload(await mcp_client.call_tool(tool, {"pod": "pod-1", **extra}))
+    for tool, method in (("stop_pod", "stop_pod"), ("restart_pod", "restart_pod")):
+        body = _payload(await mcp_client.call_tool(tool, {"pod": "pod-1"}))
         assert body["resource"] == "pod" and "asynchronously" in body["next_step"], tool
         (_, args, kw), = _calls(fake, method)
-        assert args[:2] == ("pod-1", WS) and all(kw.get(k) == v for k, v in extra.items())
+        assert args[:2] == ("pod-1", WS)
+
+
+async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake, with_key):
+    prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "any_node"}))
+    assert prev["confirmed"] is False and prev["action"] == "start_pod" and prev["pod"]["pod_name"] == "pod-2"
+    assert "Billing resumes at $0.5/hour" in prev["question"] and "confirm=true" in prev["next_step"]
+    assert not _calls(fake, "start_pod")
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "any_node", "confirm": True}))
+    assert done["resource"] == "pod" and "asynchronously" in done["next_step"]
+    (_, args, kw), = _calls(fake, "start_pod")
+    assert args[:2] == ("pod-2", WS) and kw["placement"] == "any_node"
 
 
 async def test_storage_tools(mcp_client, fake, with_key):
@@ -75,10 +85,25 @@ async def test_serving_tools(mcp_client, fake, with_key):
     done = _payload(await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5, "price_cap_per_hour": 1.5,
                                                                   "max_replicas": 2, "confirm": True}))
     assert done["id"] == "42" and _calls(fake, "deploy_serving")[0][2]["price_cap_per_hour"] == 1.5
-    body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 4}))
+    # scale: 범위를 키우면 confirm 이 필요하고(과금 증가), 줄이거나 autoscale/cap 만 바꾸면 즉시 적용
+    up = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 4}))
+    assert up["confirmed"] is False and up["requested"] == {"min_replicas": 1, "max_replicas": 4}
+    assert "cost goes up" in up["question"] and not _calls(fake, "scale_serving")
+    body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 4, "confirm": True}))
     assert body["action"] == "scale" and _calls(fake, "scale_serving")[0][2] == {"min_replicas": None, "max_replicas": 4,
                                                                                     "autoscale": None, "price_cap_per_hour": None}
-    _payload(await mcp_client.call_tool("pause_serving", {"serving": 42, "paused": False}))
+    # (fake 는 도구 호출마다 새 클라이언트 → _calls 는 마지막 호출의 기록만 본다)
+    down = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 2}))
+    assert down["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["max_replicas"] == 2
+    only_cap = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "price_cap_per_hour": 0.9}))
+    assert only_cap["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["price_cap_per_hour"] == 0.9
+    assert not _calls(fake, "get_serving")            # 범위를 안 건드리면 현재 상태 조회도 없다
+    # pause 는 즉시, resume(paused=false) 은 confirm
+    _payload(await mcp_client.call_tool("pause_serving", {"serving": 42, "paused": True}))
+    assert _calls(fake, "pause_serving")[0][2]["paused"] is True
+    resume = _payload(await mcp_client.call_tool("pause_serving", {"serving": 42, "paused": False}))
+    assert resume["confirmed"] is False and "Billing resumes" in resume["question"] and not _calls(fake, "pause_serving")
+    _payload(await mcp_client.call_tool("pause_serving", {"serving": 42, "paused": False, "confirm": True}))
     assert _calls(fake, "pause_serving")[0][2]["paused"] is False
     prev = _payload(await mcp_client.call_tool("delete_serving", {"serving": 42}))
     assert prev["confirmed"] is False and prev["serving"]["model_name"] == "llama"
@@ -138,3 +163,13 @@ async def test_pod_label_is_resolved_to_pod_name(mcp_client, fake, with_key):
     assert missing.is_error and _payload(missing)["code"] == "not_found" and "pods" in _payload(missing)
     exact = _payload(await mcp_client.call_tool("stop_pod", {"pod": "0123456789abcdef-0", "workspace": WS}))
     assert exact["id"] == "0123456789abcdef-0"
+
+
+async def test_name_taken_tells_agent_to_check_the_list_first(mcp_client, fake, with_key):
+    """응답을 못 받은 생성의 재시도가 409 Name Taken 으로 돌아오면 "다른 이름으로" 가 아니라 목록 확인을 먼저 시킨다."""
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        create_pod=ConflictError(409, "A pod named 'p' already exists in this workspace.", title="Name Taken"))
+    result = await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1, "confirm": True})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "name_taken"
+    assert "list tool" in body["next_step"] and "before creating anything else" in body["next_step"]

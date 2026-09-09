@@ -34,8 +34,9 @@ Prices are USD per hour unless the field name says otherwise. When you show cost
 price and, if relevant, the running total. Errors carry `code`, `message` and `next_step`; \
 follow `next_step` literally, especially the waiting instructions on `rate_limited`.
 
-Spending and deleting: create_pod, create_storage, deploy_serving, submit_task, delete_pod, delete_storage and \
-delete_serving take `confirm`. With confirm=false they only return an estimate or a summary and change nothing. \
+Spending and deleting: create_pod, create_storage, deploy_serving, submit_task, start_pod, delete_pod, delete_storage \
+and delete_serving take `confirm`; so do pause_serving when resuming (paused=false) and scale_serving when it raises \
+the replica range. With confirm=false they only return an estimate or a summary and change nothing. \
 Show that to the user, get an explicit yes, and only then call again with confirm=true. Never set confirm=true \
 without the user's go-ahead in this conversation. Write tools need an API key with the write scope; if you get \
 `write_scope_required`, tell the user how to issue one. Changes are asynchronous: after an accepted call, poll the \

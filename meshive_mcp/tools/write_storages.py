@@ -19,7 +19,8 @@ def register(server: MCPServer) -> None:
                              confirm: bool = False) -> dict[str, Any]:
         """Create a storage volume. It is billed hourly by capacity for as long as it exists, mounted or not.
         With confirm=false (default) it only returns the estimate; call again with confirm=true after the user agreed.
-        `storage_type` "nfs" (network, attachable to any pod) or "hostPath" (local, faster, single machine; supports `encrypted`).
+        `storage_type` "nfs" (network, attachable to any pod; supports `encrypted` at-rest encryption) or "hostPath" (local,
+        faster, single machine; cannot be encrypted).
         The volume appears in the storages tool shortly after; attach it to a pod with create_pod `volumes`."""
         kwargs = dict(storage_type=storage_type, disk_type=disk_type, encrypted=encrypted, region=region,
                       max_price_per_hour=max_price_per_hour)

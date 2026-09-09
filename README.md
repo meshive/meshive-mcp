@@ -74,9 +74,10 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |
 | `submit_task`, `stop_task` | Serverless tasks |
 
-**Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task` and the three
-`delete_*` tools take `confirm`. With `confirm=false` (the default) they return an estimate or a summary and change
-nothing; the agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.
+**Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task`, `start_pod` and
+the three `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when it raises
+the replica range. With `confirm=false` (the default) they return an estimate or a summary and change nothing; the
+agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.
 Every accepted change is asynchronous — the agent polls the matching list tool for the new state.
 
 Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as

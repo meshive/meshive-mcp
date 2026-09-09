@@ -46,10 +46,22 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "scale_serving", annotations=MUTATE)
     async def scale_serving(ctx: Context[Any, Any], serving: int, min_replicas: int | None = None,
                             max_replicas: int | None = None, autoscale: bool | None = None,
-                            price_cap_per_hour: float | None = None) -> dict[str, Any]:
+                            price_cap_per_hour: float | None = None, confirm: bool = False) -> dict[str, Any]:
         """Change a serving's replica range, autoscaling, or per-replica price cap. Pass only the fields to change.
-        Raising max_replicas raises the possible hourly cost — say so to the user."""
+        Raising min_replicas or max_replicas raises the possible hourly cost, so such a call with confirm=false (default)
+        only returns the current and requested ranges and changes nothing; call again with confirm=true after the user
+        agreed. Lowering the range or changing only autoscale/price cap applies immediately."""
         async with meshive_client(ctx) as client:
+            if not confirm and (min_replicas is not None or max_replicas is not None):
+                # 과금이 늘어나는 방향(현재보다 큰 min/max)만 확인을 요구한다 — 줄이는 호출은 즉시 적용.
+                current = await call(client.get_serving, serving)
+                new_min = current.min_replicas if min_replicas is None else min_replicas
+                new_max = current.max_replicas if max_replicas is None else max_replicas
+                if new_min > current.min_replicas or new_max > current.max_replicas:
+                    return preview("scale_serving", {"serving": to_dict(current),
+                                                     "requested": {"min_replicas": new_min, "max_replicas": new_max}},
+                                   f"Scale serving #{serving} from {current.min_replicas}-{current.max_replicas} to "
+                                   f"{new_min}-{new_max} replicas? Its possible hourly cost goes up.")
             result = await call(client.scale_serving, serving, min_replicas=min_replicas, max_replicas=max_replicas,
                                 autoscale=autoscale, price_cap_per_hour=price_cap_per_hour)
         out = to_dict(result)
@@ -57,9 +69,17 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "pause_serving", annotations=MUTATE)
-    async def pause_serving(ctx: Context[Any, Any], serving: int, paused: bool = True) -> dict[str, Any]:
-        """Pause (paused=true) or resume (paused=false) a serving. Paused servings stop billing and stop answering requests."""
+    async def pause_serving(ctx: Context[Any, Any], serving: int, paused: bool = True,
+                            confirm: bool = False) -> dict[str, Any]:
+        """Pause (paused=true) or resume (paused=false) a serving. Paused servings stop billing and stop answering requests.
+        Resuming restarts billing, so paused=false with confirm=false (default) only returns the serving's current state;
+        call again with confirm=true after the user agreed. Pausing needs no confirmation."""
         async with meshive_client(ctx) as client:
+            if not paused and not confirm:
+                current = await call(client.get_serving, serving)
+                return preview("pause_serving", {"serving": to_dict(current), "paused": False},
+                               f"Resume serving #{serving} ({current.model_name or current.framework}, "
+                               f"{current.min_replicas}-{current.max_replicas} replicas)? Billing resumes.")
             result = await call(client.pause_serving, serving, paused=paused)
         out = to_dict(result)
         out["next_step"] = "Accepted. Poll the servings tool for the new state."

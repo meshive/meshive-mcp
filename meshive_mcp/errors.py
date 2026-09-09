@@ -66,7 +66,10 @@ _CONFLICT_CODES = {
     "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
                                    "details to the user and suggest a smaller request, a different GPU, or trying later. "
                                    "Do not retry blindly."),
-    "name taken": ("name_taken", "A resource with this name already exists. Pick another name or use the existing one."),
+    # 생성 요청의 응답을 못 받고 재시도한 뒤에 오는 409 가 흔하다 — "다른 이름으로" 만 안내하면 모델이 자원을 하나 더 만든다.
+    "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
+                                 "get a clear answer, that is probably it — check the matching list tool before creating "
+                                 "anything else. Otherwise pick another name or use the existing one."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
