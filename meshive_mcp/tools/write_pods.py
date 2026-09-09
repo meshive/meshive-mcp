@@ -11,7 +11,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from ..client import meshive_client
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve
+from ..workspace import needs_input, resolve, resolve_pod
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
 
 _POD_ARGS_DOC = """`workspace` takes the id from the workspaces tool (a label also works). `template_id` comes from the templates tool.
@@ -96,6 +96,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            pod = await resolve_pod(client, ws, pod)
             result = await call(getattr(client, method), pod, ws, **extra)
         out = to_dict(result)
         out["next_step"] = f"The {action} was accepted and runs asynchronously. Poll the pods tool for the new status."
@@ -104,7 +105,7 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "stop_pod", annotations=MUTATE)
     async def stop_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Stop a running pod (scale to zero). Pod billing stops; attached storage keeps being billed.
-        `pod` is the pod_name from the pods tool. The change is asynchronous — poll pods for `stopped`.
+        `pod` is the pod_name from the pods tool (the display name also works). The change is asynchronous — poll pods for `stopped`.
         Use delete_pod to remove the pod entirely."""
         return await _lifecycle(ctx, "stop_pod", pod, workspace, "stop")
 
@@ -131,6 +132,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            pod = await resolve_pod(client, ws, pod)
             if not confirm:
                 current = await call(client.get_pod, pod, ws)
                 return preview("delete_pod", {"pod": to_dict(current), "workspace": ws,

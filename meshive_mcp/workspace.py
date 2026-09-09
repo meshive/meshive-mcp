@@ -86,3 +86,25 @@ async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str]
 
 def needs_input(value: Any) -> bool:
     return isinstance(value, dict) and "needs_input" in value
+
+
+_POD_NAME_RE = re.compile(r"^[0-9a-f]{16}-\d+$")
+
+
+async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
+    """`pod` 가 pod_name(16 hex + "-N") 이면 그대로, 아니면 라벨(user_alias)로 보고 목록에서 찾는다.
+    실측(2026-09-09): 모델이 방금 만든 파드를 라벨로 조회해 not_found 를 받고 목록을 다시 훑었다."""
+    pod = (pod or "").strip()
+    if _POD_NAME_RE.match(pod):
+        return pod
+    pods = await client.list_pods(workspace)
+    hits = [p for p in pods if (p.user_alias or "").lower() == pod.lower()]
+    if len(hits) == 1:
+        return hits[0].pod_name
+    candidates = [{"pod_name": p.pod_name, "name": p.user_alias, "status": p.status} for p in pods
+                  if not getattr(p, "raw", {}).get("isDownloader")]
+    if not hits:
+        raise tool_error("not_found", f"No pod named '{pod}' in workspace {workspace}.",
+                         "Use one of the `pod_name` values listed here, or call the pods tool.", pods=candidates)
+    raise tool_error("ambiguous_pod", f"Several pods are named '{pod}'.",
+                     "Ask the user which one and call again with its `pod_name`.", pods=candidates[:20])

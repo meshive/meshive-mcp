@@ -128,3 +128,13 @@ async def test_insufficient_credit(mcp_client, fake, with_key):
 async def test_write_tools_need_key(mcp_client, fake):
     result = await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1, "confirm": True})
     assert result.is_error and _payload(result)["code"] == "no_api_key"
+
+
+async def test_pod_label_is_resolved_to_pod_name(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: inst.pods.__setitem__(3, __import__("conftest")._pod("pod-3"))  # user_alias == "pod-3"
+    body = _payload(await mcp_client.call_tool("stop_pod", {"pod": "POD-3", "workspace": WS}))
+    assert body["id"] == "pod-3" and _calls(fake, "list_pods")
+    missing = await mcp_client.call_tool("stop_pod", {"pod": "nope", "workspace": WS})
+    assert missing.is_error and _payload(missing)["code"] == "not_found" and "pods" in _payload(missing)
+    exact = _payload(await mcp_client.call_tool("stop_pod", {"pod": "0123456789abcdef-0", "workspace": WS}))
+    assert exact["id"] == "0123456789abcdef-0"

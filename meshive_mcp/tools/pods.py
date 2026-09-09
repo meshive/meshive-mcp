@@ -7,7 +7,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import paginate
 from ..serialize import to_dict
-from ..workspace import ALL, needs_input, resolve, resolve_many
+from ..workspace import ALL, needs_input, resolve, resolve_many, resolve_pod
 from ._common import READ_ONLY, call, meshive_tool
 
 
@@ -27,7 +27,7 @@ def register(server: MCPServer) -> None:
     async def pods(ctx: Context[Any, Any], workspace: str | None = None, pod: str | None = None,
                    status: str | None = None, include_metrics: bool = False, include_system: bool = False,
                    limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
-        """List the pods (GPU/CPU containers) in a workspace, or show one pod by its `pod_name`.
+        """List the pods (GPU/CPU containers) in a workspace, or show one pod by its `pod_name` (its display name also works).
         `workspace` takes the id from the workspaces tool (a label also works); pass "all" to list pods across every workspace, or omit it if the user has only one.
         Set `include_metrics` for live CPU/RAM/GPU usage of a single pod; use `status` to filter the list. System-managed downloader pods are hidden unless `include_system` is true; they are free and cannot be stopped or deleted."""
         async with meshive_client(ctx) as client:
@@ -35,6 +35,7 @@ def register(server: MCPServer) -> None:
                 ws = await resolve(client, workspace)
                 if needs_input(ws):
                     return ws
+                pod = await resolve_pod(client, ws, pod)
                 item = _pod_dict(await call(client.get_pod, pod, ws))
                 if include_metrics:
                     item["metrics"] = to_dict(await call(client.get_pod_metrics, pod, ws))
