@@ -20,7 +20,7 @@ def register(server: MCPServer) -> None:
     async def deploy_serving(ctx: Context[Any, Any], model_registration_id: int, price_cap_per_hour: float,
                              workspace: str | None = None, min_replicas: int = 1, max_replicas: int = 3,
                              autoscale: bool = True, max_context_tokens: int | None = None,
-                             share_idle_capacity: bool = False, confirm: bool = False) -> dict[str, Any]:
+                             share_idle_capacity: bool = False, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Deploy an already-registered model as a serverless serving (inference endpoint). Billing runs per replica per hour,
         capped at `price_cap_per_hour` each, so the worst case is price_cap × max_replicas per hour.
         With confirm=false (default) it only returns that cost summary; call again with confirm=true after the user agreed.
@@ -48,7 +48,7 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "scale_serving", annotations=MUTATE)
     async def scale_serving(ctx: Context[Any, Any], serving: int, min_replicas: int | None = None,
                             max_replicas: int | None = None, autoscale: bool | None = None,
-                            price_cap_per_hour: float | None = None, confirm: bool = False) -> dict[str, Any]:
+                            price_cap_per_hour: float | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Change a serving's replica range, autoscaling, or per-replica price cap. Pass only the fields to change.
         Raising min_replicas or max_replicas raises the possible hourly cost, so such a call with confirm=false (default)
         only returns the current and requested ranges and changes nothing; call again with confirm=true after the user
@@ -72,7 +72,7 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "pause_serving", annotations=MUTATE)
     async def pause_serving(ctx: Context[Any, Any], serving: int, paused: bool = True,
-                            confirm: bool = False) -> dict[str, Any]:
+                            confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Pause (paused=true) or resume (paused=false) a serving. Paused servings stop billing and stop answering requests.
         Resuming restarts billing, so paused=false with confirm=false (default) only returns the serving's current state;
         call again with confirm=true after the user agreed. Pausing needs no confirmation."""
@@ -88,7 +88,7 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "delete_serving", annotations=DESTRUCTIVE)
-    async def delete_serving(ctx: Context[Any, Any], serving: int, confirm: bool = False) -> dict[str, Any]:
+    async def delete_serving(ctx: Context[Any, Any], serving: int, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a serving and its endpoint. With confirm=false (default) it only returns the serving's current state;
         call again with confirm=true after the user agreed."""
         async with meshive_client(ctx) as client:
@@ -107,7 +107,8 @@ def register(server: MCPServer) -> None:
     _TASK_DOC = """`script` is Python source (max 256 KB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`
 (e.g. "micro-2c8g", "small-4c16g", "standard-8c32g"). `max_duration` seconds (3600..86400) is a hard stop.
-`input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "version": n}] under /inputs."""
+`max_price_per_hour` caps the final compute rate only; storage, Asset Hub retention and fetch-time charges are separate.
+The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "version": n}] under /inputs."""
 
     async def estimate_task(ctx: Context[Any, Any], name: str, script: str, workspace: str | None = None,
                             image: str | None = None, template_id: int | None = None, requirements: str | None = None,
@@ -116,7 +117,7 @@ reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count
                             gpu_vram_gb: int | None = None, cpu_preset: str | None = None, max_duration: int = 3600,
                             webhook_url: str | None = None, input_assets: list[Any] | None = None,
                             max_price_per_hour: float | None = None) -> dict[str, Any]:
-        """Estimate a one-off task's hourly price and worst-case cost before submitting it; nothing runs.
+        """Estimate a one-off task's compute hourly price (total cost can be unknown) before submitting it; nothing runs.
         """
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
@@ -140,7 +141,7 @@ reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count
                           args: list[str] | None = None, gpu_model: str | None = None, gpu_count: int | None = None,
                           gpu_vram_gb: int | None = None, cpu_preset: str | None = None, max_duration: int = 3600,
                           webhook_url: str | None = None, input_assets: list[Any] | None = None,
-                          max_price_per_hour: float | None = None, confirm: bool = False) -> dict[str, Any]:
+                          max_price_per_hour: float | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Submit a one-off task (a script that runs to completion on a GPU or CPU). It is billed while it runs, up to
         `max_duration`. With confirm=false (default) it only returns the estimate; call again with confirm=true after the
         user agreed. Then poll the tasks tool for status and read output with logs.
@@ -169,7 +170,7 @@ reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count
     meshive_tool(server, "submit_task", annotations=CREATE)(submit_task)
 
     @meshive_tool(server, "stop_task", annotations=MUTATE)
-    async def stop_task(ctx: Context[Any, Any], task: str) -> dict[str, Any]:
+    async def stop_task(ctx: Context[Any, Any], task: str, operation_id: str | None = None) -> dict[str, Any]:
         """Stop a queued or running task. `task` is the task_id (task_...) from the tasks tool. Billing stops."""
         async with meshive_client(ctx) as client:
             result = await call(client.stop_task, task)

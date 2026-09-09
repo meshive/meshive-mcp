@@ -17,7 +17,7 @@ def register(server: MCPServer) -> None:
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
-                             confirm: bool = False) -> dict[str, Any]:
+                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a storage volume. It is billed hourly by capacity for as long as it exists, mounted or not.
         With confirm=false (default) it only returns the estimate; call again with confirm=true after the user agreed.
         `storage_type` "nfs" (network, attachable to any pod; supports `encrypted` at-rest encryption) or "hostPath" (local,
@@ -42,7 +42,7 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "delete_storage", annotations=DESTRUCTIVE)
     async def delete_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
-                             confirm: bool = False) -> dict[str, Any]:
+                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a storage volume and all data on it. `storage` is the pv_name from the storages tool.
         With confirm=false (default) it only returns what would be deleted (including pods that still mount it);
         call again with confirm=true after the user agreed. Volumes mounted by a user pod are refused (storage_in_use)."""

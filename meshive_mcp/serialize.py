@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from typing import Any
 
 from . import money
@@ -19,7 +19,7 @@ from . import money
 _DROP = {"raw"}
 
 # 시간당 요금은 어느 dataclass에 있든 필드명이 같다 → 이름 하나로 판정(콘솔 formatHourlyUsd, 3자리).
-_HOURLY_FIELDS = {"price_per_hour"}
+_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour"}
 # 그 외 금액은 이름만으로는 구분이 안 된다(예: DailyCost.pod 는 금액, WorkspaceResources.pod 는 개수)
 # → dataclass 이름과 함께 본다. 콘솔 formatUsd(2자리).
 _USD_FIELDS: dict[str, set[str]] = {
@@ -43,15 +43,18 @@ _DECIMAL_STR = re.compile(r"^-?(\d+\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)$")
 
 def normalize_number(value: str) -> str:
     """백엔드 Decimal 문자열을 사람이 읽는 형태로: "0E-8" → "0", "0.87741500" → "0.877415"."""
-    if not _DECIMAL_STR.match(value):
+    if len(value) > 128 or not _DECIMAL_STR.fullmatch(value):
         return value
     try:
-        d = Decimal(value).normalize()
-    except InvalidOperation:
+        d = Decimal(value)
+        if not d.is_finite() or abs(d.adjusted()) > 64 or abs(d.as_tuple().exponent) > 64:
+            return value
+    except DecimalException:
         return value
     if d == 0:
         return "0"
-    return format(d, "f")
+    fixed = format(d, "f")
+    return fixed.rstrip("0").rstrip(".") if "." in fixed else fixed
 
 
 def to_dict(obj: Any) -> Any:
@@ -65,10 +68,14 @@ def to_dict(obj: Any) -> Any:
             value = getattr(obj, f.name)
             out[f.name] = to_dict(value)
             if f.name in _HOURLY_FIELDS:
+                out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
                 out[f"{f.name}_display"] = money.hourly(value)
             elif f.name in usd_fields:
+                out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
                 out[f"{f.name}_display"] = money.usd(value)
             elif (cls, f.name) in _HOURLY_DICT_FIELDS and isinstance(value, dict):
+                out[f.name] = {str(k): normalize_number(v) if isinstance(v, str) else to_dict(v)
+                               for k, v in value.items()}
                 out[f"{f.name}_display"] = {str(k): money.hourly(v) for k, v in value.items()}
         return out
     if isinstance(obj, dict):
@@ -80,5 +87,5 @@ def to_dict(obj: Any) -> Any:
     if isinstance(obj, Decimal):
         return normalize_number(str(obj))
     if isinstance(obj, str):
-        return normalize_number(obj)
+        return obj
     return obj

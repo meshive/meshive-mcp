@@ -47,7 +47,8 @@ NEXT_STEP_NOT_FOUND = (
     "Verify the identifier with the matching list tool (pods, storages, templates, ...). "
     "Do not guess identifiers."
 )
-NEXT_STEP_UNAVAILABLE = "Wait {retry_after}s and retry once. If it fails again, tell the user."
+NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a write, check operation_status first; "
+                        "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome.")
 
 
 def tool_error(code: str, message: str, next_step: str, **extra: Any) -> ToolError:
@@ -63,6 +64,12 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
 # 409 의 종류는 서버 detail.title 로 구분된다 (WSB routers/sdk/write*.py). 부가 정보(availability, pricePerHourUsd,
 # linkedPods, available)는 detail 에 그대로 실려 있어 모델에게 넘긴다.
 _CONFLICT_CODES = {
+    "operation outcome unknown": ("operation_outcome_unknown", "Check operation_status and the recorded task/transaction. "
+                                   "The request will not execute again; pending/unknown records require reconciliation."),
+    "price unavailable": ("price_unavailable", "The server cannot quote this capped request. Keep the user's cap; "
+                           "do not remove or increase it without their explicit consent."),
+    "data loss consent required": ("data_loss_consent_required", "Show the permanent workspace-file loss warning for "
+                                    "this pod and placement. Obtain separate consent before setting allow_data_loss=true."),
     "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
                                    "details to the user and suggest a smaller request, a different GPU, or trying later. "
                                    "Do not retry blindly."),

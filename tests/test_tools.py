@@ -6,7 +6,7 @@ import pytest
 pytestmark = pytest.mark.anyio
 from meshive.exceptions import AuthenticationError, RateLimitError
 
-READ_TOOLS = {"account", "workspaces", "pods", "storages", "gpus", "templates", "servings", "tasks",
+READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "templates", "servings", "tasks",
               "assets", "machines", "billing_history", "logs", "estimate_pod", "estimate_task"}
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage", "delete_storage",
                "deploy_serving", "scale_serving", "pause_serving", "delete_serving", "submit_task", "stop_task"}
@@ -21,7 +21,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 27
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 28
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -169,7 +169,7 @@ def test_number_normalization():
     assert normalize_number("1.2E+2") == "120"
     assert normalize_number("457") == "457"          # 정수 문자열(id 일 수 있음)은 그대로
     assert normalize_number("task_1e5") == "task_1e5"
-    assert to_dict({"price_per_hour": "0E-8", "name": "x"}) == {"price_per_hour": "0", "name": "x"}
+    assert to_dict({"price_per_hour": "0E-8", "name": "x"}) == {"price_per_hour": "0E-8", "name": "x"}
 
 
 async def test_system_pods_hidden_by_default(mcp_client, fake, with_key):

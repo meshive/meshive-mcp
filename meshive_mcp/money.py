@@ -14,7 +14,7 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from typing import Any
 
 MISSING = "-"
@@ -25,11 +25,14 @@ def _fmt(value: Any, digits: int) -> str:
         return MISSING
     try:
         amount = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
+    except (DecimalException, TypeError, ValueError):
         return MISSING
-    if not amount.is_finite():
+    if not amount.is_finite() or abs(amount.adjusted()) > 64:
         return MISSING
-    quantized = amount.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+    try:
+        quantized = amount.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+    except DecimalException:
+        return MISSING
     # 환급/회수 원장행은 음수 — "$-12.50" 이 아니라 "-$12.50".
     sign = "-" if quantized < 0 else ""
     return f"{sign}${abs(quantized):,.{digits}f}"

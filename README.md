@@ -125,3 +125,11 @@ with a fake SDK client, so it needs no network and no API key.
 ## License
 
 Apache-2.0
+
+### Stable write operations
+
+Every write tool accepts `operation_id`. A preview returns one; confirmation and every retry must reuse it. For tools without a preview, generate a UUID before the first call. A write without a supplied ID is refused before sending it to the SDK. Errors preserve the ID, and SDK response/error metadata supplies `operation_lookup` when available. Use the read-only `operation_status` tool before retrying an uncertain write. Pending/unknown outcomes require reconciliation; never change the ID merely to get past them.
+
+Starting a pod with `placement="any_node"` can permanently delete unpreserved workspace files. The preview shows `has_unpreserved_workspace`, storage charges and the loss warning. `confirm=true` approves restarting billing; `allow_data_loss=true` requires separate consent for that pod's move.
+
+Pod/task hourly caps apply to compute only. Attached/automatic PVs, Asset Hub retention and task fetch-time charges are separate; estimates are not total-bill ceilings. Labels, logs and scripts remain opaque strings, and tool response envelopes are bounded to 1 MiB.
