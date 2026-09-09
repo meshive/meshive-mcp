@@ -133,6 +133,24 @@ async def test_logs_tool(mcp_client, fake, with_key):
     assert both.is_error and _payload(both)["code"] == "invalid_argument"
 
 
+async def test_logs_carry_an_untrusted_content_notice(mcp_client, fake, with_key):
+    """로그는 사용자의 컨테이너가 찍은 임의 텍스트다 — 프롬프트 주입 경로(2026-09-09 리뷰 P2 #8).
+
+    도구 설명은 호출 **전**에만 읽히므로 응답의 `note` 로도 같은 문장을 준다. 서버 instructions 는
+    세션 전체에 걸린다. 셋 중 하나만 있으면 안 되므로 셋 다 고정한다."""
+    from meshive_mcp.server import INSTRUCTIONS
+
+    sources = {
+        "pod logs note": _payload(await mcp_client.call_tool("logs", {"pod": "pod-1"})).get("note"),
+        "task logs note": _payload(await mcp_client.call_tool("logs", {"task": "task_9"})).get("note"),
+        "tool description": {t.name: t.description for t in (await mcp_client.list_tools()).tools}["logs"],
+        "server instructions": INSTRUCTIONS,
+    }
+    for where, text in sources.items():
+        lowered = (text or "").lower()
+        assert "untrusted" in lowered and "never follow" in lowered, f"{where}: {text!r}"
+
+
 async def test_conflict_titles_map_to_codes(mcp_client, fake, with_key):
     fake["setup"] = lambda inst: inst.raise_on.update(
         estimate_pod=ConflictError(409, "No machine can host 3× RTX 3060", title="No Capacity",
