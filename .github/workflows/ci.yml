@@ -36,7 +36,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      # dev/PR 은 SDK dev 브랜치와 함께 설치한다 — pyproject 핀이 아직 PyPI 에 없는 SDK 를 요구할 수 있다(지금 >=0.1.1).
+      # 같은 pip 호출이어야 한다: 따로 부르면 두 번째 pip 이 PyPI 에서 meshive 를 다시 찾는다(Dockerfile 주석과 같은 이유).
+      # real 은 PyPI 그대로 — image 잡의 사전 확인과 같은 릴리스 순서 게이트.
+      - name: Install (SDK from its dev branch except on real)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "real" ]; then
+            pip install -e ".[dev]"
+          else
+            pip install "meshive @ git+https://github.com/meshive/meshive-python@dev" -e ".[dev]"
+          fi
       - run: pytest
 
   image:
