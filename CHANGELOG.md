@@ -8,7 +8,7 @@
   instead of creating a second resource under another name.
 - `create_storage`: `encrypted` applies to `nfs` (network) volumes; `hostPath` volumes cannot be encrypted and the
   server rejects that combination.
-- CI: the real image build first checks that a stable `meshive` SDK release satisfying `pyproject.toml` is on PyPI
+- CI: the real image build first checks that a `meshive` SDK release satisfying the `pyproject.toml` pin is on PyPI
   and fails early with the required release order otherwise.
 
 - Write tools (need a Read & write key): `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod`,

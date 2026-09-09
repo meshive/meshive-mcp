@@ -45,10 +45,10 @@ jobs:
           echo "sdk_spec=$sdk_spec" >> "$GITHUB_OUTPUT"
           echo "$tags"
 
-      # real 이미지는 PyPI 의 **정식(stable)** meshive 를 설치한다(Dockerfile: MESHIVE_SDK_SPEC 비움 → `pip install .`).
-      # pyproject 의 요구 범위를 만족하는 정식 릴리스가 PyPI 에 없으면 빌드 막바지에 pip 해석 실패로 죽는다 — 여기서 같은
-      # 해석기(pip, --pre 없음)로 먼저 확인해 순서(meshive-python 태그·PyPI 배포 → meshive-mcp real)를 안내한다.
-      # 프리릴리스(0.1.0rc1 등)는 pip 기본 해석에서 제외되므로 통과시키지 않는다 — real 은 stable 만 쓴다.
+      # real 이미지는 PyPI 의 meshive 를 설치한다(Dockerfile: MESHIVE_SDK_SPEC 비움 → `pip install .`). pyproject 의 요구
+      # 범위를 만족하는 릴리스가 PyPI 에 없으면 빌드 막바지에 pip 해석 실패로 죽는다 — 여기서 같은 해석기(pip, --pre 없음)로
+      # 먼저 확인해 순서(meshive-python 태그·PyPI 배포 → meshive-mcp real)를 안내한다. 무엇이 통과하는지는 핀이 정한다:
+      # `>=0.1.0` 이면 정식만, `>=0.1.0rc1`(현재) 이면 rc 도 통과(pip 는 명시자에 프리릴리스가 있을 때만 rc 를 후보에 넣는다).
       - name: Check the meshive SDK release is on PyPI (real only)
         if: github.ref_name == 'real'
         run: |
@@ -60,7 +60,7 @@ jobs:
           )"
           echo "required by pyproject: $spec"
           if ! python3 -m pip download --quiet --no-deps --dest /tmp/meshive-sdk-check "$spec"; then
-            echo "::error::No stable meshive release on PyPI satisfies '$spec'. Publish meshive-python first (tag vX.Y.Z -> PyPI), then merge meshive-mcp to real."
+            echo "::error::No meshive release on PyPI satisfies '$spec'. Publish meshive-python first (tag vX.Y.Z -> PyPI), then merge meshive-mcp to real."
             exit 1
           fi
 
