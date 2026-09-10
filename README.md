@@ -66,7 +66,9 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `machines` | Machines you host, with earnings and live metrics |
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 | `logs` | Last N lines of a pod's or a task's logs |
+| `transactions` | Pod operations still in flight — the step a pod is on, with progress |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
+| `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
 | `create_storage`, `delete_storage` | Storage volumes |
 | `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |
@@ -86,6 +88,12 @@ above is the second line of defence.
 
 Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
+
+This source requires `meshive>=0.1.1,<0.2`. Production images install the released SDK from PyPI;
+dev images install a specific SDK dev commit. Before validating a deployment, read `/healthz`
+and record `version`, `revision`, `sdk_version`, and `sdk_revision`, plus the running image digest.
+`sdk_revision` can be null for a PyPI install; `status: "ok"` alone does not verify the backend,
+database migration or asynchronous workers.
 
 ## Run it yourself
 

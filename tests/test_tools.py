@@ -7,7 +7,7 @@ pytestmark = pytest.mark.anyio
 from meshive.exceptions import AuthenticationError, RateLimitError
 
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "templates", "servings", "tasks",
-              "assets", "machines", "billing_history", "logs", "estimate_pod", "estimate_task"}
+              "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task"}
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage", "delete_storage",
                "deploy_serving", "scale_serving", "pause_serving", "delete_serving", "submit_task", "stop_task"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving"}
@@ -21,7 +21,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 28
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 29
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
