@@ -15,6 +15,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from meshive.exceptions import (
     AuthenticationError,
     ConfigurationError,
+    ConflictError,
+    InsufficientCreditError,
     MeshiveAPIError,
     MeshiveError,
     NotFoundError,
@@ -45,7 +47,8 @@ NEXT_STEP_NOT_FOUND = (
     "Verify the identifier with the matching list tool (pods, storages, templates, ...). "
     "Do not guess identifiers."
 )
-NEXT_STEP_UNAVAILABLE = "Wait {retry_after}s and retry once. If it fails again, tell the user."
+NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a write, check operation_status first; "
+                        "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome.")
 
 
 def tool_error(code: str, message: str, next_step: str, **extra: Any) -> ToolError:
@@ -58,6 +61,42 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
                       "Fix the argument and call the tool again.", **extra)
 
 
+# 409 의 종류는 서버 detail.title 로 구분된다 (WSB routers/sdk/write*.py). 부가 정보(availability, pricePerHourUsd,
+# linkedPods, available)는 detail 에 그대로 실려 있어 모델에게 넘긴다.
+_CONFLICT_CODES = {
+    "operation outcome unknown": ("operation_outcome_unknown", "Check operation_status and the recorded task/transaction. "
+                                   "The request will not execute again; pending/unknown records require reconciliation."),
+    "price unavailable": ("price_unavailable", "The server cannot quote this capped request. Keep the user's cap; "
+                           "do not remove or increase it without their explicit consent."),
+    "data loss consent required": ("data_loss_consent_required", "Show the permanent workspace-file loss warning for "
+                                    "this pod and placement. Obtain separate consent before setting allow_data_loss=true."),
+    "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
+                                   "details to the user and suggest a smaller request, a different GPU, or trying later. "
+                                   "Do not retry blindly."),
+    # 생성 요청의 응답을 못 받고 재시도한 뒤에 오는 409 가 흔하다 — "다른 이름으로" 만 안내하면 모델이 자원을 하나 더 만든다.
+    "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
+                                 "get a clear answer, that is probably it — check the matching list tool before creating "
+                                 "anything else. Otherwise pick another name or use the existing one."),
+    "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
+                                               "whether to raise the cap or choose cheaper hardware."),
+    "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
+                                         "first (ask the user)."),
+    "request in progress": ("in_progress", "The same request is still being processed. Wait a few seconds, then check the "
+                                           "matching list tool instead of resubmitting."),
+    "vram tier required": ("vram_tier_required", "Pass `gpu_vram_gb` — this GPU model comes in several VRAM tiers "
+                                                 "(see `available`)."),
+}
+
+
+def _conflict(exc: ConflictError) -> ToolError:
+    title = (exc.title or "").strip().lower()
+    code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
+                                                              "before retrying."))
+    detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
+    extra = {k: v for k, v in (detail or {}).items() if k not in ("title", "message")} if isinstance(detail, dict) else {}
+    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **extra)
+
+
 def translate(exc: BaseException) -> ToolError:
     """SDK/네트워크 예외를 ToolError 로. 이미 ToolError 면 그대로."""
     if isinstance(exc, ToolError):
@@ -68,8 +107,14 @@ def translate(exc: BaseException) -> ToolError:
         return tool_error("invalid_api_key", exc.message or "Invalid API key.", NEXT_STEP_INVALID_KEY)
     if isinstance(exc, PermissionDeniedError):
         msg = exc.message or "Forbidden."
-        if "scope" in msg.lower():
+        low = msg.lower()
+        if "scope" in low:
             return tool_error("write_scope_required", msg, NEXT_STEP_WRITE_SCOPE)
+        if "member of workspace" in low or "not a member" in low:
+            # 백엔드는 존재하지 않는/남의 워크스페이스 id 를 403 으로 답한다 — 모델 입장에서는 "잘못된 id".
+            return tool_error("unknown_workspace", msg,
+                              "The workspace id is wrong or not the user's. Call the workspaces tool and use "
+                              "the `namespace_name` value (not the label).")
         return tool_error("forbidden", msg, NEXT_STEP_FORBIDDEN)
     if isinstance(exc, NotFoundError):
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)
@@ -78,6 +123,11 @@ def translate(exc: BaseException) -> ToolError:
         return tool_error("rate_limited", exc.message or "Rate limit exceeded.",
                           f"Do not retry immediately. Wait at least {wait}s before calling any Meshive tool again.",
                           retry_after=wait)
+    if isinstance(exc, InsufficientCreditError):
+        return tool_error("insufficient_credit", exc.message or "Insufficient credit.",
+                          f"Ask the user to top up credit at {CONSOLE_URL} before retrying. Do not retry on your own.")
+    if isinstance(exc, ConflictError):
+        return _conflict(exc)
     if isinstance(exc, MeshiveAPIError):
         status = exc.status_code
         msg = exc.message or f"HTTP {status}"
