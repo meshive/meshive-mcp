@@ -83,7 +83,8 @@ async def test_gpus_with_key_normalizes_fields(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("gpus", {"rental_type": "spot"}))
     assert body["authenticated"] is True
     row = body["items"][0]
-    assert row["vram_gb"] == 32 and row["price_per_hour_usd"] == "0.6" and "vram" not in row
+    assert row["vram_gb"] == 32 and row["price_per_hour"] == "0.6" and "vram" not in row
+    assert row["price_per_hour_display"] == "$0.600"
     assert row["max_gpus_per_pod"] == 2
 
 
@@ -108,8 +109,10 @@ async def test_gpus_without_key_uses_public_catalog(mcp_client, fake, monkeypatc
                         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
     body = _payload(await mcp_client.call_tool("gpus", {"rental_type": "spot", "min_vram_gb": 16}))
     assert body["authenticated"] is False
+    # 무키 경로도 display 를 싣는다 — 여기만 빠지면 잠재 고객이 콘솔과 다른 금액을 듣는다.
     assert body["items"] == [{"gpu_model": "RTX 5090", "vram_gb": 32, "rental_type": "spot",
-                              "price_per_hour_usd": "0.3", "availability": "unknown"}]
+                              "price_per_hour": "0.3", "price_per_hour_display": "$0.300",
+                              "availability": "unknown"}]
 
 
 def _two_ws(inst):
