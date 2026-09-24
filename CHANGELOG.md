@@ -17,7 +17,8 @@
   lines may be behind.
 - `estimate_pod` / `create_pod` no longer take `disk_gb`: the system disk is sized by the server (it always overrode
   the value after the estimate) and the estimate's `resources.disk_gb` shows the real size.
-- Requires `meshive` SDK 0.1.1.
+- Requires `meshive` SDK 0.1.2: the `transactions` tool calls `list_transactions`, which 0.1.1 does not have. The real
+  image build refuses to run until 0.1.2 is on PyPI, so meshive-python has to be released first.
 - CI: images are published only after the test and smoke jobs pass (the publish job moved into `ci.yml`). dev images
   pin the SDK to the exact `meshive-python` dev commit resolved at build time instead of the moving `dev` branch, and
   both commits are recorded as image labels (`org.opencontainers.image.revision`, `ai.meshive.sdk.revision`) and in

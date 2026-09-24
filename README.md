@@ -89,7 +89,7 @@ above is the second line of defence.
 Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
 
-This source requires `meshive>=0.1.1,<0.2`. Production images install the released SDK from PyPI;
+This source requires `meshive>=0.1.2,<0.2`. Production images install the released SDK from PyPI;
 dev images install a specific SDK dev commit. Before validating a deployment, read `/healthz`
 and record `version`, `revision`, `sdk_version`, and `sdk_revision`, plus the running image digest.
 `sdk_revision` can be null for a PyPI install; `status: "ok"` alone does not verify the backend,
