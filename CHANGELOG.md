@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Sizes follow the console's 1024-based units. `delete_storage` put a GB label on the volume's MiB value, so a 100 GiB
+  volume was described as `102400.0 GB`; it now says `100 GiB`. `create_storage` says GiB, and the log and script
+  limits say 64 KiB and 256 KiB. Tool descriptions give the units of raw size fields: storage sizes, pod metric sizes
+  and a workspace's `ram`/`total_storage` are MiB (the `storages` tool said GB), a machine's metric `ram_size` is
+  bytes, and network rates are bytes per second. The server instructions say that `size_gb`, `ram_gb`, `disk_gb`,
+  `max_size_gb`, `ram_recommended` and `price_per_gb_month` are GiB, and that only VRAM (`vram_gb`) is said in GB.
 - `scale_serving` now asks for `confirm` for **every** change that can raise the hourly cost — a larger replica range,
   turning autoscale on, or a higher per-replica price cap — using the SDK's `Serving.scale_raises_cost` (the CLI uses
   the same rule). Lowering the range, turning autoscale off or lowering the cap still applies immediately.

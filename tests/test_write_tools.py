@@ -74,12 +74,23 @@ async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake,
 async def test_storage_tools(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "storage_type": "hostPath"}))
     assert prev["confirmed"] is False and prev["estimate"]["max_size_gb"] == 305 and "hostPath" in prev["question"]
+    assert "Create 10 GiB hostPath storage" in prev["question"]        # size_gb 는 GiB (capacity × 1024 MiB)
     done = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["transaction_id"] == 5 and "storages tool" in done["next_step"]
     prev = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1"}))
     assert prev["confirmed"] is False and prev["storage"]["linked_pods"] == ["p-1"] and "1 linked pod" in prev["question"]
+    # total_size 는 MiB — GB 를 그대로 붙이면 "(102400.0 GB, ..." 로 1024 배 부풀려 보였다.
+    assert "(100 GiB, 1 linked pod(s))" in prev["question"] and prev["storage"]["total_size"] == 102400.0
     done = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1", "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["resource"] == "storage" and done["action"] == "delete"
+
+
+async def test_volume_size_follows_the_cli_rule():
+    from meshive_mcp.tools.write_storages import _volume_size
+
+    assert _volume_size(102400.0) == "100 GiB" and _volume_size(1536) == "1.5 GiB"
+    assert _volume_size(1008) == "1008 MiB"          # LUKS 헤더를 뺀 1 GiB 암호화 볼륨 — CLI 도 MiB 로 적는다
+    assert _volume_size(float("nan")) == "size unknown" and _volume_size(None) == "size unknown"
 
 
 async def test_serving_tools(mcp_client, fake, with_key):

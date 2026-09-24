@@ -109,7 +109,7 @@ def register(server: MCPServer) -> None:
 
     # --- 태스크 -------------------------------------------------------------------
 
-    _TASK_DOC = """`script` is Python source (max 256 KB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
+    _TASK_DOC = """`script` is Python source (max 256 KiB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`
 (e.g. "micro-2c8g", "small-4c16g", "standard-8c32g"). `max_duration` seconds (3600..86400) is a hard stop.
 `max_price_per_hour` caps the final compute rate only; storage, Asset Hub retention and fetch-time charges are separate.

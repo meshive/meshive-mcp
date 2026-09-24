@@ -29,6 +29,25 @@ async def test_tool_list_and_annotations(mcp_client):
         assert t.description and len(t.description.split(".")) >= 3, t.name
 
 
+async def test_tool_descriptions_state_size_units(mcp_client):
+    """원시 크기 숫자의 단위를 설명이 말해야 모델이 사람에게 옮길 때 틀리지 않는다 — 콘솔처럼 1024 기반.
+    storages 는 "Sizes are in GB" 라고 했지만 값은 MiB 였다(100 GiB 볼륨 = 102400)."""
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
+    assert "MiB" in desc["storages"] and "in GB" not in desc["storages"]
+    assert "`ram_size` is bytes" in desc["machines"] and "bytes per second" in desc["machines"]
+    assert "MiB" in desc["pods"] and "MiB" in desc["workspaces"]
+    assert "GiB" in desc["create_storage"]
+    assert "64 KiB" in desc["logs"] and "256 KiB" in desc["submit_task"]
+
+
+async def test_server_instructions_say_gib_for_gb_named_fields():
+    """`*_gb` 필드는 쿠버네티스 Gi·capacity × 1024 MiB 다 — 이름만 보고 "GB" 라고 말하지 않게 서버 안내가 GiB 라고 한다."""
+    from meshive_mcp.server import INSTRUCTIONS
+
+    assert "`ram_gb`" in INSTRUCTIONS and "`price_per_gb_month` is per GiB" in INSTRUCTIONS
+    assert "(`vram_gb`) is said in GB" in INSTRUCTIONS
+
+
 async def test_no_key_is_model_instruction(mcp_client, fake):
     result = await mcp_client.call_tool("account", {})
     assert result.is_error
@@ -203,7 +222,7 @@ async def test_money_fields_carry_a_console_matching_display_string(mcp_client, 
         "create_storage", {"name": "s", "size_gb": 10, "workspace": WS}))["estimate"]
     # 0.000097/h — 2자리면 "$0.00" 이 돼 "공짜" 로 읽힌다. 콘솔은 "$0.000".
     assert storage_est["price_per_hour_display"] == "$0.000"
-    assert storage_est["price_per_gb_month_display"] == "$0.07"      # GB·month 단가는 합계 계열 → 2자리
+    assert storage_est["price_per_gb_month_display"] == "$0.07"      # GiB·month 단가는 합계 계열 → 2자리
 
     est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 1, "workspace": WS}))
     assert est["price_per_hour_display"] == "$0.068"

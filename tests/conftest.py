@@ -107,7 +107,8 @@ class FakeMeshive:
     async def get_storage(self, pv, ws):
         self._rec("get_storage", pv, ws)
         return Storage.from_dict({"pvName": pv, "namespaceName": ws, "userAlias": "data", "storageType": "nfs",
-                                  "status": "running", "totalSize": 10.0, "linkedPod": [{"podName": "p-1"}]})
+                                  "status": "running", "totalSize": 102400.0,   # MiB (100 GiB) — 서버 단위 그대로
+                                  "linkedPod": [{"podName": "p-1"}]})
 
     async def delete_storage(self, pv, ws, **kw): return await self._action("delete_storage", "storage", pv, ws, **kw)
 

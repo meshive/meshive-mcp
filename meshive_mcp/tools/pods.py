@@ -29,7 +29,7 @@ def register(server: MCPServer) -> None:
                    limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the pods (GPU/CPU containers) in a workspace, or show one pod by its `pod_name` (its display name also works).
         `workspace` takes the id from the workspaces tool (a label also works); pass "all" to list pods across every workspace, or omit it if the user has only one.
-        Set `include_metrics` for live CPU/RAM/GPU usage of a single pod; use `status` to filter the list. System-managed downloader pods are hidden unless `include_system` is true; they are free and cannot be stopped or deleted."""
+        Set `include_metrics` for live CPU/RAM/GPU usage of a single pod (`ram_size`, `ephemeral_storage_*` and GPU `vram_size` are MiB); use `status` to filter the list. System-managed downloader pods are hidden unless `include_system` is true; they are free and cannot be stopped or deleted."""
         async with meshive_client(ctx) as client:
             if pod is not None:
                 ws = await resolve(client, workspace)
