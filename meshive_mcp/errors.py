@@ -26,18 +26,23 @@ from meshive.exceptions import (
 
 CONSOLE_URL = "https://console.meshive.ai"
 
+KEYS_PAGE = f"{CONSOLE_URL}, workspace Settings > API keys"
+# 키를 바꿔 끼우는 법 — 키는 만료되고(write 기본 30일), Claude Code 의 `mcp add` 는 같은 이름을 거절한다.
+REPLACE_KEY = ("replace the old key in this MCP server's configuration (in Claude Code, run "
+               "`claude mcp remove meshive` first, then add it again)")
+
 NEXT_STEP_NO_KEY = (
-    "Ask the user to create a Meshive API key in the console "
-    f"({CONSOLE_URL}, workspace Settings > Secret) and put it in this MCP server's "
+    f"Ask the user to create a Meshive API key in the console ({KEYS_PAGE}) and put it in this MCP server's "
     "Authorization header as 'Bearer meshive_...'. Do not retry until they confirm it is set."
 )
 NEXT_STEP_INVALID_KEY = (
     "The configured API key was rejected (invalid, expired, revoked, or the account is inactive). "
-    "Ask the user to check the key in the console and update the Authorization header. Do not retry."
+    f"Ask the user to check the key, or create a new one in the console ({KEYS_PAGE}) and {REPLACE_KEY}. "
+    "Do not retry."
 )
 NEXT_STEP_WRITE_SCOPE = (
-    "This action needs an API key with the 'write' scope. Ask the user to issue one in the console "
-    "and update the Authorization header. Do not retry with the current key."
+    "This action needs an API key with the 'write' scope. Ask the user to create a Read & write key in the console "
+    f"({KEYS_PAGE}) and {REPLACE_KEY}. Do not retry with the current key."
 )
 NEXT_STEP_FORBIDDEN = (
     "The user's account is not allowed to do this (for example, not an admin of the workspace). "

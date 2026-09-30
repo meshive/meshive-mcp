@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Key errors point to the console's **Settings > API keys** (they said "Settings > Secret", a menu that no longer
+  exists). `invalid_api_key` and `write_scope_required` also say how to swap in a new key — in Claude Code,
+  `claude mcp remove meshive` first, because `claude mcp add` refuses a name that already exists. The README's agent
+  setup matches the docs: Claude Code with `--scope user`, Codex with the key in `http_headers`, Gemini CLI through
+  `gemini mcp add --scope user`.
 - Sizes follow the console's 1024-based units. `delete_storage` put a GB label on the volume's MiB value, so a 100 GiB
   volume was described as `102400.0 GB`; it now says `100 GiB`. `create_storage` says GiB, and the log and script
   limits say 64 KiB and 256 KiB. Tool descriptions give the units of raw size fields: storage sizes, pod metric sizes

@@ -1,7 +1,7 @@
 # meshive-mcp
 
 Remote [MCP](https://modelcontextprotocol.io) server for the [Meshive](https://meshive.ai) GPU Cloud.
-Connect it to Claude Code, Codex, Cursor, or any MCP-capable agent and manage your Meshive
+Connect it to Claude Code, Codex, Cursor, Gemini CLI, or any MCP-capable agent and manage your Meshive
 account, workspaces, pods, storage, GPUs, templates, serverless deployments, and hosted machines
 in natural language.
 
@@ -12,7 +12,7 @@ is forwarded to the Meshive API as-is.
 ## Connect your agent
 
 You need a Meshive API key. Create one in the [console](https://console.meshive.ai)
-(workspace **Settings → Secret**). Keys look like `meshive_` followed by 64 characters.
+(workspace **Settings → API keys**). Keys look like `meshive_` followed by 64 characters.
 
 The server URL is `https://mcp.meshive.ai/mcp`. Every client below sends the key as
 `Authorization: Bearer <key>`.
@@ -20,21 +20,35 @@ The server URL is `https://mcp.meshive.ai/mcp`. Every client below sends the key
 **Claude Code**
 
 ```bash
-claude mcp add --transport http meshive https://mcp.meshive.ai/mcp \
-  --header "Authorization: Bearer meshive_..."
+claude mcp add --scope user --transport http meshive https://mcp.meshive.ai/mcp --header "Authorization: Bearer meshive_..."
 ```
+
+`--scope user` makes it available in every folder — without it, only in the folder where you ran the command.
+To switch to a new key, run `claude mcp remove meshive` first; `add` refuses a name that already exists.
 
 **Codex CLI** — add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.meshive]
 url = "https://mcp.meshive.ai/mcp"
-bearer_token_env_var = "MESHIVE_API_KEY"
+http_headers = { "Authorization" = "Bearer meshive_..." }
 ```
 
-and export `MESHIVE_API_KEY=meshive_...` in your shell.
+To keep the key out of the file, use `bearer_token_env_var = "MESHIVE_API_KEY"` instead of `http_headers` and set
+that variable wherever Codex starts. A variable exported in one terminal isn't seen by other terminals, the IDE
+extension or the desktop app.
 
-**Cursor / other `mcp.json` clients**
+**Gemini CLI**
+
+```bash
+gemini mcp add --scope user --transport http --header "Authorization: Bearer meshive_..." meshive https://mcp.meshive.ai/mcp
+```
+
+This adds the server to `~/.gemini/settings.json` without touching your other settings. Run it again with a new key
+to replace the old one.
+
+**Cursor / other `mcp.json` clients** — in `~/.cursor/mcp.json`. If the file already has `mcpServers`, add just the
+`meshive` entry:
 
 ```json
 {
