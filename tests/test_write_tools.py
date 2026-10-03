@@ -278,8 +278,9 @@ async def test_pod_tools_no_longer_take_disk_gb(mcp_client, fake, with_key):
 
 async def test_model_registration_tools(mcp_client, fake, with_key):
     listed = _payload(await mcp_client.call_tool("models", {}))
-    assert listed["items"][0]["registration_id"] == 12 and listed["hf_tokens"] == [
-        {"token_id": 4, "label": "hf-main", "created_at": None, "used_by_asset_count": 0}]
+    assert listed["items"][0]["registration_id"] == 12
+    creds = _payload(await mcp_client.call_tool("source_credentials", {}))
+    assert [t["label"] for t in creds["hf_tokens"]] == ["hf-main"] and [k["token_id"] for k in creds["civitai_keys"]] == [9]
     detected = _payload(await mcp_client.call_tool("detect_model", {"huggingface_repo": "Qwen/Qwen3-0.6B", "hf_token_id": 4}))
     assert detected["status"] == "ok" and detected["context_length"] == 40960
     assert _calls(fake, "detect_model")[0][2] == {"workspace": WS, "hf_token_id": 4}
@@ -299,3 +300,13 @@ async def test_model_registration_tools(mcp_client, fake, with_key):
     gone = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12, "confirm": True,
                                                                  "operation_id": prev["operation_id"]}))
     assert gone["action"] == "delete" and _calls(fake, "delete_model")[0][1][0] == "12"
+
+
+async def test_import_asset_is_a_write_without_confirm(mcp_client, fake, with_key):
+    refused = await mcp_client.call_tool("import_asset", {"source": "Qwen/Qwen3-0.6B"})
+    assert refused.is_error and "operation_id_required" in refused.content[0].text and not _calls(fake, "import_asset")
+    done = _payload(await mcp_client.call_tool("import_asset", {"source": "Qwen/Qwen3-0.6B", "paths": ["*.safetensors"],
+                                                                 "operation_id": "test-operation-0003"}))
+    assert done["asset_id"] == "asset_new" and "input_assets" in done["next_step"]
+    (_, args, kw), = _calls(fake, "import_asset")
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["paths"] == ["*.safetensors"] and kw["idempotency_key"] == "test-operation-0003"

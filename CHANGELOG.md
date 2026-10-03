@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+- `import_asset` links a Hugging Face repo, a CivitAI model or a direct file URL as an asset that tasks and pods can
+  use. Nothing is copied, so it has no `confirm` step (no storage charge; the bytes download when a pod or task
+  starts), but it takes an `operation_id` like every write. `source_credentials` lists the workspace's saved Hugging
+  Face tokens and CivitAI keys by id for private or gated sources, used by `import_asset`, `detect_model` and
+  `register_model`.
 - Serving without the console: `detect_model` checks a Hugging Face repo, `register_model` registers it and returns
-  the `registration_id` that `deploy_serving` takes, `models` lists registrations with the workspace's Hugging Face
-  token IDs, and `delete_model` removes one (with `confirm`). Registering costs nothing — the model downloads when
+  the `registration_id` that `deploy_serving` takes, `models` lists registrations, and `delete_model` removes one
+  (with `confirm`). Registering costs nothing — the model downloads when
   deployed — so `register_model` has no `confirm` step, but it still takes an `operation_id` like every write.
   `deploy_serving` now points to `models` instead of the console.
 - New read tool `download_links`: temporary download links for an asset's files (optionally narrowed with `paths`

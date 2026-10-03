@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from mcp.client import Client
-from meshive.models import (AssetDownload, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
+from meshive.models import (AssetDownload, AssetImported, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
                             Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WhoAmI,
                             Workspace)
 
@@ -96,6 +96,15 @@ class FakeMeshive:
                                          "result": {"title": "Success", "registrationId": 12, "apiModelId": "qwen-small-ab12"}})
 
     async def delete_model(self, rid, **kw): return await self._action("delete_model", "model", str(rid), **kw)
+
+    async def list_civitai_keys(self, workspace):
+        self._rec("list_civitai_keys", workspace)
+        return [HfToken.from_dict({"id": 9, "label": "civ"})]
+
+    async def import_asset(self, target, **kw):
+        self.calls.append(("import_asset", (target,), kw))
+        return AssetImported.from_dict({"assetExternalId": "asset_new", "name": "Qwen3-0.6B", "status": "active",
+                                        "ingestSource": "hf_import", "fileCount": 9, "totalBytes": 1500})
 
     async def asset_download_urls(self, asset, *, paths=None):
         self._rec("asset_download_urls", asset, paths=paths)
