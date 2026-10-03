@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from mcp.client import Client
 from meshive.models import (AssetDownload, AssetImported, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
-                            Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WhoAmI,
+                            Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WatchedFolders, WhoAmI,
                             Workspace)
 
 from meshive_mcp import client as client_module
@@ -96,6 +96,19 @@ class FakeMeshive:
                                          "result": {"title": "Success", "registrationId": 12, "apiModelId": "qwen-small-ab12"}})
 
     async def delete_model(self, rid, **kw): return await self._action("delete_model", "model", str(rid), **kw)
+
+    WATCHED = {"version": "4:cd", "editable": True, "roots": [
+        {"role": "output", "path": "/workspace/outputs", "origin": "template", "enabled": True, "include": ["*.png"]},
+        {"role": "user", "path": "/workspace/logs", "origin": "user", "enabled": True, "include": [],
+         "includeOverride": ["*.txt"]}]}
+
+    async def get_watched_folders(self, pod, ws):
+        self._rec("get_watched_folders", pod, ws)
+        return WatchedFolders.from_dict(self.WATCHED)
+
+    async def set_watched_folders(self, pod, ws, **kw):
+        self._rec("set_watched_folders", pod, ws, **kw)
+        return WatchedFolders.from_dict({**self.WATCHED, "version": "5:ef"})
 
     async def list_civitai_keys(self, workspace):
         self._rec("list_civitai_keys", workspace)

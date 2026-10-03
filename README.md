@@ -82,12 +82,14 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `logs` | Last N lines of a pod's or a task's logs |
 | `transactions` | Pod operations still in flight — the step a pod is on, with progress, and why an input asset download failed |
 | `models`, `detect_model` | Models registered for serving, and whether a Hugging Face repo can be served |
+| `watched_folders` | A pod's watched folders — folders whose new files are uploaded as assets |
 | `source_credentials` | IDs and labels of the workspace's saved Hugging Face tokens and CivitAI keys (never the secrets) |
 | `download_links` | Temporary download links for an asset's files or a task's outputs (links only, never file contents) |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
 | `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
 | `create_storage`, `delete_storage` | Storage volumes |
+| `set_watched_folders` | Change a running pod's watched folders without a restart (`confirm` when adding or turning one on) |
 | `import_asset` | Link a Hugging Face repo, CivitAI model or file URL as an asset (no copy, no storage charge) |
 | `register_model`, `delete_model` | Register a Hugging Face model for serving (free), or remove a registration |
 | `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |

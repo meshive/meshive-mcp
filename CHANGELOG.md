@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `create_pod` / `estimate_pod` take `input_assets` (Asset Hub assets placed in the pod), `watched_folders` (folders
+  whose new files are uploaded as assets) and `harvest_destination`, like the console's Assets step. New tools
+  `watched_folders` and `set_watched_folders` read and replace a running pod's watched folders without a restart;
+  adding or turning on a folder needs `confirm` because uploaded files are stored and billed, while removing or turning
+  one off applies at once. Server checks (a folder on network storage can't be watched, and so on) come back as they are.
 - `import_asset` links a Hugging Face repo, a CivitAI model or a direct file URL as an asset that tasks and pods can
   use. Nothing is copied, so it has no `confirm` step (no storage charge; the bytes download when a pod or task
   starts), but it takes an `operation_id` like every write. `source_credentials` lists the workspace's saved Hugging

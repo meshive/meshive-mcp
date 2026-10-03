@@ -310,3 +310,34 @@ async def test_import_asset_is_a_write_without_confirm(mcp_client, fake, with_ke
     assert done["asset_id"] == "asset_new" and "input_assets" in done["next_step"]
     (_, args, kw), = _calls(fake, "import_asset")
     assert args == ("Qwen/Qwen3-0.6B",) and kw["paths"] == ["*.safetensors"] and kw["idempotency_key"] == "test-operation-0003"
+
+
+async def test_create_pod_passes_assets_and_watched_folders(mcp_client, fake, with_key):
+    args = {"name": "p", "template_id": 457, "gpu_model": "RTX 3060", "input_assets": ["asset_a"],
+            "watched_folders": [{"path": "/workspace/results", "include": ["*.csv"]}]}
+    prev = _payload(await mcp_client.call_tool("create_pod", args))
+    assert prev["confirmed"] is False
+    (_, _, kw), = _calls(fake, "estimate_pod")
+    assert kw["input_assets"] == ["asset_a"] and kw["watched_folders"] == [{"path": "/workspace/results", "include": ["*.csv"]}]
+
+
+async def test_watched_folders_read_and_confirm_only_when_growing(mcp_client, fake, with_key):
+    seen = _payload(await mcp_client.call_tool("watched_folders", {"pod": "pod-1"}))
+    assert seen["revision"] == 4 and [f["path"] for f in seen["folders"]] == ["/workspace/outputs", "/workspace/logs"]
+
+    grow = {"pod": "pod-1", "expected_version": 4, "template": {"/workspace/outputs": {"enabled": True}},
+            "user": [{"path": "/workspace/logs", "include": ["*.txt"]}, {"path": "/workspace/ckpt"}]}
+    prev = _payload(await mcp_client.call_tool("set_watched_folders", grow))
+    assert prev["confirmed"] is False and prev["adds_or_enables"] == ["/workspace/ckpt"]
+    assert not _calls(fake, "set_watched_folders")
+    done = _payload(await mcp_client.call_tool("set_watched_folders", {**grow, "confirm": True,
+                                                                        "operation_id": prev["operation_id"]}))
+    assert done["revision"] == 5
+    (_, args, kw), = _calls(fake, "set_watched_folders")
+    assert args == ("pod-1", WS) and kw["expected_version"] == 4 and kw["idempotency_key"] == prev["operation_id"]
+
+    shrink = {"pod": "pod-1", "expected_version": 5, "template": {"/workspace/outputs": {"enabled": False}}, "user": [],
+              "operation_id": "test-operation-0004"}
+    assert _payload(await mcp_client.call_tool("set_watched_folders", shrink))["revision"] == 5
+    (_, _, kw), = _calls(fake, "set_watched_folders")          # 줄이는 변경은 확인 없이 바로 쓴다
+    assert kw["expected_version"] == 5
