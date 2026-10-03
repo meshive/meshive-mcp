@@ -15,6 +15,7 @@ from meshive._config import resolve_base_url
 from ..auth import api_key
 from ..client import meshive_client
 from ..errors import invalid_argument, translate
+from ..money import hourly
 from ..serialize import to_dict
 from ..settings import settings
 from ._common import READ_ONLY, call, meshive_tool
@@ -37,11 +38,15 @@ async def _public_catalog(rental_type: str, min_vram_gb: int | None) -> dict[str
         vram = int(entry.get("vram") or 0)
         if min_vram_gb and vram < min_vram_gb:
             continue
+        price = entry.get(price_key) or entry.get(_camel(price_key))
         items.append({
             "gpu_model": entry.get("model"),
             "vram_gb": vram,
             "rental_type": rental_type,
-            "price_per_hour_usd": entry.get(price_key) or entry.get(_camel(price_key)),
+            "price_per_hour": price,
+            # 이 경로는 to_dict 를 안 거친다 — display 를 직접 붙이지 않으면 키 없는 에이전트만 제 나름대로
+            # 반올림해 콘솔과 다른 금액을 말한다(하필 계정 없는 사람이 처음 보는 숫자다).
+            "price_per_hour_display": hourly(price),
             "availability": "unknown",
         })
     return {
@@ -75,6 +80,5 @@ def register(server: MCPServer) -> None:
         for g in items:
             row = to_dict(g)
             row["vram_gb"] = row.pop("vram", None)
-            row["price_per_hour_usd"] = row.pop("price_per_hour", None)
             rows.append(row)
         return {"items": rows, "total": len(rows), "authenticated": True}

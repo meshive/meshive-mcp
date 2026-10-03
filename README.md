@@ -1,7 +1,7 @@
 # meshive-mcp
 
 Remote [MCP](https://modelcontextprotocol.io) server for the [Meshive](https://meshive.ai) GPU Cloud.
-Connect it to Claude Code, Codex, Cursor, or any MCP-capable agent and manage your Meshive
+Connect it to Claude Code, Codex, Cursor, Gemini CLI, or any MCP-capable agent and manage your Meshive
 account, workspaces, pods, storage, GPUs, templates, serverless deployments, and hosted machines
 in natural language.
 
@@ -12,7 +12,7 @@ is forwarded to the Meshive API as-is.
 ## Connect your agent
 
 You need a Meshive API key. Create one in the [console](https://console.meshive.ai)
-(workspace **Settings → Secret**). Keys look like `meshive_` followed by 64 characters.
+(workspace **Settings → API keys**). Keys look like `meshive_` followed by 64 characters.
 
 The server URL is `https://mcp.meshive.ai/mcp`. Every client below sends the key as
 `Authorization: Bearer <key>`.
@@ -20,21 +20,35 @@ The server URL is `https://mcp.meshive.ai/mcp`. Every client below sends the key
 **Claude Code**
 
 ```bash
-claude mcp add --transport http meshive https://mcp.meshive.ai/mcp \
-  --header "Authorization: Bearer meshive_..."
+claude mcp add --scope user --transport http meshive https://mcp.meshive.ai/mcp --header "Authorization: Bearer meshive_..."
 ```
+
+`--scope user` makes it available in every folder — without it, only in the folder where you ran the command.
+To switch to a new key, run `claude mcp remove meshive` first; `add` refuses a name that already exists.
 
 **Codex CLI** — add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.meshive]
 url = "https://mcp.meshive.ai/mcp"
-bearer_token_env_var = "MESHIVE_API_KEY"
+http_headers = { "Authorization" = "Bearer meshive_..." }
 ```
 
-and export `MESHIVE_API_KEY=meshive_...` in your shell.
+To keep the key out of the file, use `bearer_token_env_var = "MESHIVE_API_KEY"` instead of `http_headers` and set
+that variable wherever Codex starts. A variable exported in one terminal isn't seen by other terminals, the IDE
+extension or the desktop app.
 
-**Cursor / other `mcp.json` clients**
+**Gemini CLI**
+
+```bash
+gemini mcp add --scope user --transport http --header "Authorization: Bearer meshive_..." meshive https://mcp.meshive.ai/mcp
+```
+
+This adds the server to `~/.gemini/settings.json` without touching your other settings. Run it again with a new key
+to replace the old one.
+
+**Cursor / other `mcp.json` clients** — in `~/.cursor/mcp.json`. If the file already has `mcpServers`, add just the
+`meshive` entry:
 
 ```json
 {
@@ -56,7 +70,7 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 |---|---|
 | `account` | Who the key belongs to, credit balance |
 | `workspaces` | List workspaces, or one workspace with cost summary and members |
-| `pods` | List pods in a workspace (or `"all"`), or one pod (optionally with live metrics) |
+| `pods` | List pods in a workspace (or `"all"`), or one pod with its URLs and connect credentials (optionally with live metrics) |
 | `storages` | Storage volumes of a workspace |
 | `gpus` | GPU types available to rent with hourly prices |
 | `templates` | Pod templates you can launch from |
@@ -66,14 +80,24 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `machines` | Machines you host, with earnings and live metrics |
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 | `logs` | Last N lines of a pod's or a task's logs |
+| `transactions` | Pod operations still in flight — the step a pod is on, with progress, and why an input asset download failed |
+| `models`, `detect_model` | Models registered for serving, and whether a Hugging Face repo can be served |
+| `watched_folders` | A pod's watched folders — folders whose new files are uploaded as assets |
+| `source_credentials` | IDs and labels of the workspace's saved Hugging Face tokens and CivitAI keys (never the secrets) |
+| `download_links` | Temporary download links for an asset's files or a task's outputs (links only, never file contents) |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
+| `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
 | `create_storage`, `delete_storage` | Storage volumes |
+| `ssh_access` | One-time SSH command and password for a pod (write key; given only to you) |
+| `set_watched_folders` | Change a running pod's watched folders without a restart (`confirm` when adding or turning one on) |
+| `import_asset` | Link a Hugging Face repo, CivitAI model or file URL as an asset (no copy, no storage charge) |
+| `register_model`, `delete_model` | Register a Hugging Face model for serving (free), or remove a registration |
 | `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |
 | `submit_task`, `stop_task` | Serverless tasks |
 
 **Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task`, `start_pod` and
-the three `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when the change can
+the `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when the change can
 raise the hourly cost (a larger replica range, autoscale on, a higher price cap). With `confirm=false` (the default) they
 return an estimate or a summary and change nothing; the
 agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.
@@ -86,6 +110,12 @@ above is the second line of defence.
 
 Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
+
+This source requires `meshive>=0.1.3,<0.2`. Production images install the released SDK from PyPI;
+dev images install a specific SDK dev commit. Before validating a deployment, read `/healthz`
+and record `version`, `revision`, `sdk_version`, and `sdk_revision`, plus the running image digest.
+`sdk_revision` can be null for a PyPI install; `status: "ok"` alone does not verify the backend,
+database migration or asynchronous workers.
 
 ## Run it yourself
 

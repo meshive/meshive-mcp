@@ -16,7 +16,7 @@ def register(server: MCPServer) -> None:
     async def storages(ctx: Context[Any, Any], workspace: str | None = None, storage: str | None = None,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the storage volumes in a workspace, or show one volume by its `pv_name`.
-        Sizes are in GB and `usage_rate` is 0..1; `linked_pods` tells which pods mount the volume.
+        `total_size` and `available_size` are in MiB (divide by 1024 for GiB) and `usage_rate` is 0..1; `linked_pods` tells which pods mount the volume.
         `workspace` takes the id from the workspaces tool (a label also works); pass "all" for every workspace, or omit it if the user has only one."""
         async with meshive_client(ctx) as client:
             if storage is not None:

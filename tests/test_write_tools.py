@@ -71,15 +71,37 @@ async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake,
     assert args[:2] == ("pod-2", WS) and kw["placement"] == "any_node"
 
 
+async def test_start_pod_preview_hides_secrets_and_says_why_same_node_waits(mcp_client, fake, with_key):
+    from conftest import POD_PASSWORD
+
+    fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "capacity")
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2"})
+    assert POD_PASSWORD not in result.content[0].text                 # 미리보기도 Pod 을 통째로 싣는다
+    prev = _payload(result)
+    assert "cannot start on its original machine now (capacity)" in prev["question"]
+    assert prev["data_loss_warning"] == ""
+
+
 async def test_storage_tools(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "storage_type": "hostPath"}))
     assert prev["confirmed"] is False and prev["estimate"]["max_size_gb"] == 305 and "hostPath" in prev["question"]
+    assert "Create 10 GiB hostPath storage" in prev["question"]        # size_gb 는 GiB (capacity × 1024 MiB)
     done = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["transaction_id"] == 5 and "storages tool" in done["next_step"]
     prev = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1"}))
     assert prev["confirmed"] is False and prev["storage"]["linked_pods"] == ["p-1"] and "1 linked pod" in prev["question"]
+    # total_size 는 MiB — GB 를 그대로 붙이면 "(102400.0 GB, ..." 로 1024 배 부풀려 보였다.
+    assert "(100 GiB, 1 linked pod(s))" in prev["question"] and prev["storage"]["total_size"] == 102400.0
     done = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1", "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["resource"] == "storage" and done["action"] == "delete"
+
+
+async def test_volume_size_follows_the_cli_rule():
+    from meshive_mcp.tools.write_storages import _volume_size
+
+    assert _volume_size(102400.0) == "100 GiB" and _volume_size(1536) == "1.5 GiB"
+    assert _volume_size(1008) == "1008 MiB"          # LUKS 헤더를 뺀 1 GiB 암호화 볼륨 — CLI 도 MiB 로 적는다
+    assert _volume_size(float("nan")) == "size unknown" and _volume_size(None) == "size unknown"
 
 
 async def test_serving_tools(mcp_client, fake, with_key):
@@ -252,3 +274,78 @@ async def test_pod_tools_no_longer_take_disk_gb(mcp_client, fake, with_key):
     _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1, "disk_gb": 30, "confirm": True,
                                                        "operation_id": "test-operation-0001"}))
     assert "disk_gb" not in _calls(fake, "create_pod")[0][2]
+
+
+async def test_model_registration_tools(mcp_client, fake, with_key):
+    listed = _payload(await mcp_client.call_tool("models", {}))
+    assert listed["items"][0]["registration_id"] == 12
+    creds = _payload(await mcp_client.call_tool("source_credentials", {}))
+    assert [t["label"] for t in creds["hf_tokens"]] == ["hf-main"] and [k["token_id"] for k in creds["civitai_keys"]] == [9]
+    detected = _payload(await mcp_client.call_tool("detect_model", {"huggingface_repo": "Qwen/Qwen3-0.6B", "hf_token_id": 4}))
+    assert detected["status"] == "ok" and detected["context_length"] == 40960
+    assert _calls(fake, "detect_model")[0][2] == {"workspace": WS, "hf_token_id": 4}
+
+    # 비용이 없어 confirm 없이 등록하지만 operation_id 는 쓰기 규약대로 멱등 키로 간다.
+    done = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
+                                                                   "framework": "sglang",
+                                                                   "operation_id": "test-operation-0002"}))
+    assert done["registration_id"] == 12 and "deploy_serving" in done["next_step"]
+    (_, args, kw), = _calls(fake, "register_model")
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "sglang" and kw["idempotency_key"] == "test-operation-0002"
+
+    prev = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12}))
+    assert prev["confirmed"] is False and prev["model"]["name"] == "qwen-small" and not _calls(fake, "delete_model")
+    missing = await mcp_client.call_tool("delete_model", {"registration_id": 99})
+    assert missing.is_error and "not in workspace" in missing.content[0].text
+    gone = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12, "confirm": True,
+                                                                 "operation_id": prev["operation_id"]}))
+    assert gone["action"] == "delete" and _calls(fake, "delete_model")[0][1][0] == "12"
+
+
+async def test_import_asset_is_a_write_without_confirm(mcp_client, fake, with_key):
+    refused = await mcp_client.call_tool("import_asset", {"source": "Qwen/Qwen3-0.6B"})
+    assert refused.is_error and "operation_id_required" in refused.content[0].text and not _calls(fake, "import_asset")
+    done = _payload(await mcp_client.call_tool("import_asset", {"source": "Qwen/Qwen3-0.6B", "paths": ["*.safetensors"],
+                                                                 "operation_id": "test-operation-0003"}))
+    assert done["asset_id"] == "asset_new" and "input_assets" in done["next_step"]
+    (_, args, kw), = _calls(fake, "import_asset")
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["paths"] == ["*.safetensors"] and kw["idempotency_key"] == "test-operation-0003"
+
+
+async def test_create_pod_passes_assets_and_watched_folders(mcp_client, fake, with_key):
+    args = {"name": "p", "template_id": 457, "gpu_model": "RTX 3060", "input_assets": ["asset_a"],
+            "watched_folders": [{"path": "/workspace/results", "include": ["*.csv"]}]}
+    prev = _payload(await mcp_client.call_tool("create_pod", args))
+    assert prev["confirmed"] is False
+    (_, _, kw), = _calls(fake, "estimate_pod")
+    assert kw["input_assets"] == ["asset_a"] and kw["watched_folders"] == [{"path": "/workspace/results", "include": ["*.csv"]}]
+
+
+async def test_watched_folders_read_and_confirm_only_when_growing(mcp_client, fake, with_key):
+    seen = _payload(await mcp_client.call_tool("watched_folders", {"pod": "pod-1"}))
+    assert seen["revision"] == 4 and [f["path"] for f in seen["folders"]] == ["/workspace/outputs", "/workspace/logs"]
+
+    grow = {"pod": "pod-1", "expected_version": 4, "template": {"/workspace/outputs": {"enabled": True}},
+            "user": [{"path": "/workspace/logs", "include": ["*.txt"]}, {"path": "/workspace/ckpt"}]}
+    prev = _payload(await mcp_client.call_tool("set_watched_folders", grow))
+    assert prev["confirmed"] is False and prev["adds_or_enables"] == ["/workspace/ckpt"]
+    assert not _calls(fake, "set_watched_folders")
+    done = _payload(await mcp_client.call_tool("set_watched_folders", {**grow, "confirm": True,
+                                                                        "operation_id": prev["operation_id"]}))
+    assert done["revision"] == 5
+    (_, args, kw), = _calls(fake, "set_watched_folders")
+    assert args == ("pod-1", WS) and kw["expected_version"] == 4 and kw["idempotency_key"] == prev["operation_id"]
+
+    shrink = {"pod": "pod-1", "expected_version": 5, "template": {"/workspace/outputs": {"enabled": False}}, "user": [],
+              "operation_id": "test-operation-0004"}
+    assert _payload(await mcp_client.call_tool("set_watched_folders", shrink))["revision"] == 5
+    (_, _, kw), = _calls(fake, "set_watched_folders")          # 줄이는 변경은 확인 없이 바로 쓴다
+    assert kw["expected_version"] == 5
+
+
+async def test_ssh_access_returns_command_and_password_but_not_the_web_url(mcp_client, fake, with_key):
+    result = await mcp_client.call_tool("ssh_access", {"pod": "pod-1"})
+    body = _payload(result)
+    assert body["command"] == "ssh -p 2222 root@m.example" and body["password"] == "pw-123"
+    assert body["expires_at"].startswith("2030-") and "only to the user" in body["note"]
+    assert "cHctMTIz" not in result.content[0].text and "web_url" not in body

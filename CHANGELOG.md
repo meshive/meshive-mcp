@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+- New tool `ssh_access`: a one-time SSH command and password for a pod (it expires in a few minutes; a write key is
+  needed). The browser-terminal link is left out because it carries the password, and the response and the server
+  instructions tell the agent to hand the password only to the user.
+- `create_pod` / `estimate_pod` take `input_assets` (Asset Hub assets placed in the pod), `watched_folders` (folders
+  whose new files are uploaded as assets) and `harvest_destination`, like the console's Assets step. New tools
+  `watched_folders` and `set_watched_folders` read and replace a running pod's watched folders without a restart;
+  adding or turning on a folder needs `confirm` because uploaded files are stored and billed, while removing or turning
+  one off applies at once. Server checks (a folder on network storage can't be watched, and so on) come back as they are.
+- `import_asset` links a Hugging Face repo, a CivitAI model or a direct file URL as an asset that tasks and pods can
+  use. Nothing is copied, so it has no `confirm` step (no storage charge; the bytes download when a pod or task
+  starts), but it takes an `operation_id` like every write. `source_credentials` lists the workspace's saved Hugging
+  Face tokens and CivitAI keys by id for private or gated sources, used by `import_asset`, `detect_model` and
+  `register_model`.
+- Serving without the console: `detect_model` checks a Hugging Face repo, `register_model` registers it and returns
+  the `registration_id` that `deploy_serving` takes, `models` lists registrations, and `delete_model` removes one
+  (with `confirm`). Registering costs nothing — the model downloads when
+  deployed — so `register_model` has no `confirm` step, but it still takes an `operation_id` like every write.
+  `deploy_serving` now points to `models` instead of the console.
+- New read tool `download_links`: temporary download links for an asset's files (optionally narrowed with `paths`
+  globs) or a task's output files, with each file's path and size and when the links expire. It never returns file
+  contents, and its note tells the agent to hand the links only to the user. Needs a server with the SDK download
+  routes; an older one answers that it does not support downloads yet.
+- `pods` gives a pod's `endpoints` (URLs with `readiness`) and `connect_credentials`, the logins the console shows on
+  Connect — such as the `ACCESS_PASSWORD` that ComfyUI pods now generate, without which a user could not open the
+  pod an agent created. Secret values are `null` in every response (including the `start_pod`, `stop_pod` and
+  `delete_pod` previews) unless the agent asks for one pod with `show_secrets=true`, which adds a note to hand the
+  value only to the user. Pods also carry their state fields (`same_node_unavailable_reason`, `stop_reason_*`,
+  `waiting_mode`, `billing_active`, premiums, `is_downloader`), and `start_pod`'s preview says why `same_node` would
+  wait or is refused.
+- `workspaces` items have `member_role` (`admin`, `billing`, `viewer`).
+- `transactions` reports `live` and `phase` (`verifying`, `waiting_for_storage`) while input assets download, and
+  `init_logs` when a download failed, with the same untrusted-data note as `logs`.
+- `tasks` has the input assets, the asset a download failed on, output upload progress and `outputs_purged_at`.
+- `assets` reads assets without versions: `size_bytes`, `file_count`, `upload_status`, `files` and usage on a single
+  asset. `version_count`, `latest_version` and `versions` are gone from the output, and `submit_task`'s
+  `input_assets` no longer mentions a version.
+- Requires `meshive` SDK 0.1.3: the fields above are new in it. The real image build waits for 0.1.3 on PyPI.
+- Key errors point to the console's **Settings > API keys** (they said "Settings > Secret", a menu that no longer
+  exists). `invalid_api_key` and `write_scope_required` also say how to swap in a new key — in Claude Code,
+  `claude mcp remove meshive` first, because `claude mcp add` refuses a name that already exists. The README's agent
+  setup matches the docs: Claude Code with `--scope user`, Codex with the key in `http_headers`, Gemini CLI through
+  `gemini mcp add --scope user`.
+- Sizes follow the console's 1024-based units. `delete_storage` put a GB label on the volume's MiB value, so a 100 GiB
+  volume was described as `102400.0 GB`; it now says `100 GiB`. `create_storage` says GiB, and the log and script
+  limits say 64 KiB and 256 KiB. Tool descriptions give the units of raw size fields: storage sizes, pod metric sizes
+  and a workspace's `ram`/`total_storage` are MiB (the `storages` tool said GB), a machine's metric `ram_size` is
+  bytes, and network rates are bytes per second. The server instructions say that `size_gb`, `ram_gb`, `disk_gb`,
+  `max_size_gb`, `ram_recommended` and `price_per_gb_month` are GiB, and that only VRAM (`vram_gb`) is said in GB.
 - `scale_serving` now asks for `confirm` for **every** change that can raise the hourly cost — a larger replica range,
   turning autoscale on, or a higher per-replica price cap — using the SDK's `Serving.scale_raises_cost` (the CLI uses
   the same rule). Lowering the range, turning autoscale off or lowering the cap still applies immediately.
@@ -11,7 +59,6 @@
   lines may be behind.
 - `estimate_pod` / `create_pod` no longer take `disk_gb`: the system disk is sized by the server (it always overrode
   the value after the estimate) and the estimate's `resources.disk_gb` shows the real size.
-- Requires `meshive` SDK 0.1.1.
 - CI: images are published only after the test and smoke jobs pass (the publish job moved into `ci.yml`). dev images
   pin the SDK to the exact `meshive-python` dev commit resolved at build time instead of the moving `dev` branch, and
   both commits are recorded as image labels (`org.opencontainers.image.revision`, `ai.meshive.sdk.revision`) and in

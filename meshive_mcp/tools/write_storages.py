@@ -1,6 +1,7 @@
 """쓰기 도구 — 스토리지 (write 스코프). 계약 §2.2."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -12,13 +13,28 @@ from ..workspace import needs_input, resolve
 from ._common import CREATE, DESTRUCTIVE, call, meshive_tool, preview
 
 
+def _volume_size(mib: Any) -> str:
+    """볼륨 크기(MiB) → CLI·콘솔과 같은 표기: GiB, 1 GiB 미만은 MiB (LUKS 헤더를 뺀 1 GiB 암호화 볼륨 ≈ 1008 MiB).
+    MiB 숫자에 GB 를 붙이면 100 GiB 볼륨이 '102400.0 GB' 가 된다."""
+    try:
+        raw = float(mib)
+    except (TypeError, ValueError):
+        return "size unknown"
+    if not math.isfinite(raw):
+        return "size unknown"
+    if 0 < raw < 1024:
+        return f"{raw:.0f} MiB"
+    gib = raw / 1024
+    return f"{gib:,.0f} GiB" if gib >= 10 or gib == int(gib) else f"{gib:.1f} GiB"
+
+
 def register(server: MCPServer) -> None:
     @meshive_tool(server, "create_storage", annotations=CREATE)
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Create a storage volume. It is billed hourly by capacity for as long as it exists, mounted or not.
+        """Create a storage volume of `size_gb` GiB. It is billed hourly by capacity for as long as it exists, mounted or not.
         With confirm=false (default) it only returns the estimate; call again with confirm=true after the user agreed.
         `storage_type` "nfs" (network, attachable to any pod; supports `encrypted` at-rest encryption) or "hostPath" (local,
         faster, single machine; cannot be encrypted).
@@ -32,7 +48,7 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 est = await call(client.estimate_storage, name, size_gb, workspace=ws, **kwargs)
                 return preview("create_storage", {"estimate": to_dict(est), "workspace": ws, "name": name},
-                               f"Create {size_gb} GB {est.storage_type} storage '{name}' at "
+                               f"Create {size_gb} GiB {est.storage_type} storage '{name}' at "
                                f"{money.hourly(est.price_per_hour)}/hour?")
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)
@@ -53,7 +69,7 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 current = await call(client.get_storage, storage, ws)
                 return preview("delete_storage", {"storage": to_dict(current), "workspace": ws},
-                               f"Delete storage '{current.user_alias or storage}' ({current.total_size} GB, "
+                               f"Delete storage '{current.user_alias or storage}' ({_volume_size(current.total_size)}, "
                                f"{len(current.linked_pods)} linked pod(s))? All data on it is lost.")
             result = await call(client.delete_storage, storage, ws)
         out = to_dict(result)
