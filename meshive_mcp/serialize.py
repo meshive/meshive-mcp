@@ -77,6 +77,10 @@ def to_dict(obj: Any) -> Any:
                 out[f.name] = {str(k): normalize_number(v) if isinstance(v, str) else to_dict(v)
                                for k, v in value.items()}
                 out[f"{f.name}_display"] = {str(k): money.hourly(v) for k, v in value.items()}
+        # 비밀 접속값(ComfyUI 의 ACCESS_PASSWORD 등)은 어느 응답에서든 가린다 — start/stop/delete 미리보기도 Pod 을
+        # 통째로 싣기 때문에 여기서 막는다. 값은 pods 도구의 show_secrets=true 만 다시 채운다(유저 결정 2026-10-03).
+        if cls == "ConnectCredential" and getattr(obj, "is_secret", False):
+            out["value"] = None
         return out
     if isinstance(obj, dict):
         return {str(k): to_dict(v) for k, v in obj.items() if k not in _DROP}

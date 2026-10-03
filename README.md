@@ -70,7 +70,7 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 |---|---|
 | `account` | Who the key belongs to, credit balance |
 | `workspaces` | List workspaces, or one workspace with cost summary and members |
-| `pods` | List pods in a workspace (or `"all"`), or one pod (optionally with live metrics) |
+| `pods` | List pods in a workspace (or `"all"`), or one pod with its URLs and connect credentials (optionally with live metrics) |
 | `storages` | Storage volumes of a workspace |
 | `gpus` | GPU types available to rent with hourly prices |
 | `templates` | Pod templates you can launch from |
@@ -80,7 +80,7 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `machines` | Machines you host, with earnings and live metrics |
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 | `logs` | Last N lines of a pod's or a task's logs |
-| `transactions` | Pod operations still in flight — the step a pod is on, with progress |
+| `transactions` | Pod operations still in flight — the step a pod is on, with progress, and why an input asset download failed |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
 | `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
@@ -103,7 +103,7 @@ above is the second line of defence.
 Lists are paged (20 per call by default, 100 max) with an opaque `cursor`. Errors come back as
 `{"code", "message", "next_step"}` so the agent knows what to do next.
 
-This source requires `meshive>=0.1.2,<0.2`. Production images install the released SDK from PyPI;
+This source requires `meshive>=0.1.3,<0.2`. Production images install the released SDK from PyPI;
 dev images install a specific SDK dev commit. Before validating a deployment, read `/healthz`
 and record `version`, `revision`, `sdk_version`, and `sdk_revision`, plus the running image digest.
 `sdk_revision` can be null for a PyPI install; `status: "ok"` alone does not verify the backend,

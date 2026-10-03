@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- `pods` gives a pod's `endpoints` (URLs with `readiness`) and `connect_credentials`, the logins the console shows on
+  Connect — such as the `ACCESS_PASSWORD` that ComfyUI pods now generate, without which a user could not open the
+  pod an agent created. Secret values are `null` in every response (including the `start_pod`, `stop_pod` and
+  `delete_pod` previews) unless the agent asks for one pod with `show_secrets=true`, which adds a note to hand the
+  value only to the user. Pods also carry their state fields (`same_node_unavailable_reason`, `stop_reason_*`,
+  `waiting_mode`, `billing_active`, premiums, `is_downloader`), and `start_pod`'s preview says why `same_node` would
+  wait or is refused.
+- `workspaces` items have `member_role` (`admin`, `billing`, `viewer`).
+- `transactions` reports `live` and `phase` (`verifying`, `waiting_for_storage`) while input assets download, and
+  `init_logs` when a download failed, with the same untrusted-data note as `logs`.
+- `tasks` has the input assets, the asset a download failed on, output upload progress and `outputs_purged_at`.
+- `assets` reads assets without versions: `size_bytes`, `file_count`, `upload_status`, `files` and usage on a single
+  asset. `version_count`, `latest_version` and `versions` are gone from the output, and `submit_task`'s
+  `input_assets` no longer mentions a version.
+- Requires `meshive` SDK 0.1.3: the fields above are new in it. The real image build waits for 0.1.3 on PyPI.
 - Key errors point to the console's **Settings > API keys** (they said "Settings > Secret", a menu that no longer
   exists). `invalid_api_key` and `write_scope_required` also say how to swap in a new key — in Claude Code,
   `claude mcp remove meshive` first, because `claude mcp add` refuses a name that already exists. The README's agent
@@ -22,8 +37,6 @@
   lines may be behind.
 - `estimate_pod` / `create_pod` no longer take `disk_gb`: the system disk is sized by the server (it always overrode
   the value after the estimate) and the estimate's `resources.disk_gb` shows the real size.
-- Requires `meshive` SDK 0.1.2: the `transactions` tool calls `list_transactions`, which 0.1.1 does not have. The real
-  image build refuses to run until 0.1.2 is on PyPI, so meshive-python has to be released first.
 - CI: images are published only after the test and smoke jobs pass (the publish job moved into `ci.yml`). dev images
   pin the SDK to the exact `meshive-python` dev commit resolved at build time instead of the moving `dev` branch, and
   both commits are recorded as image labels (`org.opencontainers.image.revision`, `ai.meshive.sdk.revision`) and in

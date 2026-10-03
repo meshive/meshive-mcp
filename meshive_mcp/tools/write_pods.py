@@ -131,11 +131,20 @@ def register(server: MCPServer) -> None:
             if not confirm or (loss and not allow_data_loss):
                 warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to another node. "
                            "Obtain separate explicit consent and pass allow_data_loss=true." if loss else "")
+                reason = current.same_node_unavailable_reason if placement == "same_node" else None
+                blocked = ""
+                if reason == "spec_mismatch":
+                    # 저장된 사양이 원래 머신과 달라 서버가 same_node 를 거절한다 — 기다려도 안 풀린다.
+                    blocked = (" Its saved hardware no longer matches its original machine, so same_node is refused; "
+                               "use placement any_node.")
+                elif reason:
+                    blocked = (f" It cannot start on its original machine now ({reason.replace('_', ' ')}); same_node "
+                               "waits until that changes, any_node moves it.")
                 return preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": placement,
                                              "requires_data_loss_consent": loss, "data_loss_warning": warning},
                                f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes at "
                                f"{money.hourly(current.price_per_hour)}/hour compute plus "
-                               f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + warning)
+                               f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + blocked + warning)
             result = await call(client.start_pod, pod, ws, placement=placement, allow_data_loss=allow_data_loss)
         out = to_dict(result)
         out["next_step"] = "The start was accepted and runs asynchronously. Poll the pods tool for the new status."

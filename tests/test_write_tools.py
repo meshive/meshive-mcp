@@ -71,6 +71,17 @@ async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake,
     assert args[:2] == ("pod-2", WS) and kw["placement"] == "any_node"
 
 
+async def test_start_pod_preview_hides_secrets_and_says_why_same_node_waits(mcp_client, fake, with_key):
+    from conftest import POD_PASSWORD
+
+    fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "capacity")
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2"})
+    assert POD_PASSWORD not in result.content[0].text                 # 미리보기도 Pod 을 통째로 싣는다
+    prev = _payload(result)
+    assert "cannot start on its original machine now (capacity)" in prev["question"]
+    assert prev["data_loss_warning"] == ""
+
+
 async def test_storage_tools(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "storage_type": "hostPath"}))
     assert prev["confirmed"] is False and prev["estimate"]["max_size_gb"] == 305 and "hostPath" in prev["question"]

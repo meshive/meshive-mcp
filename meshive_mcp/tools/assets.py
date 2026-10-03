@@ -18,6 +18,7 @@ def register(server: MCPServer) -> None:
                      limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the Asset Hub assets (datasets, models, adapters, outputs) of a workspace, or show one by `asset_id` ("asset_...").
         The list also reports managed storage usage and the estimated monthly storage cost in USD.
+        A single asset lists its `files` and where it is in use. `size_bytes`/`file_count` null means a linked source not measured yet.
         Filter with `asset_type` or `status`. `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
         async with meshive_client(ctx) as client:
             if asset is not None:

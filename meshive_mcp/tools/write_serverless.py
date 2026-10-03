@@ -113,7 +113,7 @@ def register(server: MCPServer) -> None:
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`
 (e.g. "micro-2c8g", "small-4c16g", "standard-8c32g"). `max_duration` seconds (3600..86400) is a hard stop.
 `max_price_per_hour` caps the final compute rate only; storage, Asset Hub retention and fetch-time charges are separate.
-The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "version": n}] under /inputs."""
+The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "target_dir": dir}] under /inputs."""
 
     async def estimate_task(ctx: Context[Any, Any], name: str, script: str, workspace: str | None = None,
                             image: str | None = None, template_id: int | None = None, requirements: str | None = None,
