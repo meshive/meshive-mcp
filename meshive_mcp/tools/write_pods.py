@@ -234,3 +234,21 @@ def register(server: MCPServer) -> None:
         out["next_step"] = ("Saved; the pod picks it up without a restart. `applied` turns true once its harvester has "
                             "it" + (" — this pod needs a restart to apply it." if result.restart_hint else "."))
         return out
+
+    # --- SSH (G04) ---------------------------------------------------------------------------------
+
+    @meshive_tool(server, "ssh_access", annotations=MUTATE)
+    async def ssh_access(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
+        """Get a one-time SSH login for a pod, only when the user asks to connect: the `command` to run and a `password` that expires in a few minutes (`expires_at`).
+        It needs a read & write key; each call issues a new password. Give both to the user and nothing else — never run the command yourself or put the password in files, commits or other tools."""
+        async with meshive_client(ctx) as client:
+            ws = await resolve(client, workspace)
+            if needs_input(ws):
+                return ws
+            pod = await resolve_pod(client, ws, pod)
+            access = await call(client.ssh_access, pod, ws)
+        # web_url 은 비밀번호를 URL 에 담는다 — 대화 기록에 한 벌 더 남기지 않는다(유저 결정 2026-10-03).
+        return {"pod": pod, "workspace": ws, "command": access.command, "password": access.password,
+                "expires_at": access.expires_at.isoformat() if access.expires_at else None,
+                "note": ("This is a root shell password. Give it only to the user who asked; it expires in a few "
+                         "minutes and a new call issues a new one.")}

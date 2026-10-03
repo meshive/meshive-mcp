@@ -341,3 +341,11 @@ async def test_watched_folders_read_and_confirm_only_when_growing(mcp_client, fa
     assert _payload(await mcp_client.call_tool("set_watched_folders", shrink))["revision"] == 5
     (_, _, kw), = _calls(fake, "set_watched_folders")          # 줄이는 변경은 확인 없이 바로 쓴다
     assert kw["expected_version"] == 5
+
+
+async def test_ssh_access_returns_command_and_password_but_not_the_web_url(mcp_client, fake, with_key):
+    result = await mcp_client.call_tool("ssh_access", {"pod": "pod-1"})
+    body = _payload(result)
+    assert body["command"] == "ssh -p 2222 root@m.example" and body["password"] == "pw-123"
+    assert body["expires_at"].startswith("2030-") and "only to the user" in body["note"]
+    assert "cHctMTIz" not in result.content[0].text and "web_url" not in body

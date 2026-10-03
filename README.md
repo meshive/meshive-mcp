@@ -89,6 +89,7 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
 | `create_storage`, `delete_storage` | Storage volumes |
+| `ssh_access` | One-time SSH command and password for a pod (write key; given only to you) |
 | `set_watched_folders` | Change a running pod's watched folders without a restart (`confirm` when adding or turning one on) |
 | `import_asset` | Link a Hugging Face repo, CivitAI model or file URL as an asset (no copy, no storage charge) |
 | `register_model`, `delete_model` | Register a Hugging Face model for serving (free), or remove a registration |

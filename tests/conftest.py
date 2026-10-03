@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from mcp.client import Client
-from meshive.models import (AssetDownload, AssetImported, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
+from meshive.models import (AssetDownload, AssetImported, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, SshAccess, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
                             Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WatchedFolders, WhoAmI,
                             Workspace)
 
@@ -109,6 +109,11 @@ class FakeMeshive:
     async def set_watched_folders(self, pod, ws, **kw):
         self._rec("set_watched_folders", pod, ws, **kw)
         return WatchedFolders.from_dict({**self.WATCHED, "version": "5:ef"})
+
+    async def ssh_access(self, pod, ws):
+        self._rec("ssh_access", pod, ws)
+        return SshAccess.from_dict({"password": "pw-123", "sshUrl": "ssh -p 2222 root@m.example",
+                                    "sshWebUrl": "https://m.example/?password=cHctMTIz", "expiredAt": 1_900_000_000})
 
     async def list_civitai_keys(self, workspace):
         self._rec("list_civitai_keys", workspace)

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New tool `ssh_access`: a one-time SSH command and password for a pod (it expires in a few minutes; a write key is
+  needed). The browser-terminal link is left out because it carries the password, and the response and the server
+  instructions tell the agent to hand the password only to the user.
 - `create_pod` / `estimate_pod` take `input_assets` (Asset Hub assets placed in the pod), `watched_folders` (folders
   whose new files are uploaded as assets) and `harvest_destination`, like the console's Assets step. New tools
   `watched_folders` and `set_watched_folders` read and replace a running pod's watched folders without a restart;
