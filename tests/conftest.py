@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 from mcp.client import Client
-from meshive.models import (Credit, GpuAvailability, Logs, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
-                            Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskSubmitted, Transaction, WhoAmI,
+from meshive.models import (AssetDownload, Credit, GpuAvailability, Logs, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
+                            Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WhoAmI,
                             Workspace)
 
 from meshive_mcp import client as client_module
@@ -76,6 +76,18 @@ class FakeMeshive:
     async def get_pod(self, pod, workspace):
         self._rec("get_pod", pod, workspace)
         return _pod(pod, same_node_reason=self.same_node_reason)
+
+    async def asset_download_urls(self, asset, *, paths=None):
+        self._rec("asset_download_urls", asset, paths=paths)
+        return AssetDownload.from_dict({"expiresIn": 3600, "items": [{
+            "assetExternalId": asset, "name": "weights", "expectedFileCount": 1,
+            "files": [{"relativePath": "model.safetensors", "sizeBytes": 5, "url": "https://r2.test/sig"}]}]})
+
+    async def task_outputs(self, task):
+        self._rec("task_outputs", task)
+        return TaskOutputs.from_dict({"expired": False, "destination": {"provider": "meshive_r2"}, "files": [
+            {"filename": "result.csv", "sizeBytes": 2, "url": "https://r2.test/i", "downloadUrl": "https://r2.test/a"}]},
+            task_id=task)
 
     async def list_transactions(self, workspace):
         self._rec("list_transactions", workspace)

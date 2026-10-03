@@ -7,7 +7,8 @@ pytestmark = pytest.mark.anyio
 from meshive.exceptions import AuthenticationError, RateLimitError
 
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "templates", "servings", "tasks",
-              "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task"}
+              "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task",
+              "download_links"}
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage", "delete_storage",
                "deploy_serving", "scale_serving", "pause_serving", "delete_serving", "submit_task", "stop_task"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving"}
@@ -21,7 +22,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 29
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 30
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -97,6 +98,20 @@ async def test_pod_secret_credentials_are_hidden_unless_asked(mcp_client, fake, 
                                                          "show_secrets": True}))
     assert {c["key"]: c["value"] for c in shown["pod"]["connect_credentials"]}["ACCESS_PASSWORD"] == POD_PASSWORD
     assert "only to the user who asked" in shown["note"]
+
+
+async def test_download_links_return_urls_never_bytes(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("download_links", {"asset": "asset_abc", "paths": ["*.safetensors"]}))
+    assert ("asset_download_urls", ("asset_abc",), {"paths": ["*.safetensors"]}) in fake["last"].calls
+    assert body["files"] == [{"path": "model.safetensors", "url": "https://r2.test/sig", "size_bytes": 5,
+                              "content_hash": None}]
+    assert body["complete"] is True and body["expires_at"].endswith("+00:00") and "only to the user" in body["note"]
+
+    body = _payload(await mcp_client.call_tool("download_links", {"task": "task_1"}))
+    assert body["files"][0]["url"] == "https://r2.test/a" and body["expires_at"] is None
+
+    result = await mcp_client.call_tool("download_links", {})
+    assert result.is_error and "exactly one" in result.content[0].text
 
 
 async def test_transactions_init_logs_carry_untrusted_note(mcp_client, fake, with_key):

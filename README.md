@@ -81,6 +81,7 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 | `logs` | Last N lines of a pod's or a task's logs |
 | `transactions` | Pod operations still in flight — the step a pod is on, with progress, and why an input asset download failed |
+| `download_links` | Temporary download links for an asset's files or a task's outputs (links only, never file contents) |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
 | `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |

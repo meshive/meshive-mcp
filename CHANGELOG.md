@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New read tool `download_links`: temporary download links for an asset's files (optionally narrowed with `paths`
+  globs) or a task's output files, with each file's path and size and when the links expire. It never returns file
+  contents, and its note tells the agent to hand the links only to the user. Needs a server with the SDK download
+  routes; an older one answers that it does not support downloads yet.
 - `pods` gives a pod's `endpoints` (URLs with `readiness`) and `connect_credentials`, the logins the console shows on
   Connect — such as the `ACCESS_PASSWORD` that ComfyUI pods now generate, without which a user could not open the
   pod an agent created. Secret values are `null` in every response (including the `start_pod`, `stop_pod` and
