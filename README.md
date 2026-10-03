@@ -81,16 +81,18 @@ Read tools work with a **Read only** key; the write tools need a **Read & write*
 | `billing_history` | Credit top-ups and refunds, or host earnings by day |
 | `logs` | Last N lines of a pod's or a task's logs |
 | `transactions` | Pod operations still in flight — the step a pod is on, with progress, and why an input asset download failed |
+| `models`, `detect_model` | Models registered for serving (with the workspace's Hugging Face token IDs), and whether a Hugging Face repo can be served |
 | `download_links` | Temporary download links for an asset's files or a task's outputs (links only, never file contents) |
 | `estimate_pod`, `estimate_task` | Price before you spend (read-only) |
 | `operation_status` | Read a write's durable acceptance state using its operation ID and original method/path |
 | `create_pod`, `stop_pod`, `start_pod`, `restart_pod`, `delete_pod` | Pod lifecycle |
 | `create_storage`, `delete_storage` | Storage volumes |
+| `register_model`, `delete_model` | Register a Hugging Face model for serving (free), or remove a registration |
 | `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` | Serverless servings |
 | `submit_task`, `stop_task` | Serverless tasks |
 
 **Spending and deleting are gated.** `create_pod`, `create_storage`, `deploy_serving`, `submit_task`, `start_pod` and
-the three `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when the change can
+the `delete_*` tools take `confirm`, and so do `pause_serving` when resuming and `scale_serving` when the change can
 raise the hourly cost (a larger replica range, autoscale on, a higher price cap). With `confirm=false` (the default) they
 return an estimate or a summary and change nothing; the
 agent is instructed to show it, get your go-ahead, and only then call again with `confirm=true`.

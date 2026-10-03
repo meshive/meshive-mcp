@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from .. import money
 from ..client import meshive_client
+from ..errors import invalid_argument
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
@@ -24,7 +25,7 @@ def register(server: MCPServer) -> None:
         """Deploy an already-registered model as a serverless serving (inference endpoint). Billing runs per replica per hour,
         capped at `price_cap_per_hour` each, so the worst case is price_cap × max_replicas per hour.
         With confirm=false (default) it only returns that cost summary; call again with confirm=true after the user agreed.
-        Registering a model itself is done in the console, not here."""
+        Find `model_registration_id` with the models tool, or register a Hugging Face model with register_model first."""
         kwargs = dict(price_cap_per_hour=price_cap_per_hour, min_replicas=min_replicas, max_replicas=max_replicas,
                       autoscale=autoscale, max_context_tokens=max_context_tokens, share_idle_capacity=share_idle_capacity)
         async with meshive_client(ctx) as client:
@@ -43,6 +44,46 @@ def register(server: MCPServer) -> None:
             result = await call(client.deploy_serving, model_registration_id, workspace=ws, **kwargs)
         out = to_dict(result)
         out["next_step"] = "Deployment was accepted. Poll the servings tool until status is `active`; it returns the endpoint URL."
+        return out
+
+    @meshive_tool(server, "register_model", annotations=CREATE)
+    async def register_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,
+                             name: str | None = None, framework: str | None = None, hf_token_id: int | None = None,
+                             context_length: int | None = None, operation_id: str | None = None) -> dict[str, Any]:
+        """Register a Hugging Face model for serving and return its `registration_id` for deploy_serving. It costs nothing:
+        the model downloads only when deployed. Run detect_model first; registering the same repo again returns the
+        existing registration. `framework` is vllm (default) or sglang; `hf_token_id` (from the models tool) is for private repos."""
+        async with meshive_client(ctx) as client:
+            ws = await resolve(client, workspace)
+            if needs_input(ws):
+                return ws
+            result = await call(client.register_model, huggingface_repo, workspace=ws, name=name, framework=framework,
+                                hf_token_id=hf_token_id, context_length=context_length)
+        out = to_dict(result)
+        out["registration_id"] = int(result.id) if result.id.isdigit() else result.id
+        out["next_step"] = ("Registered. To serve it, call deploy_serving with this registration_id and a per-replica "
+                            "price cap, after showing the user the cost.")
+        return out
+
+    @meshive_tool(server, "delete_model", annotations=DESTRUCTIVE)
+    async def delete_model(ctx: Context[Any, Any], registration_id: int, workspace: str | None = None,
+                           confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
+        """Delete a model registration. It fails while a serving of that model is still deployed.
+        With confirm=false (default) it only returns the registration; call again with confirm=true after the user agreed."""
+        async with meshive_client(ctx) as client:
+            if not confirm:
+                ws = await resolve(client, workspace)
+                if needs_input(ws):
+                    return ws
+                current = next((m for m in await call(client.list_models, ws) if m.registration_id == registration_id),
+                               None)
+                if current is None:
+                    raise invalid_argument(f"Model registration #{registration_id} is not in workspace {ws}.")
+                return preview("delete_model", {"model": to_dict(current), "workspace": ws},
+                               f"Delete model registration #{registration_id} ({current.name or current.huggingface_repo})?")
+            result = await call(client.delete_model, registration_id)
+        out = to_dict(result)
+        out["next_step"] = "The registration was deleted."
         return out
 
     @meshive_tool(server, "scale_serving", annotations=MUTATE)

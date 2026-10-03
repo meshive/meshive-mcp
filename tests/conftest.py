@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from mcp.client import Client
-from meshive.models import (AssetDownload, Credit, GpuAvailability, Logs, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
+from meshive.models import (AssetDownload, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
                             Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WhoAmI,
                             Workspace)
 
@@ -76,6 +76,26 @@ class FakeMeshive:
     async def get_pod(self, pod, workspace):
         self._rec("get_pod", pod, workspace)
         return _pod(pod, same_node_reason=self.same_node_reason)
+
+    async def list_models(self, workspace):
+        self._rec("list_models", workspace)
+        return [ServingModel.from_dict({"id": 12, "displayName": "qwen-small", "huggingfaceRepo": "Qwen/Qwen3-0.6B",
+                                        "framework": "vllm", "apiModelId": "qwen-small-ab12", "modelType": "llm"})]
+
+    async def list_hf_tokens(self, workspace):
+        self._rec("list_hf_tokens", workspace)
+        return [HfToken.from_dict({"id": 4, "label": "hf-main", "usedByAssetCount": 0})]
+
+    async def detect_model(self, repo, **kw):
+        self._rec("detect_model", repo, **kw)
+        return ModelDetection.from_dict({"status": "ok", "output": "text", "framework": "vllm", "contextLength": 40960})
+
+    async def register_model(self, repo, **kw):
+        self.calls.append(("register_model", (repo,), kw))
+        return ResourceAction.from_dict({"resource": "model", "id": "12", "workspace": kw["workspace"], "action": "register",
+                                         "result": {"title": "Success", "registrationId": 12, "apiModelId": "qwen-small-ab12"}})
+
+    async def delete_model(self, rid, **kw): return await self._action("delete_model", "model", str(rid), **kw)
 
     async def asset_download_urls(self, asset, *, paths=None):
         self._rec("asset_download_urls", asset, paths=paths)

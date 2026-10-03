@@ -20,7 +20,7 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage",
            "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
-           "submit_task", "stop_task"}
+           "submit_task", "stop_task", "register_model", "delete_model"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:

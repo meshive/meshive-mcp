@@ -274,3 +274,28 @@ async def test_pod_tools_no_longer_take_disk_gb(mcp_client, fake, with_key):
     _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1, "disk_gb": 30, "confirm": True,
                                                        "operation_id": "test-operation-0001"}))
     assert "disk_gb" not in _calls(fake, "create_pod")[0][2]
+
+
+async def test_model_registration_tools(mcp_client, fake, with_key):
+    listed = _payload(await mcp_client.call_tool("models", {}))
+    assert listed["items"][0]["registration_id"] == 12 and listed["hf_tokens"] == [
+        {"token_id": 4, "label": "hf-main", "created_at": None, "used_by_asset_count": 0}]
+    detected = _payload(await mcp_client.call_tool("detect_model", {"huggingface_repo": "Qwen/Qwen3-0.6B", "hf_token_id": 4}))
+    assert detected["status"] == "ok" and detected["context_length"] == 40960
+    assert _calls(fake, "detect_model")[0][2] == {"workspace": WS, "hf_token_id": 4}
+
+    # 비용이 없어 confirm 없이 등록하지만 operation_id 는 쓰기 규약대로 멱등 키로 간다.
+    done = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
+                                                                   "framework": "sglang",
+                                                                   "operation_id": "test-operation-0002"}))
+    assert done["registration_id"] == 12 and "deploy_serving" in done["next_step"]
+    (_, args, kw), = _calls(fake, "register_model")
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "sglang" and kw["idempotency_key"] == "test-operation-0002"
+
+    prev = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12}))
+    assert prev["confirmed"] is False and prev["model"]["name"] == "qwen-small" and not _calls(fake, "delete_model")
+    missing = await mcp_client.call_tool("delete_model", {"registration_id": 99})
+    assert missing.is_error and "not in workspace" in missing.content[0].text
+    gone = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12, "confirm": True,
+                                                                 "operation_id": prev["operation_id"]}))
+    assert gone["action"] == "delete" and _calls(fake, "delete_model")[0][1][0] == "12"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Serving without the console: `detect_model` checks a Hugging Face repo, `register_model` registers it and returns
+  the `registration_id` that `deploy_serving` takes, `models` lists registrations with the workspace's Hugging Face
+  token IDs, and `delete_model` removes one (with `confirm`). Registering costs nothing — the model downloads when
+  deployed — so `register_model` has no `confirm` step, but it still takes an `operation_id` like every write.
+  `deploy_serving` now points to `models` instead of the console.
 - New read tool `download_links`: temporary download links for an asset's files (optionally narrowed with `paths`
   globs) or a task's output files, with each file's path and size and when the links expire. It never returns file
   contents, and its note tells the agent to hand the links only to the user. Needs a server with the SDK download
