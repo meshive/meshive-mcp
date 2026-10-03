@@ -250,5 +250,5 @@ def register(server: MCPServer) -> None:
         # web_url 은 비밀번호를 URL 에 담는다 — 대화 기록에 한 벌 더 남기지 않는다(유저 결정 2026-10-03).
         return {"pod": pod, "workspace": ws, "command": access.command, "password": access.password,
                 "expires_at": access.expires_at.isoformat() if access.expires_at else None,
-                "note": ("This is a root shell password. Give it only to the user who asked; it expires in a few "
+                "note": ("This password opens a shell in the pod. Give it only to the user who asked; it expires in a few "
                          "minutes and a new call issues a new one.")}
