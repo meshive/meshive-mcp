@@ -17,6 +17,9 @@ from typing import Any
 from . import money
 
 _DROP = {"raw"}
+# dataclass 별로 모델에 보내지 않는 필드. Credit 의 paid/bonus 는 무료 크레딧 폐기(2026-10) 전 구분의 흔적이다 —
+# 서버는 paid = balance, bonus = 0 을 보내고 SDK 는 하위호환으로 필드만 남겼다. 실으면 모델이 없는 구분을 설명한다.
+_DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"}}
 
 # 시간당 요금은 어느 dataclass에 있든 필드명이 같다 → 이름 하나로 판정(콘솔 formatHourlyUsd, 3자리).
 _HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour"}
@@ -26,8 +29,7 @@ _USD_FIELDS: dict[str, set[str]] = {
     "Machine": {"earning_hourly"},                    # 콘솔 호스트 화면은 수익 /hr 도 2자리다
     "WorkspaceDetail": {"weekly_avg_daily_cost"},
     "DailyCost": {"pod", "storage", "serverless", "task", "asset"},
-    "Credit": {"balance", "paid_balance", "bonus_balance",
-               "auto_recharge_threshold", "auto_recharge_amount"},
+    "Credit": {"balance", "auto_recharge_threshold", "auto_recharge_amount"},
     "CreditHistoryEntry": {"amount"},
     "Earnings": {"current_hourly", "daily", "accumulated_until_payout"},
     "Task": {"cost_so_far", "total_cost"},
@@ -61,9 +63,10 @@ def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
         usd_fields = _USD_FIELDS.get(cls, frozenset())
+        drop = _DROP_BY_CLASS.get(cls, frozenset())
         out: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
-            if f.name in _DROP:
+            if f.name in _DROP or f.name in drop:
                 continue
             value = getattr(obj, f.name)
             out[f.name] = to_dict(value)

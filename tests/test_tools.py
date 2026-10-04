@@ -272,4 +272,6 @@ async def test_money_fields_carry_a_console_matching_display_string(mcp_client, 
 
     credit = _payload(await mcp_client.call_tool("account", {}))
     balance = credit.get("credit", credit)
-    assert balance["balance_display"] == "$12.50" and balance["paid_balance_display"] == "$10.00"
+    assert balance["balance_display"] == "$12.50"
+    # 무료 크레딧 폐기(2026-10) — 없는 paid/bonus 구분은 모델에 보내지 않는다(SDK 는 하위호환 필드만 유지)
+    assert not {"paid_balance", "bonus_balance", "paid_balance_display", "bonus_balance_display"} & set(balance)
