@@ -33,7 +33,7 @@ def register(server: MCPServer) -> None:
                 return ws
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
-            # 백엔드는 page/pageSize. 커서 offset 은 항상 size 의 배수로만 발급되므로 page 로 환산된다.
+            # The backend takes page/pageSize. Cursor offsets are only ever issued as multiples of size, so they convert to a page.
             page_no = offset // size + 1
             page = await call(client.list_assets, ws, asset_type=asset_type, status=status,
                               page=page_no, page_size=size)
@@ -60,11 +60,11 @@ def register(server: MCPServer) -> None:
                 d = await call(client.asset_download_urls, asset, paths=paths)
                 expires_at = datetime.now(timezone.utc) + timedelta(seconds=d.expires_in)
                 return {"asset_id": d.asset_id, "name": d.name, "files": [to_dict(f) for f in d.files],
-                        # 서명 일부가 실패하면 files 가 expected 보다 적다 — 다시 부르면 된다.
+                        # If some signatures fail, files has fewer than expected — calling again fixes it.
                         "complete": d.complete, "expires_at": expires_at.isoformat(timespec="seconds"),
                         "note": _LINKS_NOTE}
             outs = await call(client.task_outputs, task)
-        # task 결과물 링크의 TTL 은 서버가 응답에 싣지 않는다(갤러리와 같은 몇 시간) — 모르는 값은 null.
+        # The server doesn't send the TTL of task output links (a few hours, like the gallery) — unknown values are null.
         return {"task_id": task, "files": [to_dict(f) for f in outs.files], "expired": outs.expired,
                 "expires_at": None, "note": _LINKS_NOTE + " Task output links last a few hours."}
 

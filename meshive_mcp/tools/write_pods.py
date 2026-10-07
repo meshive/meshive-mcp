@@ -1,7 +1,7 @@
-"""쓰기 도구 — 파드 (write 스코프). 계약 §2.1.
+"""Write tools — pods (write scope).
 
-돈이 드는 create_pod·start_pod(정지 파드 과금 재개) 와 되돌릴 수 없는 delete_pod 는 `confirm` 게이트를 **서버(이 도구)가**
-강제한다: confirm=false(기본) 면 견적/요약만 돌려주고 아무것도 하지 않는다. 모델의 주의력에 기대지 않는다.
+For create_pod and start_pod (resuming billing of a stopped pod), which cost money, and delete_pod, which can't be undone, **the server (this tool)**
+enforces the `confirm` gate: with confirm=false (the default) it returns only an estimate/summary and does nothing. It doesn't rely on the model's attention.
 """
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ def register(server: MCPServer) -> None:
                 reason = current.same_node_unavailable_reason if placement == "same_node" else None
                 blocked = ""
                 if reason == "spec_mismatch":
-                    # 저장된 사양이 원래 머신과 달라 서버가 same_node 를 거절한다 — 기다려도 안 풀린다.
+                    # The saved spec differs from the original machine, so the server rejects same_node — waiting won't fix it.
                     blocked = (" Its saved hardware no longer matches its original machine, so same_node is refused; "
                                "use placement any_node.")
                 elif reason:
@@ -184,7 +184,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deletion was accepted. The pod disappears from the pods list within a minute."
         return out
 
-    # --- Watched folders (실행 중 Pod 의 수확 폴더) ---------------------------------------------------
+    # --- Watched folders (harvest folders of a running Pod) ---------------------------------------------------
 
     @meshive_tool(server, "watched_folders", title="Show Watched Folders", annotations=READ_ONLY)
     async def watched_folders(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
@@ -247,7 +247,7 @@ def register(server: MCPServer) -> None:
                 return ws
             pod = await resolve_pod(client, ws, pod)
             access = await call(client.ssh_access, pod, ws)
-        # web_url 은 비밀번호를 URL 에 담는다 — 대화 기록에 한 벌 더 남기지 않는다(유저 결정 2026-10-03).
+        # web_url carries the password in the URL — don't leave one more copy in the conversation history.
         return {"pod": pod, "workspace": ws, "command": access.command, "password": access.password,
                 "expires_at": access.expires_at.isoformat() if access.expires_at else None,
                 "note": ("This password opens a shell in the pod. Give it only to the user who asked; it expires in a few "

@@ -1,11 +1,11 @@
-"""환경변수 기반 설정. 서버 프로세스 전체에 하나.
+"""Environment-variable settings. One per server process.
 
-MESHIVE_BASE_URL          백엔드 주소. 비우면 SDK 기본값(프로덕션).
-MESHIVE_MCP_HOST/PORT     HTTP transport 바인딩 (기본 127.0.0.1:8080).
-MESHIVE_MCP_ALLOWED_HOSTS 콤마 구분 Host 헤더 allowlist. 비우면 DNS rebinding 보호를 끈다
-                          (ingress 뒤에서는 Host 가 공인 도메인이라 SDK 기본 검사가 요청을 막는다).
-MESHIVE_API_KEY           stdio(개발) 모드에서만 읽는 폴백 키. HTTP 모드에서는 무시 —
-                          공용 서버가 한 키로 모든 요청을 처리하면 안 되기 때문.
+MESHIVE_BASE_URL          backend URL. Empty = the SDK default (production).
+MESHIVE_MCP_HOST/PORT     HTTP transport binding (default 127.0.0.1:8080).
+MESHIVE_MCP_ALLOWED_HOSTS comma-separated Host header allowlist. Empty turns off DNS rebinding protection
+                          (behind the ingress, Host is the public domain, so the SDK's default check blocks requests).
+MESHIVE_API_KEY           fallback key read only in stdio (development) mode. Ignored in HTTP mode —
+                          a shared server must not handle every request with one key.
 """
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8080
     allowed_hosts: list[str] = field(default_factory=list)
-    # __main__ 이 stdio 로 뜰 때만 True 로 켠다. HTTP 서버에서는 절대 켜지 않는다.
+    # Turned on only when __main__ starts with stdio. Never on for the HTTP server.
     env_api_key_fallback: bool = False
     request_timeout: float = 30.0
-    # 목록 도구 캡. RunPod 사례: 전체 목록이 컨텍스트 윈도우를 넘겨 세션이 죽는다.
+    # Cap for list tools. Full lists can overflow the context window and kill the session.
     default_limit: int = 20
     max_limit: int = 100
 

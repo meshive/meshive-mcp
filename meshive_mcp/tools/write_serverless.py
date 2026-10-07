@@ -1,4 +1,4 @@
-"""쓰기 도구 — 서빙·태스크 (write 스코프). 계약 §2.3, §2.4."""
+"""Write tools — serving and tasks (write scope)."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -15,7 +15,7 @@ from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool,
 
 
 def register(server: MCPServer) -> None:
-    # --- 서빙 -------------------------------------------------------------------
+    # --- Serving -------------------------------------------------------------------
 
     @meshive_tool(server, "deploy_serving", title="Deploy Serving", annotations=CREATE)
     async def deploy_serving(ctx: Context[Any, Any], model_registration_id: int, price_cap_per_hour: float,
@@ -99,7 +99,7 @@ def register(server: MCPServer) -> None:
                                             price_cap_per_hour=price_cap_per_hour).items() if v is not None}
         async with meshive_client(ctx) as client:
             if not confirm:
-                # 비용이 늘 수 있는 변경만 확인 — 판정은 SDK `Serving.scale_raises_cost` (CLI 와 같은 규칙, 리뷰 P2 #6).
+                # Confirm only changes that can raise cost — decided by the SDK's `Serving.scale_raises_cost` (same rule as the CLI).
                 current = await call(client.get_serving, serving)
                 if current.scale_raises_cost(**requested):
                     new_min = current.min_replicas if min_replicas is None else min_replicas
@@ -148,7 +148,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deletion was accepted."
         return out
 
-    # --- 태스크 -------------------------------------------------------------------
+    # --- Tasks -------------------------------------------------------------------
 
     _TASK_DOC = """`script` is Python source (max 256 KiB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`

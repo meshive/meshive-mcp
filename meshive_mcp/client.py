@@ -1,9 +1,9 @@
-"""요청마다 SDK 클라이언트를 만든다.
+"""Build an SDK client per request.
 
-무상태 서버라 커넥션 풀을 요청 간에 공유하지 않는다(키가 다르므로 공유하면 안 된다).
-`AsyncMeshive(api_key=None)` 은 환경변수·credentials 파일로 폴백하기 때문에, 키가 없으면
-클라이언트를 만들지 않고 바로 no_api_key 를 낸다 — 공용 서버가 운영자의 키로 남의 요청을
-처리하는 사고를 원천 차단.
+The server is stateless, so connection pools aren't shared across requests (keys differ, so they must not be).
+`AsyncMeshive(api_key=None)` falls back to environment variables and the credentials file, so without a key
+no client is built and no_api_key is returned right away — this rules out a shared server handling
+someone else's request with the operator's key.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ def _new_client(key: str, label: str) -> AsyncMeshive:
                           max_retries=1)
     http = getattr(client, "_client", None)
     if http is not None:
-        # SDK 0.0.x 에 커스텀 헤더 옵션이 없어 httpx 기본 헤더에 얹는다(요청 헤더와 병합됨).
-        # 0.0.8 에서 `headers=` 인자가 생기면 이 줄을 교체한다.
+        # SDK 0.0.x has no custom header option, so it goes on httpx's default headers (merged with request headers).
+        # Replace this line once 0.0.8 adds the `headers=` argument.
         http.headers[CLIENT_HEADER] = label
         http.headers["User-Agent"] = f"meshive-mcp/{__version__} meshive-python/{_sdk_version()}"
     return client

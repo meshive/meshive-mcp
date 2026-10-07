@@ -1,4 +1,4 @@
-"""도구 모듈 공용: 등록 데코레이터, 어노테이션, 예외 번역 래퍼."""
+"""Shared by the tool modules: registration decorator, annotations, exception translation wrapper."""
 from __future__ import annotations
 
 import functools
@@ -39,9 +39,9 @@ def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallTo
     return response
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
-# 생성/배포/제출: 같은 호출을 반복하면 자원이 늘어난다(서버 Idempotency-Key 는 SDK 재시도용).
+# Create/deploy/submit: repeating the same call adds resources (the server's Idempotency-Key is for SDK retries).
 CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
-# 정지/시작/재시작/스케일/일시정지: 반복해도 같은 상태로 수렴.
+# Stop/start/restart/scale/pause: repeating converges to the same state.
 MUTATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
 
@@ -50,15 +50,15 @@ CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only th
 
 
 def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]:
-    """confirm=false 응답: 아무것도 만들지/지우지 않았음을 명시하고 다음 행동을 지시한다."""
+    """confirm=false response: states that nothing was created or deleted and tells the model what to do next."""
     return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations):
-    """`server.tool` 위에 한 겹: (1) 정상 결과를 compact JSON 텍스트 + structured_content 로,
-    (2) 도구가 던진 ToolError 를 **접두어 없는 순수 JSON** 본문의 `isError` 결과로 바꾼다. SDK 기본 동작은 "Error executing tool <name>: ..." 을 앞에 붙이는데,
-    계약(§0.4)은 본문이 `{code, message, next_step}` JSON 그 자체여야 한다 — 모델이 파싱해서
-    `next_step` 을 따르게 하려면 접두어가 없어야 한다.
+    """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
+    (2) a ToolError raised by the tool as an `isError` result whose body is **pure JSON with no prefix**. The SDK's default prepends "Error executing tool <name>: ...",
+    but the error body must be the `{code, message, next_step}` JSON itself — the model has to parse it
+    and follow `next_step`, so there can't be a prefix.
     """
     def decorator(fn: Callable[..., Awaitable[dict[str, Any]]]):
         @functools.wraps(fn)
@@ -104,7 +104,7 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                 "\nEvery write requires operation_id. Reuse the ID returned by the preview, or generate a UUID before "
                 "the first call. Keep it for confirmation and all retries; a new ID means a new operation. "
                 "After a timeout, check operation_status and resource state before retrying.")
-        # 공용 annotation 상수를 여러 도구가 같이 쓰므로 title 은 복사본에만 넣는다.
+        # Several tools share the common annotation constants, so the title goes only on the copy.
         server.tool(name=name, title=title, annotations=annotations.model_copy(update={"title": title}))(wrapper)
         return fn
 
@@ -112,7 +112,7 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
 
 
 async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
-    """SDK 호출 한 번을 감싸 예외를 모델용 ToolError 로 바꾼다."""
+    """Wrap one SDK call and turn exceptions into a ToolError for the model."""
     is_write = getattr(fn, "__name__", "") in _WRITES
     try:
         if is_write:
@@ -127,7 +127,7 @@ async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         if is_write and operation is not None and raw.get("operationMethod"):
             operation["lookup"] = {"method": raw["operationMethod"], "path": raw["operationPath"]}
         return result
-    except Exception as exc:  # noqa: BLE001 — translate 가 모르는 예외는 다시 던진다
+    except Exception as exc:  # noqa: BLE001 — exceptions translate doesn't know are re-raised
         operation = _operation.get()
         if is_write and operation is not None and getattr(exc, "operation_method", None):
             operation["lookup"] = {"method": exc.operation_method, "path": exc.operation_path}

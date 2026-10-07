@@ -5,11 +5,11 @@ WORKDIR /app
 FROM base AS build
 COPY pyproject.toml README.md ./
 COPY meshive_mcp ./meshive_mcp
-# MESHIVE_SDK_SPEC 이 비어 있으면 PyPI 의 meshive 를, 아니면 그 스펙(예: "meshive @ git+https://github.com/meshive/meshive-python@dev")을
-# 먼저 설치한다 — SDK 가 PyPI 에 오르기 전에 dev 이미지가 SDK dev 브랜치를 따라가게.
+# If MESHIVE_SDK_SPEC is empty, install meshive from PyPI; otherwise install that spec (e.g. "meshive @ git+https://github.com/meshive/meshive-python@dev")
+# first — so dev images follow the SDK dev branch before the SDK is on PyPI.
 ARG MESHIVE_SDK_SPEC=""
-# git 은 spec 이 git+ 일 때만 필요하다(빌드 스테이지에만 설치, 런타임 이미지에는 없다).
-# 두 번에 나눠 설치하면 두 번째 pip 이 --prefix 아래를 못 보고 PyPI 에서 meshive 를 다시 찾는다 → 한 호출에 같이 넘긴다.
+# git is needed only when the spec is git+ (installed in the build stage only, not in the runtime image).
+# Installing in two steps makes the second pip miss what's under --prefix and look up meshive on PyPI again → pass both in one call.
 RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then \
         apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
         && pip install --prefix=/install "$MESHIVE_SDK_SPEC" .; \
@@ -18,8 +18,8 @@ RUN if [ -n "$MESHIVE_SDK_SPEC" ]; then \
     fi
 
 FROM base
-# 어떤 MCP 커밋이 어떤 SDK 커밋으로 도는지 — 이미지 라벨과 /healthz(revision, sdk_revision) 양쪽에서 읽는다(리뷰 C2).
-# CI 가 채운다(ci.yml). 로컬 빌드는 비어 있고 /healthz 는 null 로 답한다.
+# Which MCP commit runs with which SDK commit — readable from both the image labels and /healthz (revision, sdk_revision).
+# Filled in by CI (ci.yml). Empty in local builds, where /healthz answers null.
 ARG MESHIVE_MCP_REVISION=""
 ARG MESHIVE_SDK_REVISION=""
 LABEL org.opencontainers.image.source="https://github.com/meshive/meshive-mcp" \
@@ -27,7 +27,7 @@ LABEL org.opencontainers.image.source="https://github.com/meshive/meshive-mcp" \
       ai.meshive.sdk.revision="$MESHIVE_SDK_REVISION"
 ENV MESHIVE_MCP_REVISION="$MESHIVE_MCP_REVISION" MESHIVE_SDK_REVISION="$MESHIVE_SDK_REVISION"
 COPY --from=build /install /usr/local
-# 숫자 UID 로 지정 — k8s `runAsNonRoot` 는 이름(mcp)으로는 non-root 를 검증하지 못해 파드 생성이 실패한다.
+# Use a numeric UID — k8s `runAsNonRoot` can't verify non-root from a name (mcp), so pod creation fails.
 RUN useradd --system --uid 10001 --no-create-home mcp
 USER 10001:10001
 ENV MESHIVE_MCP_HOST=0.0.0.0 MESHIVE_MCP_PORT=8080

@@ -1,7 +1,7 @@
-"""목록 캡핑 + 불투명 커서.
+"""List capping + opaque cursors.
 
-커서는 base64url("o=<offset>"). 형식을 처음부터 고정해 두는 이유: 나중에 백엔드가
-limit/cursor 를 지원하면 서버가 같은 문자열을 그대로 넘기고, 모델 입장에서는 아무것도 안 바뀐다.
+The cursor is base64url("o=<offset>"). The format is fixed from the start so that if the backend later
+supports limit/cursor, the server passes the same string through and nothing changes for the model.
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ def clamp_limit(limit: int | None) -> int:
 
 def paginate(items: Sequence[Any], limit: int | None, cursor: str | None, *,
              total: int | None = None) -> dict[str, Any]:
-    """메모리 안의 전체 목록을 한 페이지로 자른다.
+    """Cut a full in-memory list down to one page.
 
-    total 을 주면(서버 페이징 결과) items 는 이미 한 페이지로 보고 offset 만 앞으로 옮긴다.
+    When total is given (a server-paged result), items is already one page and only the offset moves forward.
     """
     size = clamp_limit(limit)
     offset = decode_cursor(cursor)

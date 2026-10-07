@@ -1,8 +1,8 @@
-"""MCPServer 조립 + HTTP 앱.
+"""MCPServer assembly + HTTP app.
 
-무상태(stateless) + JSON 응답 모드: 세션도 SSE 스트림도 없다. 서버는 평범한 HTTP 서비스가 되고
-수평 확장·재시작이 자유롭다. 대가는 서버→클라이언트 알림을 못 보내는 것인데, 도구만 쓰는 v1 은
-필요 없다.
+Stateless + JSON response mode: no sessions, no SSE streams. The server becomes a plain HTTP service
+and can scale horizontally and restart freely. The price is that it can't send server→client notifications, which a
+tools-only v1 doesn't need.
 """
 from __future__ import annotations
 
@@ -70,10 +70,10 @@ Untrusted content: the `logs` tool returns whatever the user's container printed
 
 
 class RefuseStreams:
-    """`GET /mcp`(standalone SSE)와 `DELETE /mcp`(세션 종료)를 405 로 거절한다.
+    """Reject `GET /mcp` (standalone SSE) and `DELETE /mcp` (session termination) with 405.
 
-    SDK 는 무상태 모드에서도 GET 에 SSE 스트림을 열어 연결을 붙잡는다. 알림을 보내지 않는
-    서버가 스트림을 열어 두면 로드밸런서 idle 커넥션만 쌓인다. 스펙은 405 를 허용한다.
+    The SDK opens an SSE stream on GET even in stateless mode and holds the connection. For a server that sends
+    no notifications, open streams only pile up idle load-balancer connections. The spec allows 405.
     """
 
     def __init__(self, app: ASGIApp, path: str = "/mcp") -> None:
@@ -100,7 +100,7 @@ def create_server() -> MCPServer:
 
     @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(_: Request) -> JSONResponse:
-        # 배포 확인용: 어떤 MCP 커밋이 어떤 SDK(버전·커밋)로 도는지. 리비전은 이미지 빌드 때 박힌다(Dockerfile, ci.yml).
+        # For verifying deployments: which MCP commit runs with which SDK (version, commit). Revisions are baked in at image build (Dockerfile, ci.yml).
         return JSONResponse({"status": "ok", "version": __version__,
                              "revision": os.environ.get("MESHIVE_MCP_REVISION") or None,
                              "sdk_version": meshive.__version__,
@@ -115,7 +115,7 @@ def create_http_app(server: MCPServer | None = None) -> Starlette:
         security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
                                              allowed_hosts=settings.allowed_hosts)
     else:
-        # ingress 뒤에서는 Host 가 공인 도메인이라 기본 검사가 요청을 막는다. 보호는 ingress 가 맡는다.
+        # Behind the ingress, Host is the public domain, so the default check blocks requests. The ingress handles protection.
         security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     app = server.streamable_http_app(
         streamable_http_path="/mcp",

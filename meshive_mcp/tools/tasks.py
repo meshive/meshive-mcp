@@ -36,7 +36,7 @@ def register(server: MCPServer) -> None:
                 return ws
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
-            # 백엔드가 limit/offset 을 지원하는 유일한 목록 — 한 장 더 받아 다음 페이지 유무를 안다.
+            # The only list the backend supports limit/offset for — fetch one extra to know whether there's a next page.
             items = await call(client.list_tasks, ws, status=status, limit=size + 1, offset=offset)
         has_more = len(items) > size
         items = items[:size]
