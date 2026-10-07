@@ -10,7 +10,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "workspaces", annotations=READ_ONLY)
+    @meshive_tool(server, "workspaces", title="List Workspaces", annotations=READ_ONLY)
     async def workspaces(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
         """List the user's workspaces, or show one workspace in detail with its cost summary and members (its `ram` and `total_storage` are MiB).
         Omit `workspace` to list; pass a workspace id (the `namespace_name` from the list) for details.

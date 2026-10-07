@@ -12,7 +12,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "storages", annotations=READ_ONLY)
+    @meshive_tool(server, "storages", title="List Storage", annotations=READ_ONLY)
     async def storages(ctx: Context[Any, Any], workspace: str | None = None, storage: str | None = None,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the storage volumes in a workspace, or show one volume by its `pv_name`.

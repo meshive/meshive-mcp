@@ -54,7 +54,7 @@ def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]
     return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
-def meshive_tool(server: MCPServer, name: str, *, annotations: ToolAnnotations):
+def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations):
     """`server.tool` 위에 한 겹: (1) 정상 결과를 compact JSON 텍스트 + structured_content 로,
     (2) 도구가 던진 ToolError 를 **접두어 없는 순수 JSON** 본문의 `isError` 결과로 바꾼다. SDK 기본 동작은 "Error executing tool <name>: ..." 을 앞에 붙이는데,
     계약(§0.4)은 본문이 `{code, message, next_step}` JSON 그 자체여야 한다 — 모델이 파싱해서
@@ -104,7 +104,8 @@ def meshive_tool(server: MCPServer, name: str, *, annotations: ToolAnnotations):
                 "\nEvery write requires operation_id. Reuse the ID returned by the preview, or generate a UUID before "
                 "the first call. Keep it for confirmation and all retries; a new ID means a new operation. "
                 "After a timeout, check operation_status and resource state before retrying.")
-        server.tool(name=name, annotations=annotations)(wrapper)
+        # 공용 annotation 상수를 여러 도구가 같이 쓰므로 title 은 복사본에만 넣는다.
+        server.tool(name=name, title=title, annotations=annotations.model_copy(update={"title": title}))(wrapper)
         return fn
 
     return decorator

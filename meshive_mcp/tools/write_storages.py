@@ -29,7 +29,7 @@ def _volume_size(mib: Any) -> str:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "create_storage", annotations=CREATE)
+    @meshive_tool(server, "create_storage", title="Create Storage", annotations=CREATE)
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
@@ -56,7 +56,7 @@ def register(server: MCPServer) -> None:
                             "the storages tool once it is `running`.")
         return out
 
-    @meshive_tool(server, "delete_storage", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
     async def delete_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a storage volume and all data on it. `storage` is the pv_name from the storages tool.

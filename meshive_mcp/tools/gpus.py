@@ -63,7 +63,7 @@ def _camel(snake: str) -> str:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "gpus", annotations=READ_ONLY)
+    @meshive_tool(server, "gpus", title="List GPUs", annotations=READ_ONLY)
     async def gpus(ctx: Context[Any, Any], rental_type: str = "demand",
                    min_vram_gb: int | None = None) -> dict[str, Any]:
         """Show which GPU types can be rented right now, with per-GPU hourly prices in USD.

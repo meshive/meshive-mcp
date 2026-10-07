@@ -13,7 +13,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "logs", annotations=READ_ONLY)
+    @meshive_tool(server, "logs", title="Read Logs", annotations=READ_ONLY)
     async def logs(ctx: Context[Any, Any], pod: str | None = None, task: str | None = None,
                    workspace: str | None = None, tail: int = 200, wait: float | None = None,
                    container: str | None = None, cursor: int | None = None) -> dict[str, Any]:

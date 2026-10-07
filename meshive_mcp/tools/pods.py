@@ -26,7 +26,7 @@ def _pod_dict(p: Any, show_secrets: bool = False) -> dict[str, Any]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "pods", annotations=READ_ONLY)
+    @meshive_tool(server, "pods", title="List Pods", annotations=READ_ONLY)
     async def pods(ctx: Context[Any, Any], workspace: str | None = None, pod: str | None = None,
                    status: str | None = None, include_metrics: bool = False, include_system: bool = False,
                    show_secrets: bool = False, limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:

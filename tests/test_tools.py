@@ -29,6 +29,8 @@ async def test_tool_list_and_annotations(mcp_client):
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
         assert t.annotations.destructive_hint is (t.name in DESTRUCTIVE), t.name
         assert t.description and len(t.description.split(".")) >= 3, t.name
+        assert t.title and t.annotations.title == t.title, t.name
+    assert len({t.title for t in tools}) == len(tools)
 
 
 async def test_tool_descriptions_state_size_units(mcp_client):

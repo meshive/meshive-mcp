@@ -12,7 +12,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "templates", annotations=READ_ONLY)
+    @meshive_tool(server, "templates", title="List Pod Templates", annotations=READ_ONLY)
     async def templates(ctx: Context[Any, Any], workspace: str | None = None, template: int | None = None,
                         app_type: str | None = None, hardware_type: str | None = None,
                         limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:

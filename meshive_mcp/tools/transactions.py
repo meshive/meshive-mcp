@@ -12,7 +12,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "transactions", annotations=READ_ONLY)
+    @meshive_tool(server, "transactions", title="List Pending Pod Operations", annotations=READ_ONLY)
     async def transactions(ctx: Context[Any, Any], workspace: str | None = None,
                            limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """Show the pod operations still in flight, and why one is taking so long.

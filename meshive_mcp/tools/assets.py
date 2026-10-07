@@ -17,7 +17,7 @@ _LINKS_NOTE = ("These links are temporary and work for anyone who has one until 
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "assets", annotations=READ_ONLY)
+    @meshive_tool(server, "assets", title="List Assets", annotations=READ_ONLY)
     async def assets(ctx: Context[Any, Any], workspace: str | None = None, asset: str | None = None,
                      asset_type: str | None = None, status: str | None = None,
                      limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
@@ -47,7 +47,7 @@ def register(server: MCPServer) -> None:
             "workspace": ws,
         }
 
-    @meshive_tool(server, "download_links", annotations=READ_ONLY)
+    @meshive_tool(server, "download_links", title="Get Download Links", annotations=READ_ONLY)
     async def download_links(ctx: Context[Any, Any], asset: str | None = None, task: str | None = None,
                              paths: list[str] | None = None) -> dict[str, Any]:
         """Get temporary download links for an asset's files (`asset`, "asset_...") or a task's output files (`task`, "task_...").
@@ -68,7 +68,7 @@ def register(server: MCPServer) -> None:
         return {"task_id": task, "files": [to_dict(f) for f in outs.files], "expired": outs.expired,
                 "expires_at": None, "note": _LINKS_NOTE + " Task output links last a few hours."}
 
-    @meshive_tool(server, "import_asset", annotations=CREATE)
+    @meshive_tool(server, "import_asset", title="Import Asset", annotations=CREATE)
     async def import_asset(ctx: Context[Any, Any], source: str, workspace: str | None = None, name: str | None = None,
                            asset_type: str | None = None, revision: str | None = None, paths: list[str] | None = None,
                            hf_token_id: int | None = None, civitai_key_id: int | None = None,

@@ -60,7 +60,7 @@ def register(server: MCPServer) -> None:
         return out
 
     estimate_pod.__doc__ = (estimate_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
-    meshive_tool(server, "estimate_pod", annotations=READ_ONLY)(estimate_pod)
+    meshive_tool(server, "estimate_pod", title="Estimate Pod Price", annotations=READ_ONLY)(estimate_pod)
 
     async def create_pod(ctx: Context[Any, Any], name: str, template_id: int, workspace: str | None = None,
                          gpu_model: str | None = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
@@ -99,7 +99,7 @@ def register(server: MCPServer) -> None:
         return out
 
     create_pod.__doc__ = (create_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
-    meshive_tool(server, "create_pod", annotations=CREATE)(create_pod)
+    meshive_tool(server, "create_pod", title="Create Pod", annotations=CREATE)(create_pod)
 
     async def _lifecycle(ctx, method: str, pod: str, workspace: str | None, action: str, **extra: Any) -> dict[str, Any]:
         async with meshive_client(ctx) as client:
@@ -112,14 +112,14 @@ def register(server: MCPServer) -> None:
         out["next_step"] = f"The {action} was accepted and runs asynchronously. Poll the pods tool for the new status."
         return out
 
-    @meshive_tool(server, "stop_pod", annotations=MUTATE)
+    @meshive_tool(server, "stop_pod", title="Stop Pod", annotations=MUTATE)
     async def stop_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, operation_id: str | None = None) -> dict[str, Any]:
         """Stop a running pod (scale to zero). Pod billing stops; attached storage keeps being billed.
         `pod` is the pod_name from the pods tool (the display name also works). The change is asynchronous — poll pods for `stopped`.
         Use delete_pod to remove the pod entirely."""
         return await _lifecycle(ctx, "stop_pod", pod, workspace, "stop")
 
-    @meshive_tool(server, "start_pod", annotations=MUTATE)
+    @meshive_tool(server, "start_pod", title="Start Pod", annotations=MUTATE)
     async def start_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
                         placement: str = "same_node", confirm: bool = False, allow_data_loss: bool = False,
                         operation_id: str | None = None) -> dict[str, Any]:
@@ -158,12 +158,12 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "The start was accepted and runs asynchronously. Poll the pods tool for the new status."
         return out
 
-    @meshive_tool(server, "restart_pod", annotations=MUTATE)
+    @meshive_tool(server, "restart_pod", title="Restart Pod", annotations=MUTATE)
     async def restart_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, operation_id: str | None = None) -> dict[str, Any]:
         """Restart a pod in place (same machine, same storage). Asynchronous — poll pods for `running`."""
         return await _lifecycle(ctx, "restart_pod", pod, workspace, "restart")
 
-    @meshive_tool(server, "delete_pod", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_pod", title="Delete Pod", annotations=DESTRUCTIVE)
     async def delete_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
                          delete_local_storages: list[str] | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a pod permanently. With confirm=false (default) it only returns what would be deleted; call again
@@ -186,7 +186,7 @@ def register(server: MCPServer) -> None:
 
     # --- Watched folders (실행 중 Pod 의 수확 폴더) ---------------------------------------------------
 
-    @meshive_tool(server, "watched_folders", annotations=READ_ONLY)
+    @meshive_tool(server, "watched_folders", title="Show Watched Folders", annotations=READ_ONLY)
     async def watched_folders(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Show a pod's watched folders: folders whose new files are uploaded as Asset Hub assets.
         Each folder has `origin` (template or user), `enabled`, its include patterns and `blocked_reason` (network_storage = on network storage, never watched).
@@ -201,7 +201,7 @@ def register(server: MCPServer) -> None:
         out["revision"] = result.revision
         return out
 
-    @meshive_tool(server, "set_watched_folders", annotations=MUTATE)
+    @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=MUTATE)
     async def set_watched_folders(ctx: Context[Any, Any], pod: str, expected_version: int, workspace: str | None = None,
                                   template: dict[str, Any] | None = None, user: list[Any] | None = None,
                                   confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
@@ -237,7 +237,7 @@ def register(server: MCPServer) -> None:
 
     # --- SSH (G04) ---------------------------------------------------------------------------------
 
-    @meshive_tool(server, "ssh_access", annotations=MUTATE)
+    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=MUTATE)
     async def ssh_access(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Get a one-time SSH login for a pod, only when the user asks to connect: the `command` to run and a `password` that expires in a few minutes (`expires_at`).
         It needs a read & write key; each call issues a new password. Give both to the user and nothing else — never run the command yourself or put the password in files, commits or other tools."""
