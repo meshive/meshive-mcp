@@ -122,6 +122,11 @@ def translate(exc: BaseException) -> ToolError:
                               "the `namespace_name` value (not the label).")
         return tool_error("forbidden", msg, NEXT_STEP_FORBIDDEN)
     if isinstance(exc, NotFoundError):
+        if exc.title == "Pod Creation Failed":
+            # The pod is gone because creating it failed, not because of a wrong id — re-listing won't find it.
+            return tool_error("pod_creation_failed", exc.message or "Pod creation failed.",
+                              "Tell the user the reason. Don't retry this pod; fix the cause (template, command, "
+                              "inputs) and create a new pod.")
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)
     if isinstance(exc, RateLimitError):
         wait = int(exc.retry_after) if exc.retry_after else 30
