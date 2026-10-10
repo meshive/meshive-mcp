@@ -2,7 +2,7 @@
 import json
 
 import pytest
-from meshive.exceptions import ConflictError, InsufficientCreditError
+from meshive.exceptions import ConflictError, InsufficientCreditError, NotFoundError
 
 pytestmark = pytest.mark.anyio
 
@@ -233,6 +233,18 @@ async def test_name_taken_tells_agent_to_check_the_list_first(mcp_client, fake, 
     body = _payload(result)
     assert result.is_error and body["code"] == "name_taken"
     assert "list tool" in body["next_step"] and "before creating anything else" in body["next_step"]
+
+
+async def test_creation_failed_pod_gets_no_retry_advice(mcp_client, fake, with_key):
+    """A pod cleaned up after a failed create is final — the generic "retry with the same operation_id" line is left off."""
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        delete_pod=NotFoundError(404, "Pod 'x-0' failed to start and was cleaned up: CrashLoopBackOff",
+                                 title="Pod Creation Failed"))
+    result = await mcp_client.call_tool("delete_pod", {"pod": "0123456789abcdef-0", "workspace": WS, "confirm": True,
+                                                       "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "pod_creation_failed" and body["operation_id"] == "test-operation-0001"
+    assert "Don't retry this pod" in body["next_step"] and "Any retry MUST" not in body["next_step"]
 
 
 async def test_scale_serving_confirms_cap_raise_and_autoscale_on(mcp_client, fake, with_key):
