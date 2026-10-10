@@ -1,4 +1,4 @@
-"""도구를 in-process MCP 클라이언트로 끝까지 호출한다 (스키마 → 인자 검증 → 실행 → 결과 직렬화)."""
+"""Call tools end to end with an in-process MCP client (schema → argument validation → execution → result serialization)."""
 import json
 
 import pytest
@@ -29,11 +29,13 @@ async def test_tool_list_and_annotations(mcp_client):
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
         assert t.annotations.destructive_hint is (t.name in DESTRUCTIVE), t.name
         assert t.description and len(t.description.split(".")) >= 3, t.name
+        assert t.title and t.annotations.title == t.title, t.name
+    assert len({t.title for t in tools}) == len(tools)
 
 
 async def test_tool_descriptions_state_size_units(mcp_client):
-    """원시 크기 숫자의 단위를 설명이 말해야 모델이 사람에게 옮길 때 틀리지 않는다 — 콘솔처럼 1024 기반.
-    storages 는 "Sizes are in GB" 라고 했지만 값은 MiB 였다(100 GiB 볼륨 = 102400)."""
+    """Descriptions must state the unit of raw size numbers so models don't get it wrong when relaying to people — 1024-based, like the console.
+    storages said "Sizes are in GB", but the values were MiB (a 100 GiB volume = 102400)."""
     desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
     assert "MiB" in desc["storages"] and "in GB" not in desc["storages"]
     assert "`ram_size` is bytes" in desc["machines"] and "bytes per second" in desc["machines"]
@@ -43,7 +45,7 @@ async def test_tool_descriptions_state_size_units(mcp_client):
 
 
 async def test_server_instructions_say_gib_for_gb_named_fields():
-    """`*_gb` 필드는 쿠버네티스 Gi·capacity × 1024 MiB 다 — 이름만 보고 "GB" 라고 말하지 않게 서버 안내가 GiB 라고 한다."""
+    """`*_gb` fields are Kubernetes Gi, capacity × 1024 MiB — the server instructions say GiB so the name alone doesn't make models say "GB"."""
     from meshive_mcp.server import INSTRUCTIONS
 
     assert "`ram_gb`" in INSTRUCTIONS and "`price_per_gb_month` is per GiB" in INSTRUCTIONS
@@ -55,7 +57,7 @@ async def test_no_key_is_model_instruction(mcp_client, fake):
     assert result.is_error
     body = _payload(result)
     assert body["code"] == "no_api_key" and "console" in body["next_step"]
-    assert "last" not in fake  # 클라이언트를 만들지도 않았다
+    assert "last" not in fake  # no client was even built
 
 
 async def test_account(mcp_client, fake, with_key):
@@ -80,7 +82,7 @@ async def test_pods_pages_and_filters(mcp_client, fake, with_key):
 async def test_pods_single(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("pods", {"pod": "pod-7", "workspace": "0123456789abcdef"}))
     assert body["pod"]["pod_name"] == "pod-7"
-    assert ("list_workspaces", (), {}) not in fake["last"].calls  # 명시된 워크스페이스는 조회 안 함
+    assert ("list_workspaces", (), {}) not in fake["last"].calls  # an explicit workspace isn't looked up
 
 
 async def test_pod_secret_credentials_are_hidden_unless_asked(mcp_client, fake, with_key):
@@ -89,11 +91,11 @@ async def test_pod_secret_credentials_are_hidden_unless_asked(mcp_client, fake, 
     body = _payload(await mcp_client.call_tool("pods", {"pod": "pod-7", "workspace": "0123456789abcdef"}))
     creds = {c["key"]: c for c in body["pod"]["connect_credentials"]}
     assert creds["ACCESS_PASSWORD"]["value"] is None and creds["ACCESS_PASSWORD"]["is_secret"] is True
-    assert creds["USERNAME"]["value"] == "admin"                      # 비밀이 아닌 값은 그대로
+    assert creds["USERNAME"]["value"] == "admin"                      # non-secret values stay as-is
     assert body["pod"]["endpoints"][0]["external_url"] == "https://pod-7.meshive.ai"
     assert "note" not in body
     listed = await mcp_client.call_tool("pods", {"workspace": "0123456789abcdef", "show_secrets": True})
-    assert POD_PASSWORD not in listed.content[0].text                 # 목록에는 show_secrets 가 안 먹는다
+    assert POD_PASSWORD not in listed.content[0].text                 # show_secrets doesn't apply to listings
 
     shown = _payload(await mcp_client.call_tool("pods", {"pod": "pod-7", "workspace": "0123456789abcdef",
                                                          "show_secrets": True}))
@@ -170,7 +172,7 @@ async def test_gpus_without_key_uses_public_catalog(mcp_client, fake, monkeypatc
                         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
     body = _payload(await mcp_client.call_tool("gpus", {"rental_type": "spot", "min_vram_gb": 16}))
     assert body["authenticated"] is False
-    # 무키 경로도 display 를 싣는다 — 여기만 빠지면 잠재 고객이 콘솔과 다른 금액을 듣는다.
+    # The keyless path carries display too — if only this one lacked it, prospective customers would hear amounts that differ from the console.
     assert body["items"] == [{"gpu_model": "RTX 5090", "vram_gb": 32, "rental_type": "spot",
                               "price_per_hour": "0.3", "price_per_hour_display": "$0.300",
                               "availability": "unknown"}]
@@ -231,7 +233,7 @@ def test_number_normalization():
     assert normalize_number("0E-8") == "0"
     assert normalize_number("0.87741500") == "0.877415"
     assert normalize_number("1.2E+2") == "120"
-    assert normalize_number("457") == "457"          # 정수 문자열(id 일 수 있음)은 그대로
+    assert normalize_number("457") == "457"          # integer strings (may be ids) stay as-is
     assert normalize_number("task_1e5") == "task_1e5"
     assert to_dict({"price_per_hour": "0E-8", "name": "x"}) == {"price_per_hour": "0E-8", "name": "x"}
 
@@ -246,30 +248,32 @@ async def test_system_pods_hidden_by_default(mcp_client, fake, with_key):
     assert len(dl) == 2 and all(p["is_system"] and p["price_per_hour"] == "0" for p in dl)
 
 
-# --- 금액 표시: 웹 콘솔과 같은 값 ------------------------------------------------
+# --- Amount display: same values as the web console ------------------------------------------------
 
 WS = "0123456789abcdef"
 
 
 async def test_money_fields_carry_a_console_matching_display_string(mcp_client, fake, with_key):
-    """모델이 숫자를 제 나름대로 반올림하면 콘솔과 다른 금액이 보인다 — 보여줄 문자열을 서버가 준다.
+    """If the model rounds numbers its own way, amounts differ from the console — the server provides the string to show.
 
-    규칙 소스는 웹 콘솔 `Formatter.tsx`: 시간당 요금은 3자리 고정(formatHourlyUsd),
-    그 외 금액은 2자리(formatUsd). 원본 숫자는 모델이 합계를 계산할 수 있게 그대로 남긴다.
+    The rules follow the web console: hourly rates always have 3 decimals,
+    other amounts 2. The original number stays so the model can compute totals.
     """
     pod = _payload(await mcp_client.call_tool("pods", {"pod": "pod-1", "workspace": WS}))["pod"]
     assert pod["price_per_hour"] == "0.5" and pod["price_per_hour_display"] == "$0.500"
 
     storage_est = _payload(await mcp_client.call_tool(
         "create_storage", {"name": "s", "size_gb": 10, "workspace": WS}))["estimate"]
-    # 0.000097/h — 2자리면 "$0.00" 이 돼 "공짜" 로 읽힌다. 콘솔은 "$0.000".
+    # 0.000097/h — with 2 decimals it would be "$0.00" and read as "free". The console shows "$0.000".
     assert storage_est["price_per_hour_display"] == "$0.000"
-    assert storage_est["price_per_gb_month_display"] == "$0.07"      # GiB·month 단가는 합계 계열 → 2자리
+    assert storage_est["price_per_gb_month_display"] == "$0.07"      # the GiB·month unit price is a total-type amount → 2 decimals
 
     est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 1, "workspace": WS}))
     assert est["price_per_hour_display"] == "$0.068"
-    assert est["breakdown_display"] == {"gpu": "$0.068"}             # 콘솔 Receipt 도 줄마다 3자리
+    assert est["breakdown_display"] == {"gpu": "$0.068"}             # the console's Receipt shows 3 decimals per line too
 
     credit = _payload(await mcp_client.call_tool("account", {}))
     balance = credit.get("credit", credit)
-    assert balance["balance_display"] == "$12.50" and balance["paid_balance_display"] == "$10.00"
+    assert balance["balance_display"] == "$12.50"
+    # Free credits retired (2026-10) — the paid/bonus split that no longer exists isn't sent to the model (the SDK keeps the fields only for backward compatibility)
+    assert not {"paid_balance", "bonus_balance", "paid_balance_display", "bonus_balance_display"} & set(balance)

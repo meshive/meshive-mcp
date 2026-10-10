@@ -1,7 +1,7 @@
-"""요청 → API 키 / 클라이언트 식별.
+"""Request → API key / client identification.
 
-인증은 HTTP 헤더를 그대로 통과시키는 방식이다. 서버는 키를 저장하지도 검증하지도 않는다 —
-WSB 가 401/403 을 주면 errors.translate 가 모델용 문장으로 바꾼다.
+Authentication passes the HTTP header straight through. The server neither stores nor validates keys —
+when the API returns 401/403, errors.translate turns it into a sentence for the model.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ API_KEY_PREFIX = "meshive_"
 def api_key_from_headers(headers: Mapping[str, str] | None) -> str | None:
     if not headers:
         return None
-    # Starlette 헤더는 소문자 키. 다른 transport 대비 양쪽 다 본다.
+    # Starlette header keys are lowercase. Check both in case of other transports.
     auth = headers.get("authorization") or headers.get("Authorization") or ""
     if not auth.lower().startswith("bearer "):
         return None
@@ -36,10 +36,10 @@ def api_key(ctx: Context[Any, Any]) -> str | None:
 
 
 def client_label(ctx: Context[Any, Any]) -> str:
-    """`<client name>/<version>` — MCP clientInfo 우선, 없으면 User-Agent.
+    """`<client name>/<version>` — MCP clientInfo first, otherwise the User-Agent.
 
-    무상태 HTTP 에서는 initialize 가 매 요청에 없을 수 있어 clientInfo 가 비기도 한다.
-    그때는 HTTP User-Agent(예: claude-code/1.x)가 유일한 단서다.
+    Over stateless HTTP, initialize may not come with every request, so clientInfo can be empty.
+    Then the HTTP User-Agent (e.g. claude-code/1.x) is the only clue.
     """
     try:
         params = ctx.connection.client_params
@@ -47,7 +47,7 @@ def client_label(ctx: Context[Any, Any]) -> str:
         if info and getattr(info, "name", None):
             version = getattr(info, "version", "") or ""
             return f"{info.name}/{version}".rstrip("/")
-    except Exception:  # noqa: BLE001 — 식별은 best-effort, 도구 호출을 막지 않는다
+    except Exception:  # noqa: BLE001 — identification is best-effort and never blocks a tool call
         pass
     headers = ctx.headers or {}
     ua = headers.get("user-agent") or headers.get("User-Agent")

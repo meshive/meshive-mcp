@@ -1,7 +1,7 @@
-"""엔트리포인트.
+"""Entry point.
 
-  meshive-mcp                       # HTTP (기본), MESHIVE_MCP_HOST/PORT
-  meshive-mcp --transport stdio     # 개발·디버깅용. MESHIVE_API_KEY 폴백 허용.
+  meshive-mcp                       # HTTP (default), MESHIVE_MCP_HOST/PORT
+  meshive-mcp --transport stdio     # for development and debugging. Allows the MESHIVE_API_KEY fallback.
 """
 from __future__ import annotations
 

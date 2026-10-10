@@ -13,12 +13,12 @@ authors = [
 ]
 dynamic = ["version"]
 dependencies = [
-    # 2.x 는 FastMCP 가 MCPServer 로 바뀐 새 API. 1.x 코드와 호환되지 않으므로 상한을 둔다.
+    # 2.x is the new API where FastMCP became MCPServer. Not compatible with 1.x code, hence the upper bound.
     "mcp>=2.1,<3",
-    # 0.1.3: Pod.is_downloader·connect_credentials·same_node_unavailable_reason, Transaction.init_logs, 버전 없는 Asset.
-    # 0.1.2: list_transactions·Transaction — transactions 도구가 부른다(0.1.1 에는 없어 호출마다 AttributeError).
-    # 0.1.1: Serving.scale_raises_cost / autoscale / price_cap_per_hour, get_task_logs(cursor=) tail 계약, disk_gb 제거.
-    # real 이미지 빌드는 PyPI 에 이 핀을 만족하는 릴리스가 있어야 통과한다(ci.yml 사전 확인) — SDK 태그·PyPI 가 먼저.
+    # 0.1.3: Pod.is_downloader, connect_credentials, same_node_unavailable_reason, Transaction.init_logs, assets without versions.
+    # 0.1.2: list_transactions, Transaction — called by the transactions tool (missing in 0.1.1, so every call raised AttributeError).
+    # 0.1.1: Serving.scale_raises_cost / autoscale / price_cap_per_hour, get_task_logs(cursor=) tail contract, disk_gb removed.
+    # Building the real image only passes when PyPI has a release satisfying this pin (ci.yml pre-check) — the SDK tag and PyPI release come first.
     "meshive>=0.1.3,<0.2",
     "httpx>=0.27",
 ]

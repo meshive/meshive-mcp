@@ -1,8 +1,8 @@
-"""GPU 가용량/가격. 이 도구만 API 키 없이도 동작한다(계약 §1, 유입 퍼널).
+"""GPU availability/prices. The only tool that works without an API key.
 
-키 있음  → /v1/sdk/gpus : 실시간 재고 + 가격.
-키 없음  → /v1/landing/pricing-catalog : 공개 가격표만. `availability: "unknown"` 으로 표시하고
-           모델에게 재고를 보려면 키가 필요하다고 알린다.
+With a key    → /v1/sdk/gpus : live stock + prices.
+Without a key → /v1/landing/pricing-catalog : the public price list only. Marked `availability: "unknown"`, and
+           the model is told a key is needed to see stock.
 """
 from __future__ import annotations
 
@@ -44,8 +44,8 @@ async def _public_catalog(rental_type: str, min_vram_gb: int | None) -> dict[str
             "vram_gb": vram,
             "rental_type": rental_type,
             "price_per_hour": price,
-            # 이 경로는 to_dict 를 안 거친다 — display 를 직접 붙이지 않으면 키 없는 에이전트만 제 나름대로
-            # 반올림해 콘솔과 다른 금액을 말한다(하필 계정 없는 사람이 처음 보는 숫자다).
+            # This path doesn't go through to_dict — without attaching display directly, only keyless agents would round
+            # on their own and quote amounts that differ from the console (the very first number someone without an account sees).
             "price_per_hour_display": hourly(price),
             "availability": "unknown",
         })
@@ -63,7 +63,7 @@ def _camel(snake: str) -> str:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "gpus", annotations=READ_ONLY)
+    @meshive_tool(server, "gpus", title="List GPUs", annotations=READ_ONLY)
     async def gpus(ctx: Context[Any, Any], rental_type: str = "demand",
                    min_vram_gb: int | None = None) -> dict[str, Any]:
         """Show which GPU types can be rented right now, with per-GPU hourly prices in USD.

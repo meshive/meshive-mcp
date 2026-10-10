@@ -1,6 +1,6 @@
-"""도구 등록. 각 모듈은 `register(server)` 하나를 노출한다.
+"""Tool registration. Each module exposes a single `register(server)`.
 
-읽기 도구(계약 §1, logs·transactions·download_links 포함) + 쓰기 도구(계약 §2; meshive 0.1.x). 개수는 tests/test_tools.py 가 고정한다.
+Read tools (including logs, transactions and download_links) + write tools (meshive 0.1.x). tests/test_tools.py pins the count.
 """
 from __future__ import annotations
 

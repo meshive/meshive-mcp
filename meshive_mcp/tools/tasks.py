@@ -12,7 +12,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "operation_status", annotations=READ_ONLY)
+    @meshive_tool(server, "operation_status", title="Check Operation Status", annotations=READ_ONLY)
     async def operation_status(ctx: Context[Any, Any], operation_id: str, method: str, path: str) -> dict[str, Any]:
         """Check a write's durable acceptance record without submitting it again. Use operation_id and
         operation_lookup.method/path from the write result/error. Examples: submit_task=POST /tasks,
@@ -21,7 +21,7 @@ def register(server: MCPServer) -> None:
         async with meshive_client(ctx) as client:
             return await call(client.get_operation, operation_id, method=method, path=path)
 
-    @meshive_tool(server, "tasks", annotations=READ_ONLY)
+    @meshive_tool(server, "tasks", title="List Tasks", annotations=READ_ONLY)
     async def tasks(ctx: Context[Any, Any], workspace: str | None = None, task: str | None = None,
                     status: str | None = None, limit: int | None = None,
                     cursor: str | None = None) -> dict[str, Any]:
@@ -36,7 +36,7 @@ def register(server: MCPServer) -> None:
                 return ws
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
-            # 백엔드가 limit/offset 을 지원하는 유일한 목록 — 한 장 더 받아 다음 페이지 유무를 안다.
+            # The only list the backend supports limit/offset for — fetch one extra to know whether there's a next page.
             items = await call(client.list_tasks, ws, status=status, limit=size + 1, offset=offset)
         has_more = len(items) > size
         items = items[:size]

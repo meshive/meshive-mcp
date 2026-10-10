@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Every tool has a human-readable `title` (on the tool and in its annotations), e.g. "Create Pod" for `create_pod`.
 - New tool `ssh_access`: a one-time SSH command and password for a pod (it expires in a few minutes; a write key is
   needed). The browser-terminal link is left out because it carries the password, and the response and the server
   instructions tell the agent to hand the password only to the user.

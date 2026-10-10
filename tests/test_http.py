@@ -1,4 +1,4 @@
-"""HTTP transport: /healthz, Bearer 헤더 전달, GET /mcp 거절."""
+"""HTTP transport: /healthz, Bearer header passthrough, GET /mcp rejection."""
 import json
 
 import httpx
@@ -22,13 +22,13 @@ def _rpc(method, params=None, id=1):
 async def http():
     app = create_http_app(create_server())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://mcp.test") as c:
-        # lifespan 을 직접 돌린다 — ASGITransport 는 startup 이벤트를 보내지 않는다.
+        # Run the lifespan directly — ASGITransport doesn't send the startup event.
         async with app.router.lifespan_context(app):
             yield c
 
 
 async def test_healthz(http, monkeypatch):
-    """배포 확인 계약: 이미지에 박힌 MCP/SDK 리비전과 설치된 SDK 버전이 그대로 보인다(리뷰 C2). 로컬 빌드는 null."""
+    """Deployment-verification contract: the MCP/SDK revisions baked into the image and the installed SDK version show as-is. null in local builds."""
     import meshive
     monkeypatch.setenv("MESHIVE_MCP_REVISION", "abc123")
     monkeypatch.setenv("MESHIVE_SDK_REVISION", "def456")
@@ -58,7 +58,7 @@ async def test_bearer_reaches_sdk_client(http, fake):
     body = json.loads(payload["content"][0]["text"])
     assert body["user"]["email"] == "u@example.com"
     assert fake["last"].key == key
-    # 무상태라 clientInfo 가 이 요청에 없다 → User-Agent 폴백
+    # Stateless, so this request has no clientInfo → User-Agent fallback
     assert fake["last"].label in ("test-agent/9.9", "codex/1.0")
 
 

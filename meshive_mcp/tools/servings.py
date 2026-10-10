@@ -12,7 +12,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "servings", annotations=READ_ONLY)
+    @meshive_tool(server, "servings", title="List Servings", annotations=READ_ONLY)
     async def servings(ctx: Context[Any, Any], workspace: str | None = None, serving: int | None = None,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the serverless model deployments (servings) in a workspace, or show one by `serving_id`.
@@ -31,7 +31,7 @@ def register(server: MCPServer) -> None:
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
         return page
 
-    @meshive_tool(server, "models", annotations=READ_ONLY)
+    @meshive_tool(server, "models", title="List Registered Models", annotations=READ_ONLY)
     async def models(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
         """List the models a workspace registered for serving. Each model's `registration_id` is what deploy_serving takes.
         Register a new one from Hugging Face with detect_model and register_model.
@@ -43,7 +43,7 @@ def register(server: MCPServer) -> None:
             items = await call(client.list_models, ws)
         return {"items": [to_dict(m) for m in items], "workspace": ws}
 
-    @meshive_tool(server, "source_credentials", annotations=READ_ONLY)
+    @meshive_tool(server, "source_credentials", title="List Source Credentials", annotations=READ_ONLY)
     async def source_credentials(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
         """List the Hugging Face tokens and CivitAI keys saved in a workspace, by id and label (never the secret itself).
         Pass an id as `hf_token_id` or `civitai_key_id` to detect_model, register_model or import_asset for a private or gated source. Tokens and keys are added in the console.
@@ -56,7 +56,7 @@ def register(server: MCPServer) -> None:
             keys = await call(client.list_civitai_keys, ws)
         return {"hf_tokens": [to_dict(t) for t in tokens], "civitai_keys": [to_dict(k) for k in keys], "workspace": ws}
 
-    @meshive_tool(server, "detect_model", annotations=READ_ONLY)
+    @meshive_tool(server, "detect_model", title="Check Model Compatibility", annotations=READ_ONLY)
     async def detect_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,
                            hf_token_id: int | None = None) -> dict[str, Any]:
         """Check whether a Hugging Face repo (e.g. "Qwen/Qwen3-0.6B") can be served before registering it; nothing is created.

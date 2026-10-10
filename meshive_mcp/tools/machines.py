@@ -11,7 +11,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "machines", annotations=READ_ONLY)
+    @meshive_tool(server, "machines", title="List Hosted Machines", annotations=READ_ONLY)
     async def machines(ctx: Context[Any, Any], machine: str | None = None, include_metrics: bool = False,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """For users who host hardware on Meshive: list their machines, or show one by `machine_id`.

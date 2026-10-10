@@ -1,6 +1,6 @@
-"""테스트 공용: 가짜 SDK 클라이언트 + in-process MCP 클라이언트.
+"""Shared test helpers: fake SDK client + in-process MCP client.
 
-`meshive_mcp.client._new_client` 를 갈아끼워 네트워크 없이 도구 로직만 검증한다.
+Swaps out `meshive_mcp.client._new_client` to test only the tool logic, without the network.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _ws(name: str, label: str) -> Workspace:
     return Workspace.from_dict({"namespaceName": name, "workspaceName": label})
 
 
-POD_PASSWORD = "pw-7f3k9"   # 비밀 접속값 — 응답에 그대로 나오면 안 되는 값
+POD_PASSWORD = "pw-7f3k9"   # a secret connect value — must never appear as-is in a response
 
 
 def _pod(name: str, status: str = "running", *, downloader: bool = False, same_node_reason: str | None = None) -> Pod:
@@ -39,7 +39,7 @@ def _pod(name: str, status: str = "running", *, downloader: bool = False, same_n
 
 
 class FakeMeshive:
-    """AsyncMeshive 의 읽기 메서드 중 테스트가 쓰는 것만. 호출 기록을 남긴다."""
+    """Only the AsyncMeshive read methods the tests use. Records calls."""
 
     def __init__(self, key: str, label: str) -> None:
         self.key = key
@@ -47,7 +47,7 @@ class FakeMeshive:
         self.calls: list[tuple[str, tuple, dict]] = []
         self.workspaces = [_ws("0123456789abcdef", "research")]
         self.pods = [_pod(f"pod-{i}", "running" if i % 2 else "stopped") for i in range(45)]
-        # 시스템 downloader 파드 2개 — 기본 숨김 대상
+        # 2 system downloader pods — hidden by default
         self.pods += [_pod(f"dl-{i}", "running", downloader=True) for i in range(2)]
         self.raise_on: dict[str, BaseException] = {}
         self.same_node_reason: str | None = None
@@ -150,7 +150,7 @@ class FakeMeshive:
         return [GpuAvailability.from_dict({"gpuModel": "RTX 5090", "vram": 32, "rentalType": rental_type,
                                            "gpuPrice": "0.6", "combinations": [{"maxGpu": 2}, {"maxGpu": 1}]})]
 
-    # --- 쓰기 표면 (0.1.0) ---
+    # --- Write surface (0.1.0) ---
     ESTIMATE = {"pricePerHourUsd": "0.068423", "breakdown": {"gpu": "0.068423"},
                 "resources": {"gpu_model": "RTX 3060", "vram_gb": 12, "gpu_count": 1, "vcpu": 4, "ram_gb": 12, "disk_gb": 25,
                               "rental_type": "demand"}, "availability": {"available_gpus": 2}, "template": {"id": 457},
@@ -186,7 +186,7 @@ class FakeMeshive:
     async def get_storage(self, pv, ws):
         self._rec("get_storage", pv, ws)
         return Storage.from_dict({"pvName": pv, "namespaceName": ws, "userAlias": "data", "storageType": "nfs",
-                                  "status": "running", "totalSize": 102400.0,   # MiB (100 GiB) — 서버 단위 그대로
+                                  "status": "running", "totalSize": 102400.0,   # MiB (100 GiB) — the server's unit as-is
                                   "linkedPod": [{"podName": "p-1"}]})
 
     async def delete_storage(self, pv, ws, **kw): return await self._action("delete_storage", "storage", pv, ws, **kw)
@@ -237,7 +237,7 @@ def fake(monkeypatch) -> FakeMeshive:
 
     def factory(key: str, label: str) -> FakeMeshive:
         inst = FakeMeshive(key, label)
-        # 테스트가 fake["setup"] 에 콜백을 두면 인스턴스마다 적용 (워크스페이스 수, 심어둘 예외 등).
+        # If a test puts a callback in fake["setup"], it's applied per instance (number of workspaces, exceptions to plant, ...).
         setup = holder.get("setup")
         if setup:
             setup(inst)  # type: ignore[operator]
@@ -255,7 +255,7 @@ def server():
 
 @pytest.fixture
 def with_key(monkeypatch):
-    """stdio 경로처럼 env 폴백으로 키를 준다 (in-process 클라이언트는 HTTP 헤더가 없다)."""
+    """Provide the key via the env fallback like the stdio path (the in-process client has no HTTP headers)."""
     from meshive_mcp.settings import settings
     monkeypatch.setattr(settings, "env_api_key_fallback", True)
     monkeypatch.setenv("MESHIVE_API_KEY", "meshive_" + "a" * 64)

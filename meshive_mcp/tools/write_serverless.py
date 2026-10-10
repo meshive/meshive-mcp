@@ -1,4 +1,4 @@
-"""쓰기 도구 — 서빙·태스크 (write 스코프). 계약 §2.3, §2.4."""
+"""Write tools — serving and tasks (write scope)."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -15,9 +15,9 @@ from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool,
 
 
 def register(server: MCPServer) -> None:
-    # --- 서빙 -------------------------------------------------------------------
+    # --- Serving -------------------------------------------------------------------
 
-    @meshive_tool(server, "deploy_serving", annotations=CREATE)
+    @meshive_tool(server, "deploy_serving", title="Deploy Serving", annotations=CREATE)
     async def deploy_serving(ctx: Context[Any, Any], model_registration_id: int, price_cap_per_hour: float,
                              workspace: str | None = None, min_replicas: int = 1, max_replicas: int = 3,
                              autoscale: bool = True, max_context_tokens: int | None = None,
@@ -46,7 +46,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deployment was accepted. Poll the servings tool until status is `active`; it returns the endpoint URL."
         return out
 
-    @meshive_tool(server, "register_model", annotations=CREATE)
+    @meshive_tool(server, "register_model", title="Register Model", annotations=CREATE)
     async def register_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,
                              name: str | None = None, framework: str | None = None, hf_token_id: int | None = None,
                              context_length: int | None = None, operation_id: str | None = None) -> dict[str, Any]:
@@ -65,7 +65,7 @@ def register(server: MCPServer) -> None:
                             "price cap, after showing the user the cost.")
         return out
 
-    @meshive_tool(server, "delete_model", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_model", title="Delete Model", annotations=DESTRUCTIVE)
     async def delete_model(ctx: Context[Any, Any], registration_id: int, workspace: str | None = None,
                            confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a model registration. It fails while a serving of that model is still deployed.
@@ -86,7 +86,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "The registration was deleted."
         return out
 
-    @meshive_tool(server, "scale_serving", annotations=MUTATE)
+    @meshive_tool(server, "scale_serving", title="Scale Serving", annotations=MUTATE)
     async def scale_serving(ctx: Context[Any, Any], serving: int, min_replicas: int | None = None,
                             max_replicas: int | None = None, autoscale: bool | None = None,
                             price_cap_per_hour: float | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
@@ -99,7 +99,7 @@ def register(server: MCPServer) -> None:
                                             price_cap_per_hour=price_cap_per_hour).items() if v is not None}
         async with meshive_client(ctx) as client:
             if not confirm:
-                # 비용이 늘 수 있는 변경만 확인 — 판정은 SDK `Serving.scale_raises_cost` (CLI 와 같은 규칙, 리뷰 P2 #6).
+                # Confirm only changes that can raise cost — decided by the SDK's `Serving.scale_raises_cost` (same rule as the CLI).
                 current = await call(client.get_serving, serving)
                 if current.scale_raises_cost(**requested):
                     new_min = current.min_replicas if min_replicas is None else min_replicas
@@ -116,7 +116,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Accepted. Poll the servings tool to see the new replica counts."
         return out
 
-    @meshive_tool(server, "pause_serving", annotations=MUTATE)
+    @meshive_tool(server, "pause_serving", title="Pause or Resume Serving", annotations=MUTATE)
     async def pause_serving(ctx: Context[Any, Any], serving: int, paused: bool = True,
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Pause (paused=true) or resume (paused=false) a serving. Paused servings stop billing and stop answering requests.
@@ -133,7 +133,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Accepted. Poll the servings tool for the new state."
         return out
 
-    @meshive_tool(server, "delete_serving", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_serving", title="Delete Serving", annotations=DESTRUCTIVE)
     async def delete_serving(ctx: Context[Any, Any], serving: int, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a serving and its endpoint. With confirm=false (default) it only returns the serving's current state;
         call again with confirm=true after the user agreed."""
@@ -148,7 +148,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deletion was accepted."
         return out
 
-    # --- 태스크 -------------------------------------------------------------------
+    # --- Tasks -------------------------------------------------------------------
 
     _TASK_DOC = """`script` is Python source (max 256 KiB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`
@@ -179,7 +179,7 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
         return out
 
     estimate_task.__doc__ = (estimate_task.__doc__ or "") + "\n" + _TASK_DOC
-    meshive_tool(server, "estimate_task", annotations=READ_ONLY)(estimate_task)
+    meshive_tool(server, "estimate_task", title="Estimate Task Price", annotations=READ_ONLY)(estimate_task)
 
     async def submit_task(ctx: Context[Any, Any], name: str, script: str, workspace: str | None = None,
                           image: str | None = None, template_id: int | None = None, requirements: str | None = None,
@@ -213,9 +213,9 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
         return out
 
     submit_task.__doc__ = (submit_task.__doc__ or "") + "\n" + _TASK_DOC
-    meshive_tool(server, "submit_task", annotations=CREATE)(submit_task)
+    meshive_tool(server, "submit_task", title="Submit Task", annotations=CREATE)(submit_task)
 
-    @meshive_tool(server, "stop_task", annotations=MUTATE)
+    @meshive_tool(server, "stop_task", title="Stop Task", annotations=MUTATE)
     async def stop_task(ctx: Context[Any, Any], task: str, operation_id: str | None = None) -> dict[str, Any]:
         """Stop a queued or running task. `task` is the task_id (task_...) from the tasks tool. Billing stops."""
         async with meshive_client(ctx) as client:

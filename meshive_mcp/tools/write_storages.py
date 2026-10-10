@@ -1,4 +1,4 @@
-"""쓰기 도구 — 스토리지 (write 스코프). 계약 §2.2."""
+"""Write tools — storage (write scope)."""
 from __future__ import annotations
 
 import math
@@ -14,8 +14,8 @@ from ._common import CREATE, DESTRUCTIVE, call, meshive_tool, preview
 
 
 def _volume_size(mib: Any) -> str:
-    """볼륨 크기(MiB) → CLI·콘솔과 같은 표기: GiB, 1 GiB 미만은 MiB (LUKS 헤더를 뺀 1 GiB 암호화 볼륨 ≈ 1008 MiB).
-    MiB 숫자에 GB 를 붙이면 100 GiB 볼륨이 '102400.0 GB' 가 된다."""
+    """Volume size (MiB) → the same notation as the CLI and console: GiB, or MiB under 1 GiB (a 1 GiB encrypted volume minus the LUKS header ≈ 1008 MiB).
+    Putting GB on a MiB number turns a 100 GiB volume into '102400.0 GB'."""
     try:
         raw = float(mib)
     except (TypeError, ValueError):
@@ -29,7 +29,7 @@ def _volume_size(mib: Any) -> str:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "create_storage", annotations=CREATE)
+    @meshive_tool(server, "create_storage", title="Create Storage", annotations=CREATE)
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
@@ -56,7 +56,7 @@ def register(server: MCPServer) -> None:
                             "the storages tool once it is `running`.")
         return out
 
-    @meshive_tool(server, "delete_storage", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
     async def delete_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a storage volume and all data on it. `storage` is the pv_name from the storages tool.

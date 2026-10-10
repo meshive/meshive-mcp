@@ -10,7 +10,7 @@ from ._common import READ_ONLY, call, meshive_tool
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "account", annotations=READ_ONLY)
+    @meshive_tool(server, "account", title="Show Account", annotations=READ_ONLY)
     async def account(ctx: Context[Any, Any]) -> dict[str, Any]:
         """Show who the configured API key belongs to and the account's credit balance.
         Call this first when the user asks about their account, balance, or which key is in use.

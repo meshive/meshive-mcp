@@ -19,14 +19,14 @@ def _pod_dict(p: Any, show_secrets: bool = False) -> dict[str, Any]:
     d = to_dict(p)
     d["is_system"] = bool(p.is_downloader)
     if show_secrets:
-        # to_dict 가 가린 비밀값을 이 응답에만 다시 채운다.
+        # Fill back in, for this response only, the secret values to_dict hid.
         d["connect_credentials"] = [{**out, "value": cred.value}
                                     for out, cred in zip(d["connect_credentials"], p.connect_credentials)]
     return d
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "pods", annotations=READ_ONLY)
+    @meshive_tool(server, "pods", title="List Pods", annotations=READ_ONLY)
     async def pods(ctx: Context[Any, Any], workspace: str | None = None, pod: str | None = None,
                    status: str | None = None, include_metrics: bool = False, include_system: bool = False,
                    show_secrets: bool = False, limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
@@ -57,7 +57,7 @@ def register(server: MCPServer) -> None:
         if status:
             items = [p for p in items if p.status.lower() == status.lower()]
         if not include_system:
-            # 웹 콘솔과 동일하게 시스템 downloader 파드는 숨긴다(자산 다운로드용, $0/h, 시스템이 자동 복구).
+            # Like the web console, system downloader pods are hidden (for asset downloads, $0/h, recovered automatically by the system).
             items = [p for p in items if not p.is_downloader]
         page = paginate([_pod_dict(p) for p in items], limit, cursor)
         page["workspace"] = ALL if len(targets) > 1 else targets[0]

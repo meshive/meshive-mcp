@@ -14,7 +14,7 @@ KINDS = ("credit", "earnings")
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "billing_history", annotations=READ_ONLY)
+    @meshive_tool(server, "billing_history", title="Show Billing History", annotations=READ_ONLY)
     async def billing_history(ctx: Context[Any, Any], kind: str = "credit", since: str | None = None,
                               until: str | None = None, limit: int | None = None,
                               cursor: str | None = None) -> dict[str, Any]:

@@ -1,9 +1,9 @@
-"""예외 → 모델용 지시문 번역.
+"""Exceptions → instructions for the model.
 
-MCP 에서 `isError: true` 응답은 모델이 읽고 스스로 다음 행동을 고른다. 그래서 스택트레이스나
-서버 원문 대신 **무엇이 잘못됐고(code, message) 다음에 무엇을 해야 하는지(next_step)** 를
-JSON 한 덩어리로 돌려준다. 재시도 여부는 반드시 문장으로 적는다 — 429 를 그냥 넘기면
-모델은 즉시 재시도하고 상황을 악화시킨다.
+In MCP, the model reads an `isError: true` response and picks its next action itself. So instead of a stack trace
+or the raw server text, it gets one JSON object saying **what went wrong (code, message) and what to do next (next_step)**.
+Always say in words whether to retry — if a 429 is passed through as-is,
+the model retries immediately and makes things worse.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from meshive.exceptions import (
 CONSOLE_URL = "https://console.meshive.ai"
 
 KEYS_PAGE = f"{CONSOLE_URL}, workspace Settings > API keys"
-# 키를 바꿔 끼우는 법 — 키는 만료되고(write 기본 30일), Claude Code 의 `mcp add` 는 같은 이름을 거절한다.
+# How to swap keys — keys expire (write keys default to 30 days), and Claude Code's `mcp add` rejects a name that already exists.
 REPLACE_KEY = ("replace the old key in this MCP server's configuration (in Claude Code, run "
                "`claude mcp remove meshive` first, then add it again)")
 
@@ -66,8 +66,8 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
                       "Fix the argument and call the tool again.", **extra)
 
 
-# 409 의 종류는 서버 detail.title 로 구분된다 (WSB routers/sdk/write*.py). 부가 정보(availability, pricePerHourUsd,
-# linkedPods, available)는 detail 에 그대로 실려 있어 모델에게 넘긴다.
+# The kind of 409 is told apart by the server's detail.title. Extra info (availability, pricePerHourUsd,
+# linkedPods, available) is carried in detail as-is and passed on to the model.
 _CONFLICT_CODES = {
     "operation outcome unknown": ("operation_outcome_unknown", "Check operation_status and the recorded task/transaction. "
                                    "The request will not execute again; pending/unknown records require reconciliation."),
@@ -78,7 +78,7 @@ _CONFLICT_CODES = {
     "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
                                    "details to the user and suggest a smaller request, a different GPU, or trying later. "
                                    "Do not retry blindly."),
-    # 생성 요청의 응답을 못 받고 재시도한 뒤에 오는 409 가 흔하다 — "다른 이름으로" 만 안내하면 모델이 자원을 하나 더 만든다.
+    # A 409 after retrying a create whose response was lost is common — only saying "use another name" makes the model create one more resource.
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one."),
@@ -103,7 +103,7 @@ def _conflict(exc: ConflictError) -> ToolError:
 
 
 def translate(exc: BaseException) -> ToolError:
-    """SDK/네트워크 예외를 ToolError 로. 이미 ToolError 면 그대로."""
+    """SDK/network exceptions → ToolError. A ToolError passes through unchanged."""
     if isinstance(exc, ToolError):
         return exc
     if isinstance(exc, ConfigurationError):
@@ -116,12 +116,17 @@ def translate(exc: BaseException) -> ToolError:
         if "scope" in low:
             return tool_error("write_scope_required", msg, NEXT_STEP_WRITE_SCOPE)
         if "member of workspace" in low or "not a member" in low:
-            # 백엔드는 존재하지 않는/남의 워크스페이스 id 를 403 으로 답한다 — 모델 입장에서는 "잘못된 id".
+            # The backend answers a nonexistent or someone else's workspace id with 403 — for the model that's a "wrong id".
             return tool_error("unknown_workspace", msg,
                               "The workspace id is wrong or not the user's. Call the workspaces tool and use "
                               "the `namespace_name` value (not the label).")
         return tool_error("forbidden", msg, NEXT_STEP_FORBIDDEN)
     if isinstance(exc, NotFoundError):
+        if exc.title == "Pod Creation Failed":
+            # The pod is gone because creating it failed, not because of a wrong id — re-listing won't find it.
+            return tool_error("pod_creation_failed", exc.message or "Pod creation failed.",
+                              "Tell the user the reason. Don't retry this pod; fix the cause (template, command, "
+                              "inputs) and create a new pod.")
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)
     if isinstance(exc, RateLimitError):
         wait = int(exc.retry_after) if exc.retry_after else 30
@@ -158,5 +163,5 @@ def translate(exc: BaseException) -> ToolError:
                           NEXT_STEP_UNAVAILABLE.format(retry_after=15), retry_after=15)
     if isinstance(exc, MeshiveError):
         return tool_error("sdk_error", str(exc), "Tell the user. Do not retry.")
-    # 그 외는 서버 버그로 간주 — SDK 가 UnexpectedToolError 로 감싸고 traceback 을 로그에 남긴다.
+    # Anything else is treated as a server bug — the SDK wraps it in UnexpectedToolError and logs the traceback.
     raise exc

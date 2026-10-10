@@ -1,10 +1,10 @@
-"""SDK dataclass → 모델용 dict.
+"""SDK dataclass → dict for the model.
 
-`raw`(백엔드 원문)는 뺀다 — 크기만 키우고 정규화 필드와 중복이다. datetime 은 ISO 문자열.
+`raw` (the backend's original) is dropped — it only adds size and duplicates the normalized fields. datetimes become ISO strings.
 
-금액 필드에는 `<필드>_display` 를 함께 싣는다("$0.068"). 원본 숫자는 모델이 합계를 계산할 때
-필요하므로 그대로 두고, **보여줄 때는 display 를 쓰게** 한다 — 그래야 웹 콘솔과 같은 금액이
-보인다(콘솔은 $/hr 3자리, 그 외 2자리). 규칙은 `money.py`, 소스는 콘솔 `Formatter.tsx`.
+Amount fields come with a `<field>_display` ("$0.068"). The original number stays because the model needs it
+to compute totals, but **it should use display when showing amounts** — that way the amounts match
+the web console ($/hr with 3 decimals, everything else 2). The rules live in `money.py`.
 """
 from __future__ import annotations
 
@@ -17,17 +17,19 @@ from typing import Any
 from . import money
 
 _DROP = {"raw"}
+# Fields per dataclass that aren't sent to the model. Credit's paid/bonus are leftovers of the split from before free credits were retired (2026-10) —
+# the server sends paid = balance, bonus = 0, and the SDK keeps the fields only for backward compatibility. Sending them makes the model explain a split that no longer exists.
+_DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"}}
 
-# 시간당 요금은 어느 dataclass에 있든 필드명이 같다 → 이름 하나로 판정(콘솔 formatHourlyUsd, 3자리).
+# Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
 _HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour"}
-# 그 외 금액은 이름만으로는 구분이 안 된다(예: DailyCost.pod 는 금액, WorkspaceResources.pod 는 개수)
-# → dataclass 이름과 함께 본다. 콘솔 formatUsd(2자리).
+# Other amounts can't be told apart by name alone (e.g. DailyCost.pod is an amount, WorkspaceResources.pod a count)
+# → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {
-    "Machine": {"earning_hourly"},                    # 콘솔 호스트 화면은 수익 /hr 도 2자리다
+    "Machine": {"earning_hourly"},                    # the console's host screen shows earnings /hr with 2 decimals too
     "WorkspaceDetail": {"weekly_avg_daily_cost"},
     "DailyCost": {"pod", "storage", "serverless", "task", "asset"},
-    "Credit": {"balance", "paid_balance", "bonus_balance",
-               "auto_recharge_threshold", "auto_recharge_amount"},
+    "Credit": {"balance", "auto_recharge_threshold", "auto_recharge_amount"},
     "CreditHistoryEntry": {"amount"},
     "Earnings": {"current_hourly", "daily", "accumulated_until_payout"},
     "Task": {"cost_so_far", "total_cost"},
@@ -35,14 +37,14 @@ _USD_FIELDS: dict[str, set[str]] = {
     "StorageEstimate": {"price_per_gb_month"},
     "TaskEstimate": {"max_cost"},
 }
-# 파드 견적 내역은 {"gpu": "0.068", ...} 형태의 시간당 금액 묶음 — 콘솔 Receipt 도 줄마다 3자리다.
+# A pod estimate breakdown is a set of hourly amounts like {"gpu": "0.068", ...} — the console's Receipt shows 3 decimals per line too.
 _HOURLY_DICT_FIELDS = {("PodEstimate", "breakdown")}
-# 소수점 또는 지수가 있는 숫자 문자열만 건드린다. "457" 같은 정수 문자열은 id 일 수 있어 그대로 둔다.
+# Only numeric strings with a decimal point or exponent are touched. Integer strings like "457" may be ids, so they stay as-is.
 _DECIMAL_STR = re.compile(r"^-?(\d+\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)$")
 
 
 def normalize_number(value: str) -> str:
-    """백엔드 Decimal 문자열을 사람이 읽는 형태로: "0E-8" → "0", "0.87741500" → "0.877415"."""
+    """Backend Decimal strings in human-readable form: "0E-8" → "0", "0.87741500" → "0.877415"."""
     if len(value) > 128 or not _DECIMAL_STR.fullmatch(value):
         return value
     try:
@@ -61,9 +63,10 @@ def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
         usd_fields = _USD_FIELDS.get(cls, frozenset())
+        drop = _DROP_BY_CLASS.get(cls, frozenset())
         out: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
-            if f.name in _DROP:
+            if f.name in _DROP or f.name in drop:
                 continue
             value = getattr(obj, f.name)
             out[f.name] = to_dict(value)
@@ -77,8 +80,8 @@ def to_dict(obj: Any) -> Any:
                 out[f.name] = {str(k): normalize_number(v) if isinstance(v, str) else to_dict(v)
                                for k, v in value.items()}
                 out[f"{f.name}_display"] = {str(k): money.hourly(v) for k, v in value.items()}
-        # 비밀 접속값(ComfyUI 의 ACCESS_PASSWORD 등)은 어느 응답에서든 가린다 — start/stop/delete 미리보기도 Pod 을
-        # 통째로 싣기 때문에 여기서 막는다. 값은 pods 도구의 show_secrets=true 만 다시 채운다(유저 결정 2026-10-03).
+        # Secret connect values (ComfyUI's ACCESS_PASSWORD, ...) are hidden in every response — the start/stop/delete previews
+        # carry the whole Pod too, so they're blocked here. Only the pods tool with show_secrets=true fills the values back in.
         if cls == "ConnectCredential" and getattr(obj, "is_secret", False):
             out["value"] = None
         return out

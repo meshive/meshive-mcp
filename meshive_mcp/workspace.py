@@ -1,11 +1,11 @@
-"""워크스페이스 인자 해석 규칙 (계약 0.1).
+"""Rules for resolving the workspace argument.
 
-- 명시된 값이 16자리 hex 면 id 로 그대로 쓴다.
-- 그 외 문자열은 **라벨**(workspace_name)로 보고 id 를 찾아준다 — 실측에서 모델이 라벨을 id 자리에
-  넣는 실수가 잦았다. 못 찾으면 `unknown_workspace` 로 후보 목록과 함께 알린다.
-- "all" 은 목록 도구에서 모든 워크스페이스를 뜻한다(CLI `pods --all` 과 동일).
-- 생략: 1개면 자동 선택, 0개면 에러, 여러 개면 목록과 함께 "사용자에게 물어보라" 응답.
-서버는 기본값을 저장하지 않는다(무상태). 모델이 대화 안에서 기억한다.
+- A given value that is 16 hex characters is used as the id as-is.
+- Any other string is treated as a **label** (workspace_name) and its id is looked up — in practice models often put
+  the label where the id goes. If not found, `unknown_workspace` is returned with the candidate list.
+- "all" means every workspace in list tools (same as the CLI's `pods --all`).
+- Omitted: picked automatically if there's 1, an error if 0, and an "ask the user" response with the list if several.
+The server stores no default (stateless). The model remembers it within the conversation.
 """
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ def _by_label(workspaces: list[Workspace], label: str) -> str:
 
 
 async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool = True) -> str | dict[str, Any] | None:
-    """단일 워크스페이스 id 를 돌려준다. 여러 개 중 고를 수 없으면 needs_input dict.
+    """Return a single workspace id. A needs_input dict if one can't be picked from several.
 
-    required=False 면 생략을 "지정 안 함"(None) 으로 통과시킨다(templates 처럼 생략에 의미가 있는 도구).
+    With required=False, omission passes through as "not specified" (None) (for tools where omission means something, like templates).
     """
     if workspace is not None and workspace.strip():
         workspace = workspace.strip()
@@ -71,7 +71,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
 
 
 async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str] | dict[str, Any]:
-    """목록 도구용: "all" 이면 모든 id, 아니면 resolve 결과 하나를 리스트로."""
+    """For list tools: every id for "all", otherwise the single resolve result as a list."""
     if workspace is not None and workspace.strip().lower() == ALL:
         workspaces = await client.list_workspaces()
         if not workspaces:
@@ -92,22 +92,22 @@ _POD_NAME_RE = re.compile(r"^[0-9a-f]{16}-\d+$")
 
 
 def _is_downloader(pod: Any) -> bool:
-    """자산 준비용 시스템 파드. 라벨(user_alias)이 비어 있다."""
+    """System pod for asset preparation. Its label (user_alias) is empty."""
     return bool(getattr(pod, "raw", {}).get("isDownloader"))
 
 
 async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
-    """`pod` 가 pod_name(16 hex + "-N") 이면 그대로, 아니면 라벨(user_alias)로 보고 목록에서 찾는다.
-    실측(2026-09-09): 모델이 방금 만든 파드를 라벨로 조회해 not_found 를 받고 목록을 다시 훑었다."""
+    """If `pod` is a pod_name (16 hex + "-N") it's used as-is; otherwise it's treated as a label (user_alias) and looked up in the list.
+    Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again."""
     pod = (pod or "").strip()
     if not pod:
-        # 빈 문자열을 라벨로 넘기면 user_alias 가 빈 **시스템 downloader 파드**와 매치돼 stop/delete/logs 가
-        # 그 파드로 나갔다(2026-09-09 리뷰 P3 #10). 인자 누락은 여기서 끊는다.
+        # An empty string passed as a label matched the **system downloader pod**, whose user_alias is empty, so stop/delete/logs
+        # went to that pod. A missing argument is cut off here.
         raise invalid_argument("`pod` is required — pass a pod_name or the pod's display name.")
     if _POD_NAME_RE.match(pod):
         return pod
     pods = await client.list_pods(workspace)
-    # 라벨 매칭에서도 downloader 를 뺀다 — 후보 목록에서 이미 빼고 있었으니 매칭만 어긋나 있었다.
+    # Downloaders are left out of label matching too — they were already left out of the candidate list, only matching was off.
     hits = [p for p in pods if not _is_downloader(p) and (p.user_alias or "").lower() == pod.lower()]
     if len(hits) == 1:
         return hits[0].pod_name

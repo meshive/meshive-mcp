@@ -36,6 +36,8 @@ def test_status_mapping(status, code):
 
 def test_not_found_and_network():
     assert _body(NotFoundError(404, "no pod"))["code"] == "not_found"
+    failed = _body(NotFoundError(404, "failed to start: CrashLoopBackOff", title="Pod Creation Failed"))
+    assert failed["code"] == "pod_creation_failed" and "CrashLoopBackOff" in failed["message"]
     assert _body(httpx.ConnectError("boom"))["code"] == "temporarily_unavailable"
 
 
