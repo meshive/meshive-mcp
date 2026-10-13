@@ -22,14 +22,16 @@ CLIENT_HEADER = "X-Meshive-Client"
 
 
 def _new_client(key: str, label: str) -> AsyncMeshive:
-    client = AsyncMeshive(key, base_url=settings.base_url, timeout=settings.request_timeout,
-                          max_retries=1)
-    http = getattr(client, "_client", None)
-    if http is not None:
-        # Set on httpx's default headers, which are merged with each request's headers.
-        http.headers[CLIENT_HEADER] = label
-        http.headers["User-Agent"] = f"meshive-mcp/{__version__} meshive-python/{_sdk_version()}"
-    return client
+    # Passed through the SDK's `headers=` so they land on every request. The SDK sets its own User-Agent per
+    # request, which would override anything put on the httpx client's default headers — so the API would see
+    # the bare SDK instead of this server.
+    return AsyncMeshive(key, base_url=settings.base_url, timeout=settings.request_timeout, max_retries=1,
+                        headers={CLIENT_HEADER: label, "User-Agent": user_agent()})
+
+
+def user_agent() -> str:
+    """What this server sends as User-Agent to the Meshive API: its own version, then the SDK's."""
+    return f"meshive-mcp/{__version__} meshive-python/{_sdk_version()}"
 
 
 def _sdk_version() -> str:

@@ -3,6 +3,12 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.0.1
+
+- Requests the server makes to the Meshive API now identify it as `meshive-mcp/<version> meshive-python/<SDK version>`
+  in the `User-Agent` header. 1.0.0 sent the bare SDK's User-Agent, so the API could not tell the hosted server from a
+  script using the SDK directly. Nothing changes for tools or clients.
+
 ## v1.0.0
 
 The first stable release of the Meshive MCP server. Claude Code, Codex, Cursor, Gemini CLI and other MCP clients can
