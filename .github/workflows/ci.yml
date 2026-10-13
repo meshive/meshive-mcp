@@ -1,0 +1,151 @@
+# Test → image build and smoke test → (only on dev/real pushes) publish the public Docker Hub image docker.io/meshive/meshive-mcp.
+#
+#   dev  → :dev, :dev-<short SHA>      SDK pinned to the meshive-python **dev branch commit at build time**
+#   real → :latest, :<version>(_version.py), :real-<short SHA>   SDK is meshive from PyPI
+#
+# Only commits that pass the test job are published. Which MCP commit runs with which SDK commit is recorded in the
+# image labels (org.opencontainers.image.revision, ai.meshive.sdk.revision) and /healthz (revision, sdk_version, sdk_revision).
+#
+# The image is public on Docker Hub so anyone can run it with `docker run meshive/meshive-mcp`.
+name: CI
+
+on:
+  push:
+    branches: [dev, real]
+  pull_request:
+
+env:
+  IMAGE: docker.io/meshive/meshive-mcp
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # dev/PRs install with the SDK dev branch — the pyproject pin may require an SDK that isn't on PyPI yet.
+      # It must be the same pip call: called separately, the second pip looks up meshive on PyPI again (same reason as the Dockerfile comment).
+      # real uses PyPI as-is — the same release-order gate as the image job's pre-check.
+      - name: Install (SDK from its dev branch except on real)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "real" ]; then
+            pip install -e ".[dev]"
+          else
+            pip install "meshive @ git+https://github.com/meshive/meshive-python@dev" -e ".[dev]"
+          fi
+      - run: pytest
+
+  image:
+    name: Build, smoke-test, publish (dev/real push)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Decide the SDK source and tags in one place. Only real pushes use PyPI; everything else (dev pushes, PRs) uses the **current commit** of the SDK dev branch —
+      # pinning a SHA instead of the moving @dev means rebuilding the same image installs the same SDK, and what went in is recorded.
+      - name: Resolve SDK source and image tags
+        id: meta
+        run: |
+          sha="${GITHUB_SHA::12}"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "real" ]; then
+            version="$(python3 -c 'import re,pathlib; print(re.search(r"\"([^\"]+)\"", pathlib.Path("meshive_mcp/_version.py").read_text()).group(1))')"
+            tags="$IMAGE:latest,$IMAGE:$version,$IMAGE:real-$sha"
+            sdk_spec=""       # real uses meshive from PyPI (pre-check below)
+            sdk_rev=""        # the installed version shows up as sdk_version in /healthz
+          else
+            sdk_rev="$(git ls-remote https://github.com/meshive/meshive-python refs/heads/dev | cut -f1)"
+            if [ -z "$sdk_rev" ]; then
+              echo "::error::could not resolve meshive-python dev branch"; exit 1
+            fi
+            tags="$IMAGE:dev,$IMAGE:dev-$sha"
+            sdk_spec="meshive @ git+https://github.com/meshive/meshive-python@${sdk_rev}"
+          fi
+          {
+            echo "tags=$tags"
+            echo "sdk_spec=$sdk_spec"
+            echo "sdk_rev=$sdk_rev"
+          } >> "$GITHUB_OUTPUT"
+          echo "tags=$tags"; echo "sdk=${sdk_spec:-pypi} rev=${sdk_rev:-pypi}"
+
+      # The real image installs meshive from PyPI (Dockerfile: empty MESHIVE_SDK_SPEC → `pip install .`). If PyPI has no release
+      # satisfying the pyproject requirement, the build dies late with a pip resolution failure — check first with the same resolver (pip, no --pre)
+      # and point out the order (meshive-python tag and PyPI release → meshive-mcp real). The pin decides what passes.
+      - name: Check the meshive SDK release is on PyPI (real only)
+        if: github.event_name == 'push' && github.ref_name == 'real'
+        run: |
+          spec="$(python3 - <<'PY'
+          import re, tomllib, pathlib
+          deps = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["dependencies"]
+          print(next(d for d in deps if re.match(r"^meshive\s*([<>=!~]|$)", d)))
+          PY
+          )"
+          echo "required by pyproject: $spec"
+          if ! python3 -m pip download --quiet --no-deps --dest /tmp/meshive-sdk-check "$spec"; then
+            echo "::error::No meshive release on PyPI satisfies '$spec'. Publish meshive-python first (tag vX.Y.Z -> PyPI), then merge meshive-mcp to real."
+            exit 1
+          fi
+
+      - name: Build image (no push)
+        run: |
+          docker build \
+            --build-arg MESHIVE_SDK_SPEC="${{ steps.meta.outputs.sdk_spec }}" \
+            --build-arg MESHIVE_MCP_REVISION="$GITHUB_SHA" \
+            --build-arg MESHIVE_SDK_REVISION="${{ steps.meta.outputs.sdk_rev }}" \
+            -t meshive-mcp:ci .
+
+      # Check that /healthz comes up and the baked-in revisions read back as-is — a label that isn't visible at runtime is useless for verifying deployments.
+      - name: Smoke-test /healthz
+        run: |
+          docker run -d --name mcp -p 8080:8080 meshive-mcp:ci
+          for i in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:8080/healthz)"; then
+              echo "$body"
+              echo "$body" | python3 -c "import json,sys,os; b=json.load(sys.stdin); assert b['status']=='ok' and b['revision']==os.environ['GITHUB_SHA'], b"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs mcp
+          exit 1
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # arm64 too — so `docker run meshive/meshive-mcp` works on Apple Silicon.
+      - name: Set up QEMU
+        if: github.event_name == 'push'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        if: github.event_name == 'push'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            MESHIVE_SDK_SPEC=${{ steps.meta.outputs.sdk_spec }}
+            MESHIVE_MCP_REVISION=${{ github.sha }}
+            MESHIVE_SDK_REVISION=${{ steps.meta.outputs.sdk_rev }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
