@@ -66,6 +66,15 @@ CI runs the tests, builds the image and smoke-tests it. Pushes to `dev` and `rea
 `pyproject.toml` pins a range of `meshive` versions. A `real` build checks first that PyPI has a release in that
 range, so release the SDK before merging an MCP change that needs it.
 
+Every push to `real` republishes `:latest` and `:<version>` for the version in `meshive_mcp/_version.py`, so a change
+that reaches `real` without a version bump overwrites the `:<version>` image with a different commit. Bump the
+version in every change that goes to `real`.
+
+To release a version: bump `meshive_mcp/_version.py`, add its `## vX.Y.Z` section to `CHANGELOG.md`, merge to
+`real` and wait for the `:<version>` image, then push the tag `vX.Y.Z` on that commit. The Release workflow checks
+that the tag matches the package version and creates the GitHub Release with that changelog section as its notes
+(`scripts/release-notes.sh`). Pre-release tags such as `v1.1.0rc1` are marked as pre-releases.
+
 ## Verifying a deployment
 
 `GET /healthz` returns `version`, `revision` (the MCP commit), `sdk_version` and `sdk_revision` (the SDK commit,

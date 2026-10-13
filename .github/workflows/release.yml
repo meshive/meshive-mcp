@@ -1,0 +1,39 @@
+# Tag vX.Y.Z → GitHub Release whose notes are that version's section of CHANGELOG.md.
+#
+# The image is not built here: ci.yml publishes docker.io/meshive/meshive-mcp:<version> on the push to real, so tag
+# the commit that is on real after that image is up.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches package version
+        # Read _version.py as a file — importing the package needs its dependencies installed.
+        run: |
+          pkg="v$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' meshive_mcp/_version.py)"
+          if [ -z "${pkg#v}" ] || [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != package version $pkg"
+            exit 1
+          fi
+      - name: Create GitHub Release
+        # Release notes come from this version's section in CHANGELOG.md (English, written for users).
+        # Fails if the section is missing — so raw commit/tag messages never become the public notes.
+        # Pre-releases (vX.Y.ZaN, bN, rcN) are marked as such, so they never show as the latest release.
+        run: |
+          scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
+          flags=""
+          if printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$'; then flags="--prerelease"; fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md $flags
+        env:
+          GH_TOKEN: ${{ github.token }}
