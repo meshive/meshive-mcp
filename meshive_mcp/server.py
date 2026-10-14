@@ -58,10 +58,12 @@ and all retries; for writes without a preview, generate a UUID before the first 
 call operation_status with that ID and the original operation_lookup method/path. done records API acceptance, \
 not resource completion; pending/unknown require reconciliation. not_found alone never authorizes a new ID.
 
-Moving pods: start_pod with placement=any_node can permanently delete unpreserved workspace files. \
-confirm=true approves resuming billing; allow_data_loss=true requires separate explicit consent for this pod's move. \
-Show storage charges separately. Pod/task price caps cover final compute only, including CPU/RAM; attached or automatic \
-storage and Asset Hub retention are separate. Task input fetching can add compute time, so estimates are not total-bill ceilings.
+Moving pods: start_pod with placement=any_node or wait_any_node can move the pod to another machine, which \
+permanently deletes unpreserved workspace files. confirm=true approves resuming billing; allow_data_loss=true requires \
+separate explicit consent for this pod's move. wait_same_node and wait_any_node leave the pod `waiting` until a machine \
+has room. Show storage charges separately. Pod/task price caps limit the final compute rate, including CPU/RAM; before \
+a pod is created its cap is also checked against the estimate, which includes new local_volumes. Existing storage and \
+Asset Hub retention are separate. Task input fetching can add compute time, so estimates are not total-bill ceilings.
 
 Secrets: `pods` with show_secrets=true and `ssh_access` return passwords. Ask for them only when the user wants to log in, \
 give them to that user and nobody else, and never write them into files, commits or other tools.

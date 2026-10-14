@@ -44,18 +44,29 @@ async def test_unknown_write_error_retains_original_key(mcp_client, fake, with_k
     assert writes(fake, 'submit_task')[0][2]['idempotency_key'] == 'task-timeout-0001'
 
 
-async def test_any_node_requires_separate_data_loss_consent(mcp_client, fake, with_key):
+@pytest.mark.parametrize('placement', ['any_node', 'wait_any_node'])
+async def test_moving_placements_require_separate_data_loss_consent(mcp_client, fake, with_key, placement):
+    # wait_any_node may also land on another machine, so it needs the same consent as any_node.
     def setup(client):
         for pod in client.pods:
             pod.has_unpreserved_workspace = True
     fake['setup'] = setup
-    args = {'pod': 'pod-2', 'placement': 'any_node', 'confirm': True, 'operation_id': 'move-pod-0001'}
+    args = {'pod': 'pod-2', 'placement': placement, 'confirm': True, 'operation_id': 'move-pod-0001'}
     blocked = payload(await mcp_client.call_tool('start_pod', args))
     assert blocked['confirmed'] is False and blocked['requires_data_loss_consent'] is True
     assert 'permanently deleted' in blocked['question'] and not writes(fake, 'start_pod')
     result = payload(await mcp_client.call_tool('start_pod', {**args, 'allow_data_loss': True}))
     assert result['accepted'] is True
     assert writes(fake, 'start_pod')[0][2]['allow_data_loss'] is True
+    assert writes(fake, 'start_pod')[0][2]['placement'] == placement
+
+
+@pytest.mark.parametrize('placement', ['same_node', 'wait_same_node'])
+async def test_same_machine_placements_need_no_data_loss_consent(mcp_client, fake, with_key, placement):
+    # The fake pod doesn't say whether its workspace is preserved (None), which a moving placement treats as a loss.
+    result = payload(await mcp_client.call_tool('start_pod', {'pod': 'pod-2', 'placement': placement, 'confirm': True,
+                                                              'operation_id': 'stay-pod-0001'}))
+    assert result['accepted'] is True and writes(fake, 'start_pod')[0][2]['allow_data_loss'] is False
 
 
 def test_strings_are_opaque_and_numeric_formatting_cannot_expand_exponents():

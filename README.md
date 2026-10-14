@@ -126,7 +126,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | --- | --- |
 | Account and billing | `account`, `billing_history` |
 | Workspaces | `workspaces` |
-| GPUs and templates | `gpus` (also works without a key), `templates` |
+| GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates` |
 | Pods | `pods`, `estimate_pod`, `create_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
 | Storage | `storages`, `create_storage`, `delete_storage` |
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |

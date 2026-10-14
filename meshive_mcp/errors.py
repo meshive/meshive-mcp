@@ -90,16 +90,76 @@ _CONFLICT_CODES = {
                                            "matching list tool instead of resubmitting."),
     "vram tier required": ("vram_tier_required", "Pass `gpu_vram_gb` — this GPU model comes in several VRAM tiers "
                                                  "(see `available`)."),
+    # start_pod: nothing can take the pod right now (same_node or any_node).
+    "no available node": ("no_available_node", "No machine can take the pod right now. Ask the user whether to wait: "
+                                               "placement wait_same_node waits for its original machine, wait_any_node "
+                                               "for any machine (it needs the same data-loss consent as any_node). "
+                                               "Otherwise try again later."),
+    # start_pod same_node/wait_same_node when the saved hardware no longer matches the original machine.
+    "original node can't run this pod": ("same_node_spec_mismatch",
+                                         "Waiting for its original machine won't help. Offer placement any_node or "
+                                         "wait_any_node instead; start_pod's preview says whether moving needs "
+                                         "data-loss consent."),
 }
+
+# The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength) is passed on.
+_BAD_REQUEST_CODES = {
+    "local storage not attachable": ("local_storage_not_attachable",
+                                     "That storage is local to one machine, and a new pod can only attach network "
+                                     "storage. Attach network storage in `volumes`, or create new local storage with the "
+                                     "pod in `local_volumes`; ask the user which they want."),
+    "local storage not supported": ("local_storage_not_supported",
+                                    "create_storage makes network storage only. Use storage_type \"nfs\", or create "
+                                    "local storage together with a pod through create_pod `local_volumes`."),
+    "local volume not allowed": ("local_volume_not_allowed",
+                                 "Spot pods can't have local storage. Drop `local_volumes` and use network storage in "
+                                 "`volumes`, or use rental_type \"demand\"; ask the user which."),
+    "command too long": ("command_too_long",
+                         "`command` is limited to `maxLength` characters. Put the long script in a file (in the image, "
+                         "on storage or in an input asset) and make `command` run that file."),
+    "cpu line not for gpu pods": ("cpu_line_not_for_gpu_pods",
+                                  "`cpu_line` is for CPU pods only. Omit it when passing `gpu_model`."),
+    "vcpu not offered": ("vcpu_not_offered", "Use one of the `allowed` values for `vcpu` (the sizes the console offers "
+                                             "for this hardware), or omit it for the default, then estimate again."),
+    "ram not offered": ("ram_not_offered", "Use one of the `allowed` values for `ram_gb` (the sizes the console offers "
+                                           "for this hardware and vCPU count), or omit it for the default, then "
+                                           "estimate again."),
+    "port in use": ("port_in_use", "The template already opens this `port`, or it is listed twice. Leave it out of "
+                                   "`ports`; each port can be listed only once."),
+    "port name in use": ("port_name_in_use", "Another port (the template's or yours) already has this `name`. Give the "
+                                             "port in `ports` a different name."),
+    "required env missing": ("required_env_missing", "The template needs values for the env variables in `keys`. Ask "
+                                                     "the user for them (never invent passwords or secrets), pass them "
+                                                     "in `env` and list secret ones in `secret_keys`."),
+    "duplicate mount path": ("duplicate_mount_path", "Two volumes use the same mount_path. Give every entry of `volumes` "
+                                                     "and `local_volumes` its own path."),
+    "storage required": ("storage_required", "This template needs a persistent volume. Attach network storage in "
+                                             "`volumes` or create local storage in `local_volumes`; ask the user which."),
+}
+
+
+def _detail_extras(exc: MeshiveAPIError) -> dict[str, Any]:
+    """Everything in the server's detail object except title/message, passed on to the model as-is.
+    A server `code` (e.g. same_node_spec_mismatch) is kept as `server_code` so it doesn't clash with our own `code`."""
+    detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
+    if not isinstance(detail, dict):
+        return {}
+    reserved = {"code", "next_step"}
+    return {(f"server_{k}" if k in reserved else str(k)): v for k, v in detail.items() if k not in ("title", "message")}
 
 
 def _conflict(exc: ConflictError) -> ToolError:
     title = (exc.title or "").strip().lower()
     code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
                                                               "before retrying."))
-    detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
-    extra = {k: v for k, v in (detail or {}).items() if k not in ("title", "message")} if isinstance(detail, dict) else {}
-    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **extra)
+    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **_detail_extras(exc))
+
+
+def _bad_request(exc: MeshiveAPIError) -> ToolError:
+    title = (exc.title or "").strip().lower()
+    code, next_step = _BAD_REQUEST_CODES.get(title, ("invalid_request", "The server rejected the request. Fix the "
+                                                                        "arguments as described and retry once."))
+    return tool_error(code, exc.message or exc.title or f"HTTP {exc.status_code}", next_step, **_detail_extras(exc))
 
 
 def translate(exc: BaseException) -> ToolError:
@@ -148,8 +208,7 @@ def translate(exc: BaseException) -> ToolError:
             return tool_error("conflict", msg,
                               "Check the current state with the matching list tool before retrying.")
         if status in (400, 422):
-            return tool_error("invalid_request", msg,
-                              "The server rejected the request. Fix the arguments as described and retry once.")
+            return _bad_request(exc)
         if status == 503:
             return tool_error("temporarily_unavailable", msg, NEXT_STEP_UNAVAILABLE.format(retry_after=30),
                               retry_after=30)
@@ -163,5 +222,9 @@ def translate(exc: BaseException) -> ToolError:
                           NEXT_STEP_UNAVAILABLE.format(retry_after=15), retry_after=15)
     if isinstance(exc, MeshiveError):
         return tool_error("sdk_error", str(exc), "Tell the user. Do not retry.")
+    if type(exc) is ValueError:
+        # The SDK checks argument shapes (local_volumes items, mount paths, ...) before sending and raises a plain
+        # ValueError that says what is wrong; nothing was sent.
+        return invalid_argument(str(exc) or "Invalid argument.")
     # Anything else is treated as a server bug — the SDK wraps it in UnexpectedToolError and logs the traceback.
     raise exc

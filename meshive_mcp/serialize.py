@@ -23,6 +23,9 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
 
 # Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
 _HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour"}
+# Hourly unit prices whose names don't say "per_hour" → checked together with the dataclass name. The console's CPU
+# picker shows the per-core and per-GiB RAM rates of a line with 3 decimals, like every other hourly rate.
+_HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "ram_price_per_gb"}}
 # Other amounts can't be told apart by name alone (e.g. DailyCost.pod is an amount, WorkspaceResources.pod a count)
 # → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {
@@ -63,6 +66,7 @@ def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
         usd_fields = _USD_FIELDS.get(cls, frozenset())
+        hourly_fields = _HOURLY_FIELDS | _HOURLY_FIELDS_BY_CLASS.get(cls, set())
         drop = _DROP_BY_CLASS.get(cls, frozenset())
         out: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
@@ -70,7 +74,7 @@ def to_dict(obj: Any) -> Any:
                 continue
             value = getattr(obj, f.name)
             out[f.name] = to_dict(value)
-            if f.name in _HOURLY_FIELDS:
+            if f.name in hourly_fields:
                 out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
                 out[f"{f.name}_display"] = money.hourly(value)
             elif f.name in usd_fields:

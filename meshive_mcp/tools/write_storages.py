@@ -34,13 +34,15 @@ def register(server: MCPServer) -> None:
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Create a storage volume of `size_gb` GiB. It is billed hourly by capacity for as long as it exists, mounted or not.
+        """Create a network (nfs) storage volume of `size_gb` GiB that any pod in the workspace can attach.
+        It is billed hourly by capacity for as long as it exists, mounted or not.
         With confirm=false (default) it only returns the estimate; call again with confirm=true after the user agreed.
-        `storage_type` "nfs" (network, attachable to any pod; supports `encrypted` at-rest encryption) or "hostPath" (local,
-        faster, single machine; cannot be encrypted).
+        `encrypted` turns on at-rest encryption. Local storage can't be created on its own: create it together with a
+        pod through create_pod `local_volumes`. `storage_type` stays "nfs" ("hostPath" is refused); `disk_type` and
+        `region` are accepted for compatibility and ignored.
         The volume appears in the storages tool shortly after; attach it to a pod with create_pod `volumes`."""
-        kwargs = dict(storage_type=storage_type, disk_type=disk_type, encrypted=encrypted, region=region,
-                      max_price_per_hour=max_price_per_hour)
+        # disk_type and region are ignored by the server, so they are accepted here and not sent.
+        kwargs = dict(storage_type=storage_type, encrypted=encrypted, max_price_per_hour=max_price_per_hour)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -48,7 +50,7 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 est = await call(client.estimate_storage, name, size_gb, workspace=ws, **kwargs)
                 return preview("create_storage", {"estimate": to_dict(est), "workspace": ws, "name": name},
-                               f"Create {size_gb} GiB {est.storage_type} storage '{name}' at "
+                               f"Create {size_gb} GiB network ({est.storage_type}) storage '{name}' at "
                                f"{money.hourly(est.price_per_hour)}/hour?")
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)

@@ -3,6 +3,37 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.1.0
+
+Pods are now created the way the console creates them, with optional new local storage, a choice of CPU line and the
+same checks on sizes and settings. Built on the `meshive` Python SDK 1.1. Tool names and existing arguments are
+unchanged.
+
+### New
+
+- **`cpus` tool:** the CPU lines you can rent, with prices per core and per GiB of RAM, and the `cpu_line` key to
+  create a pod on one.
+- **Local storage with a pod:** `estimate_pod` and `create_pod` take `local_volumes` to create local storage on the
+  pod's machine (at least 10 GiB, not for spot pods). The estimate includes its hourly price.
+- **CPU line:** `estimate_pod` and `create_pod` take `cpu_line` for CPU pods. Without it the cheapest line that fits
+  is used.
+- **One operation by ID:** `transactions` takes `transaction_id`, such as the one `create_pod` returns, and shows how
+  that operation ended, including failures that have already dropped off the list.
+- **Waiting starts:** `start_pod` takes `placement` `wait_same_node` or `wait_any_node` to wait for free capacity
+  and start the pod as soon as there is room.
+
+### Changed
+
+- `start_pod` with `wait_any_node` asks for the same separate consent to lose unpreserved workspace files as
+  `any_node`, since both can move the pod to another machine.
+- Pod settings are checked like the console: vCPU and RAM must be sizes the console offers, ports must not repeat the
+  template's, required template variables need values and the start command is limited to 4,096 characters. Errors
+  say what to change, with the allowed values where there are some.
+- CPU pods default to 8 cores and 32 GiB of RAM, like the console (before: 2 vCPU and 4 GiB).
+- `volumes` attaches existing network storage only, and `create_storage` creates network storage only. Create local
+  storage together with a pod through `local_volumes`.
+- `region` (pods and storage) and `disk_type` (storage) are still accepted but ignored.
+
 ## v1.0.0
 
 The first stable release of the Meshive MCP server. Claude Code, Codex, Cursor, Gemini CLI and other MCP clients can
