@@ -44,7 +44,7 @@ with a model set. Built on the `meshive` Python SDK 1.2. Tool names and existing
 - An `input_assets` entry with a key other than `asset`, `target_dir`, `role`, `paths` and `strip_prefix` is now
   refused instead of silently ignored (which attached the whole asset). Changing the template in `update_pod` lists
   the variables, ports and command that don't carry over in the preview.
-- `name_taken` and `local_volume_not_allowed` also say what to do when renaming a pod or editing it into a spot pod.
+- `name_taken` and `local_volume_not_allowed` also say what to do when renaming a pod or a volume, or editing a pod into a spot pod.
 
 ## v1.1.0
 

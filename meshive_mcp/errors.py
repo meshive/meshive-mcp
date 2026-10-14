@@ -95,7 +95,7 @@ _CONFLICT_CODES = {
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one. For a rename "
-                                 "(update_pod `name`), ask the user for another name."),
+                                 "(update_pod or update_storage `name`), ask the user for another name."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
