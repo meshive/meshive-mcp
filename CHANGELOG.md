@@ -33,10 +33,17 @@ with a model set. Built on the `meshive` Python SDK 1.2. Tool names and existing
   `local_storage_on_another_machine`, `cannot_change_resources`, `harvest_roots_orphaned` (with the watched folders
   to confirm), `storage_cannot_shrink`, `model_set_unavailable` (with the files that failed) and
   `model_set_not_for_template` (with the sets that fit).
+- **Watched folders and input assets as on the console's create screen:** `estimate_pod` and `create_pod` take
+  `watched_template_folders` to turn off the template's own watched folders or change their patterns from the start.
+  A `watched_folders` entry can be added turned off (`"enabled": false`), and an input asset with `paths` takes
+  `"strip_prefix": ""` to keep the chosen files' folder structure.
 
 ### Changed
 
 - The instructions every agent receives now cover editing pods and storage, Connect and model sets.
+- An `input_assets` entry with a key other than `asset`, `target_dir`, `role`, `paths` and `strip_prefix` is now
+  refused instead of silently ignored (which attached the whole asset). Changing the template in `update_pod` lists
+  the variables, ports and command that don't carry over in the preview.
 - `name_taken` and `local_volume_not_allowed` also say what to do when renaming a pod or editing it into a spot pod.
 
 ## v1.1.0

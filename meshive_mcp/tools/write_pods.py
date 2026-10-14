@@ -29,8 +29,8 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value fro
 `env` is a dict and `secret_keys` names the secret ones; template variables the template leaves blank need a value. `command` overrides the start command (at most 4096 characters).
 `max_price_per_hour` is checked against the estimate (compute plus new local_volumes) before creating and caps the final COMPUTE hourly rate at placement; an over-cap placement fails asynchronously.
 Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
-`input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"]}] (default place /inputs/<asset name> or the template's path for that role); they add an input volume billed by size.
-`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false}] (the template's own output folders are watched already); `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
+`input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"], "strip_prefix": ""}] (default place /inputs/<asset name> or the template's path for that role); "paths" picks some files or folders, copied from the asset's file list exactly as written there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only these keys are accepted. They add an input volume billed by size.
+`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false, "enabled": true}] (the template's own output folders are watched already); `watched_template_folders` changes those template folders from the start, like the console's create screen: {"/outputs": {"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files. `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
 `model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time."""
 
 
@@ -135,6 +135,7 @@ def register(server: MCPServer) -> None:
                            internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
                            region: str | None = None, max_price_per_hour: float | None = None,
                            input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
+                           watched_template_folders: dict[str, dict[str, Any]] | None = None,
                            harvest_destination: dict[str, Any] | None = None,
                            template_ports: list[dict[str, Any]] | None = None,
                            model_set: str | None = None) -> dict[str, Any]:
@@ -151,7 +152,8 @@ def register(server: MCPServer) -> None:
                 secret_keys=secret_keys, ports=ports, template_ports=template_ports, command=command,
                 internet_premium=internet_premium,
                 uptime_premium=uptime_premium, cpu_premium=cpu_premium, max_price_per_hour=max_price_per_hour,
-                input_assets=input_assets, watched_folders=watched_folders, harvest_destination=harvest_destination,
+                input_assets=input_assets, watched_folders=watched_folders,
+                watched_template_folders=watched_template_folders, harvest_destination=harvest_destination,
                 model_set=model_set))
         out = to_dict(est)
         out["workspace"] = ws
@@ -176,6 +178,7 @@ def register(server: MCPServer) -> None:
                          internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
                          region: str | None = None, max_price_per_hour: float | None = None,
                          input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
+                         watched_template_folders: dict[str, dict[str, Any]] | None = None,
                          harvest_destination: dict[str, Any] | None = None,
                          template_ports: list[dict[str, Any]] | None = None,
                          model_set: str | None = None,
@@ -191,8 +194,8 @@ def register(server: MCPServer) -> None:
                              command=command,
                              internet_premium=internet_premium, uptime_premium=uptime_premium, cpu_premium=cpu_premium,
                              max_price_per_hour=max_price_per_hour, input_assets=input_assets,
-                             watched_folders=watched_folders, harvest_destination=harvest_destination,
-                             model_set=model_set)
+                             watched_folders=watched_folders, watched_template_folders=watched_template_folders,
+                             harvest_destination=harvest_destination, model_set=model_set)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):

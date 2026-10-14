@@ -95,6 +95,22 @@ async def test_template_ports_are_passed_to_estimate_and_create(mcp_client, fake
     assert "template_ports" not in _calls(fake, "estimate_pod")[0][2]
 
 
+async def test_watched_template_folders_and_strip_prefix_reach_the_sdk(mcp_client, fake, with_key):
+    """The console's create screen: template watched folders turned off, Keep structure for chosen asset files."""
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_pod", "create_pod"):
+        assert "watched_template_folders" in tools[name].input_schema["properties"], name
+        assert '"strip_prefix": ""' in tools[name].description and "Only these keys" in tools[name].description, name
+    folders = {"/outputs": {"enabled": False}}
+    assets = [{"asset": "asset_b", "paths": ["unet/"], "strip_prefix": ""}]
+    args = {"name": "p", "template_id": 457, "watched_template_folders": folders, "input_assets": assets}
+    prev = _payload(await mcp_client.call_tool("create_pod", args))
+    assert _calls(fake, "estimate_pod")[0][2]["watched_template_folders"] == folders
+    _payload(await mcp_client.call_tool("create_pod", {**args, "confirm": True, "operation_id": prev["operation_id"]}))
+    kw = _calls(fake, "create_pod")[0][2]
+    assert kw["watched_template_folders"] == folders and kw["input_assets"] == assets
+
+
 async def test_delete_pod_preview_then_delete(mcp_client, fake, with_key):
     preview = _payload(await mcp_client.call_tool("delete_pod", {"pod": "pod-3", "workspace": WS}))
     assert preview["confirmed"] is False and preview["pod"]["pod_name"] == "pod-3" and "cannot be undone" in preview["question"]
