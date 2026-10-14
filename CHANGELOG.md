@@ -45,6 +45,8 @@ with a model set. Built on the `meshive` Python SDK 1.2. Tool names and existing
   refused instead of silently ignored (which attached the whole asset). Changing the template in `update_pod` lists
   the variables, ports and command that don't carry over in the preview.
 - `name_taken` and `local_volume_not_allowed` also say what to do when renaming a pod or a volume, or editing a pod into a spot pod.
+- `pods` with `show_secrets` says when the login came back as `***`: the server now hides secret values from
+  read-only API keys, so the user needs a key with write scope.
 
 ## v1.1.0
 

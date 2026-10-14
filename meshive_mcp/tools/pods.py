@@ -13,6 +13,8 @@ from ._common import READ_ONLY, call, meshive_tool
 
 _SECRETS_NOTE = ("Secret connect values are included because show_secrets was set. Give them only to the user who "
                  "asked; never write them into files, commits, logs or other tools.")
+_MASKED_NOTE = ("The server returns secret values as \"***\" to read-only API keys. To get the login, the user needs a "
+                "key with write scope.")
 
 
 def _pod_dict(p: Any, show_secrets: bool = False) -> dict[str, Any]:
@@ -33,7 +35,7 @@ def register(server: MCPServer) -> None:
         """List the pods (GPU/CPU containers) in a workspace, or show one pod by its `pod_name` (its display name also works).
         `workspace` takes the id from the workspaces tool (a label also works); pass "all" to list pods across every workspace, or omit it if the user has only one.
         Set `include_metrics` for live CPU/RAM/GPU usage of a single pod (`ram_size`, `ephemeral_storage_*` and GPU `vram_size` are MiB); use `status` to filter the list. System-managed downloader pods are hidden unless `include_system` is true; they are free and cannot be stopped or deleted.
-        To open a pod, use its `endpoints` (URLs; `readiness` ready/preparing/interrupted) and `connect_credentials` (logins the console shows on Connect, e.g. ComfyUI's ACCESS_PASSWORD). Secret values are null; set `show_secrets` with a single `pod` only when the user asks for the login.
+        To open a pod, use its `endpoints` (URLs; `readiness` ready/preparing/interrupted) and `connect_credentials` (logins the console shows on Connect, e.g. ComfyUI's ACCESS_PASSWORD). Secret values are null; set `show_secrets` with a single `pod` only when the user asks for the login (a read-only API key gets "***").
         A stopped pod's `stop_reason_code` (other than "user") says the system stopped it, and `same_node_unavailable_reason` why it cannot start on its machine now."""
         async with meshive_client(ctx) as client:
             if pod is not None:
@@ -45,8 +47,9 @@ def register(server: MCPServer) -> None:
                 if include_metrics:
                     item["metrics"] = to_dict(await call(client.get_pod_metrics, pod, ws))
                 out: dict[str, Any] = {"pod": item}
-                if show_secrets and any(c["is_secret"] for c in item["connect_credentials"]):
-                    out["note"] = _SECRETS_NOTE
+                secret = [c for c in item["connect_credentials"] if c["is_secret"]]
+                if show_secrets and secret:
+                    out["note"] = _MASKED_NOTE if all(c["value"] == "***" for c in secret) else _SECRETS_NOTE
                 return out
             targets = await resolve_many(client, workspace)
             if needs_input(targets):

@@ -104,6 +104,14 @@ async def test_pod_secret_credentials_are_hidden_unless_asked(mcp_client, fake, 
     assert "only to the user who asked" in shown["note"]
 
 
+async def test_pod_show_secrets_explains_read_only_key_mask(mcp_client, fake, monkeypatch, with_key):
+    import conftest
+
+    monkeypatch.setattr(conftest, "POD_PASSWORD", "***")  # what the server sends to a read-only key
+    shown = _payload(await mcp_client.call_tool("pods", {"pod": "pod-7", "workspace": "0123456789abcdef",
+                                                         "show_secrets": True}))
+    assert "read-only API keys" in shown["note"]
+
 async def test_download_links_return_urls_never_bytes(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("download_links", {"asset": "asset_abc", "paths": ["*.safetensors"]}))
     assert ("asset_download_urls", ("asset_abc",), {"paths": ["*.safetensors"]}) in fake["last"].calls
