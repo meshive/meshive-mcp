@@ -26,11 +26,12 @@ def _ws(name: str, label: str) -> Workspace:
 POD_PASSWORD = "pw-7f3k9"   # a secret connect value — must never appear as-is in a response
 
 
-def _pod(name: str, status: str = "running", *, downloader: bool = False, same_node_reason: str | None = None) -> Pod:
+def _pod(name: str, status: str = "running", *, downloader: bool = False, same_node_reason: str | None = None,
+         unpreserved: bool | None = None) -> Pod:
     return Pod.from_dict({"podName": name, "namespaceName": "0123456789abcdef", "userAlias": "" if downloader else name,
                           "status": status, "rentalType": "demand", "pricePerHour": "0E-8" if downloader else "0.5",
                           "isMaintenance": False, "createdAt": NOW.isoformat(), "isDownloader": downloader,
-                          "sameNodeUnavailableReason": same_node_reason,
+                          "sameNodeUnavailableReason": same_node_reason, "hasUnpreservedWorkspace": unpreserved,
                           "template": {"endpoints": [{"userAlias": "ComfyUI", "containerPort": 8188, "portType": "connect",
                                                       "externalUrl": f"https://{name}.meshive.ai", "isReady": True}],
                                        "envs": [{"key": "ACCESS_PASSWORD", "value": POD_PASSWORD, "isSecret": True,
@@ -56,6 +57,9 @@ class FakeMeshive:
         self.pods += [_pod(f"dl-{i}", "running", downloader=True) for i in range(2)]
         self.raise_on: dict[str, BaseException] = {}
         self.same_node_reason: str | None = None
+        self.unpreserved_workspace: bool | None = None
+        # The placement the server reports for a start without one (None = an older server that doesn't report it).
+        self.start_placement: str | None = None
 
     def _rec(self, name: str, *a: Any, **kw: Any) -> None:
         self.calls.append((name, a, kw))
@@ -80,7 +84,7 @@ class FakeMeshive:
 
     async def get_pod(self, pod, workspace):
         self._rec("get_pod", pod, workspace)
-        return _pod(pod, same_node_reason=self.same_node_reason)
+        return _pod(pod, same_node_reason=self.same_node_reason, unpreserved=self.unpreserved_workspace)
 
     async def list_models(self, workspace):
         self._rec("list_models", workspace)
@@ -190,7 +194,12 @@ class FakeMeshive:
         return ResourceAction.from_dict({"resource": resource, "id": ident, "action": method.split("_")[0], "result": 1})
 
     async def stop_pod(self, pod, ws, **kw): return await self._action("stop_pod", "pod", pod, ws, **kw)
-    async def start_pod(self, pod, ws, **kw): return await self._action("start_pod", "pod", pod, ws, **kw)
+    async def start_pod(self, pod, ws, **kw):
+        result = await self._action("start_pod", "pod", pod, ws, **kw)
+        # SDK 1.1 reports the placement the server used: the one sent, or its own pick when none was sent.
+        result.placement = kw.get("placement") or self.start_placement
+        return result
+
     async def restart_pod(self, pod, ws, **kw): return await self._action("restart_pod", "pod", pod, ws, **kw)
     async def delete_pod(self, pod, ws, **kw): return await self._action("delete_pod", "pod", pod, ws, **kw)
 

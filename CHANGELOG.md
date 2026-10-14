@@ -21,15 +21,24 @@ unchanged.
   that operation ended, including failures that have already dropped off the list.
 - **Waiting starts:** `start_pod` takes `placement` `wait_same_node` or `wait_any_node` to wait for free capacity
   and start the pod as soon as there is room.
+- **Template ports:** `estimate_pod` and `create_pod` take `template_ports` to rename, renumber, expose or hide the
+  ports the template opens, like the console's deploy screen. Template ports can't be removed; `ports` opens new ones.
+- **Storage usage warning:** `create_storage` takes `usage_warning` and `usage_warning_threshold` (0-1, default 0.9)
+  to warn when the volume fills up.
 
 ### Changed
 
+- `start_pod` without `placement` lets the server pick what the console's Start button would, instead of always
+  `same_node`, and the result's `placement` says which one it used. If that pick would move a pod with unpreserved
+  workspace files, the call returns `data_loss_consent_required` with the placement to retry with after consent;
+  `allow_data_loss` is only sent together with an explicit `placement`.
 - `start_pod` with `wait_any_node` asks for the same separate consent to lose unpreserved workspace files as
   `any_node`, since both can move the pod to another machine.
 - Pod settings are checked like the console: vCPU and RAM must be sizes the console offers, ports must not repeat the
   template's, required template variables need values and the start command is limited to 4,096 characters. Errors
   say what to change, with the allowed values where there are some.
 - CPU pods default to 8 cores and 32 GiB of RAM, like the console (before: 2 vCPU and 4 GiB).
+- `create_storage` needs at least 10 GiB, like the console.
 - `volumes` attaches existing network storage only, and `create_storage` creates network storage only. Create local
   storage together with a pod through `local_volumes`.
 - `region` (pods and storage) and `disk_type` (storage) are still accepted but ignored.

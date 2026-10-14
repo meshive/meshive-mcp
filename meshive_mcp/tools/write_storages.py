@@ -33,25 +33,36 @@ def register(server: MCPServer) -> None:
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
+                             usage_warning: bool = False, usage_warning_threshold: float | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Create a network (nfs) storage volume of `size_gb` GiB that any pod in the workspace can attach.
-        It is billed hourly by capacity for as long as it exists, mounted or not.
+        """Create a network (nfs) storage volume of `size_gb` GiB (at least 10, like the console) that any pod in the
+        workspace can attach. It is billed hourly by capacity for as long as it exists, mounted or not.
         With confirm=false (default) it only returns the estimate; call again with confirm=true after the user agreed.
-        `encrypted` turns on at-rest encryption. Local storage can't be created on its own: create it together with a
-        pod through create_pod `local_volumes`. `storage_type` stays "nfs" ("hostPath" is refused); `disk_type` and
-        `region` are accepted for compatibility and ignored.
+        `encrypted` turns on at-rest encryption. `usage_warning` warns the user when the volume fills past
+        `usage_warning_threshold` (0-1, default 0.9 = 90% full), like the console's usage warning.
+        Local storage can't be created on its own: create it together with a pod through create_pod `local_volumes`.
+        `storage_type` stays "nfs" ("hostPath" is refused); `disk_type` and `region` are accepted for compatibility
+        and ignored.
         The volume appears in the storages tool shortly after; attach it to a pod with create_pod `volumes`."""
         # disk_type and region are ignored by the server, so they are accepted here and not sent.
-        kwargs = dict(storage_type=storage_type, encrypted=encrypted, max_price_per_hour=max_price_per_hour)
+        kwargs: dict[str, Any] = dict(storage_type=storage_type, encrypted=encrypted,
+                                      max_price_per_hour=max_price_per_hour)
+        # The usage warning is sent only when asked for, so the server defaults (off, 0.9) apply otherwise.
+        if usage_warning:
+            kwargs["usage_warning"] = True
+        if usage_warning_threshold is not None:
+            kwargs["usage_warning_threshold"] = usage_warning_threshold
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
             if not confirm:
                 est = await call(client.estimate_storage, name, size_gb, workspace=ws, **kwargs)
+                threshold = usage_warning_threshold if usage_warning_threshold is not None else 0.9
                 return preview("create_storage", {"estimate": to_dict(est), "workspace": ws, "name": name},
                                f"Create {size_gb} GiB network ({est.storage_type}) storage '{name}' at "
-                               f"{money.hourly(est.price_per_hour)}/hour?")
+                               f"{money.hourly(est.price_per_hour)}/hour?"
+                               + (f" A usage warning is sent when it is {threshold:.0%} full." if usage_warning else ""))
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)
         out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Find its pv_name in "

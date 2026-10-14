@@ -73,8 +73,15 @@ _CONFLICT_CODES = {
                                    "The request will not execute again; pending/unknown records require reconciliation."),
     "price unavailable": ("price_unavailable", "The server cannot quote this capped request. Keep the user's cap; "
                            "do not remove or increase it without their explicit consent."),
-    "data loss consent required": ("data_loss_consent_required", "Show the permanent workspace-file loss warning for "
-                                    "this pod and placement. Obtain separate consent before setting allow_data_loss=true."),
+    # start_pod: the placement (the one sent, or the one the server picked when none was sent) moves a pod that has
+    # unpreserved workspace files. Nothing was started; detail.placement names the move to consent to.
+    "data loss consent required": ("data_loss_consent_required",
+                                   "Nothing was started. Starting this pod with the `placement` in this error moves it "
+                                   "to another machine and permanently deletes its unpreserved workspace files. Show "
+                                   "the user that warning for this pod and placement and get separate explicit consent "
+                                   "to the loss. Only then call start_pod again with placement set to that `placement`, "
+                                   "allow_data_loss=true, confirm=true and the same operation_id. Without that consent "
+                                   "don't retry with allow_data_loss."),
     "no capacity": ("no_capacity", "Nothing is available for this request right now. Show the `available`/`availability` "
                                    "details to the user and suggest a smaller request, a different GPU, or trying later. "
                                    "Do not retry blindly."),
@@ -102,7 +109,8 @@ _CONFLICT_CODES = {
                                          "data-loss consent."),
 }
 
-# The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength) is passed on.
+# The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength, templatePorts) is
+# passed on.
 _BAD_REQUEST_CODES = {
     "local storage not attachable": ("local_storage_not_attachable",
                                      "That storage is local to one machine, and a new pod can only attach network "
@@ -124,10 +132,15 @@ _BAD_REQUEST_CODES = {
     "ram not offered": ("ram_not_offered", "Use one of the `allowed` values for `ram_gb` (the sizes the console offers "
                                            "for this hardware and vCPU count), or omit it for the default, then "
                                            "estimate again."),
-    "port in use": ("port_in_use", "The template already opens this `port`, or it is listed twice. Leave it out of "
-                                   "`ports`; each port can be listed only once."),
+    "port in use": ("port_in_use", "This `port` would be open twice (the template's ports, `ports` and "
+                                   "`template_ports` together). Leave it out of `ports`, or change the template's port "
+                                   "with `template_ports`; each port can be open only once."),
     "port name in use": ("port_name_in_use", "Another port (the template's or yours) already has this `name`. Give the "
-                                             "port in `ports` a different name."),
+                                             "port in `ports` a different name, or rename the template's port with "
+                                             "`template_ports`."),
+    "port not in template": ("port_not_in_template", "`template_ports` can only change ports the template opens (listed "
+                                                     "in `templatePorts`), by their current number. Use `ports` to open "
+                                                     "a new port; template ports can't be removed."),
     "required env missing": ("required_env_missing", "The template needs values for the env variables in `keys`. Ask "
                                                      "the user for them (never invent passwords or secrets), pass them "
                                                      "in `env` and list secret ones in `secret_keys`."),

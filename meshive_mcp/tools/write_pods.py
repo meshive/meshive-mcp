@@ -21,7 +21,9 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value fro
 `vcpu` and `ram_gb` are totals for the pod and must be sizes the console offers; a rejected size comes back with the `allowed` values. The system disk is sized by the server (shown as `resources.disk_gb` in the estimate).
 `volumes` attaches EXISTING network (nfs) storage from the storages tool: [{"storage": pv_name, "mount_path": "/data"}]. Existing local storage can't be attached to a new pod.
 `local_volumes` creates NEW local storage on the pod's machine together with the pod: [{"name": "scratch", "mount_path": "/scratch", "size_gb": 50}] with optional "encrypted", "usage_warning" and "usage_warning_threshold" (0-1). Each needs at least 10 GiB and spot pods can't have one. It is billed hourly by size until it is deleted, also while the pod is stopped and after the pod is deleted unless delete_pod lists it; the estimate includes it as `breakdown.local_storage`.
-`ports` is a list like [8888, {"port": 6006, "name": "tb", "external": false}]; don't repeat ports or port names the template already has. `env` is a dict and `secret_keys` names the secret ones; template variables the template leaves blank need a value. `command` overrides the start command (at most 4096 characters).
+`ports` opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]; don't repeat ports or port names the template already has.
+`template_ports` changes the ports the template opens, like the console's deploy screen: [{"port": 8188, "name": "ui", "new_port": 8189, "external": false}], where `port` is the template's port and "name" (rename), "new_port" (renumber) and "external" (true = exposed over HTTPS, false = internal only) are optional. Template ports can't be removed; use `ports` to open new ones.
+`env` is a dict and `secret_keys` names the secret ones; template variables the template leaves blank need a value. `command` overrides the start command (at most 4096 characters).
 `max_price_per_hour` is checked against the estimate (compute plus new local_volumes) before creating and caps the final COMPUTE hourly rate at placement; an over-cap placement fails asynchronously.
 Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
 `input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"]}] (default place /inputs/<asset name> or the template's path for that role); they add an input volume billed by size.
@@ -82,7 +84,8 @@ def register(server: MCPServer) -> None:
                            internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
                            region: str | None = None, max_price_per_hour: float | None = None,
                            input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
-                           harvest_destination: dict[str, Any] | None = None) -> dict[str, Any]:
+                           harvest_destination: dict[str, Any] | None = None,
+                           template_ports: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
         Call this first, show the user the price and hardware, then call create_pod with the same arguments.
         """
@@ -93,7 +96,8 @@ def register(server: MCPServer) -> None:
             est = await call(client.estimate_pod, name, template_id, workspace=ws, **_pod_kwargs(
                 gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type, vcpu=vcpu,
                 ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes, env=env,
-                secret_keys=secret_keys, ports=ports, command=command, internet_premium=internet_premium,
+                secret_keys=secret_keys, ports=ports, template_ports=template_ports, command=command,
+                internet_premium=internet_premium,
                 uptime_premium=uptime_premium, cpu_premium=cpu_premium, max_price_per_hour=max_price_per_hour,
                 input_assets=input_assets, watched_folders=watched_folders, harvest_destination=harvest_destination))
         out = to_dict(est)
@@ -117,6 +121,7 @@ def register(server: MCPServer) -> None:
                          region: str | None = None, max_price_per_hour: float | None = None,
                          input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
                          harvest_destination: dict[str, Any] | None = None,
+                         template_ports: list[dict[str, Any]] | None = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
@@ -124,7 +129,8 @@ def register(server: MCPServer) -> None:
         """
         kwargs = _pod_kwargs(gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type,
                              vcpu=vcpu, ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes,
-                             env=env, secret_keys=secret_keys, ports=ports, command=command,
+                             env=env, secret_keys=secret_keys, ports=ports, template_ports=template_ports,
+                             command=command,
                              internet_premium=internet_premium, uptime_premium=uptime_premium, cpu_premium=cpu_premium,
                              max_price_per_hour=max_price_per_hour, input_assets=input_assets,
                              watched_folders=watched_folders, harvest_destination=harvest_destination)
@@ -171,17 +177,21 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "start_pod", title="Start Pod", annotations=MUTATE)
     async def start_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
-                        placement: str = "same_node", confirm: bool = False, allow_data_loss: bool = False,
+                        placement: str | None = None, confirm: bool = False, allow_data_loss: bool = False,
                         operation_id: str | None = None) -> dict[str, Any]:
         """Start a stopped pod; hourly billing resumes. With confirm=false (default) it only returns the pod's current
         state and hourly price and changes nothing; call again with confirm=true after the user agreed to pay again.
-        `placement`: "same_node" (default) starts it on its original machine now; "wait_same_node" waits until that
-        machine has room and then starts it there; "any_node" moves it to another machine now; "wait_any_node" waits
-        until any machine has room and starts it there. A waiting pod shows as `waiting` in the pods tool.
+        `placement`: omit it (default) and the server picks what the console's Start button would; the result's
+        `placement` says which one it used. Or choose: "same_node" starts it on its original machine now;
+        "wait_same_node" waits until that machine has room and then starts it there; "any_node" moves it to another
+        machine now; "wait_any_node" waits until any machine has room and starts it there. A waiting pod shows as
+        `waiting` in the pods tool.
         any_node and wait_any_node can move the pod: unpreserved workspace files are then permanently deleted and
         attached local storage stays on the old machine. For those two, set allow_data_loss=true only after separate
-        explicit consent to that permanent loss for this pod and placement. Asynchronous — poll pods for `running`."""
-        choice = (placement or "").strip().lower()
+        explicit consent to that permanent loss for this pod and placement. allow_data_loss is only sent with an
+        explicit placement: when the server's own pick would move a pod with unpreserved files, the call fails with
+        data_loss_consent_required and names that placement. Asynchronous — poll pods for `running`."""
+        choice = (placement or "").strip().lower() or None
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -191,23 +201,49 @@ def register(server: MCPServer) -> None:
             # Both placements that may land on another machine delete unpreserved workspace files (the server asks the same).
             loss = choice in _MOVING_PLACEMENTS and current.has_unpreserved_workspace is not False
             if not confirm or (loss and not allow_data_loss):
-                warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to another node. "
-                           "Obtain separate explicit consent and pass allow_data_loss=true." if loss else "")
+                if choice is None:
+                    # The server picks the placement, so whether the pod moves is only known from its answer; a move
+                    # that would lose files comes back as data_loss_consent_required with the placement it picked.
+                    warning = (" If the server's pick moves the pod to another machine, its unpreserved workspace files "
+                               "would be permanently deleted, so the start is refused with data_loss_consent_required "
+                               "naming that placement; it then needs separate explicit consent before calling again with "
+                               "that placement and allow_data_loss=true."
+                               if current.has_unpreserved_workspace is not False else "")
+                    where = (" The server picks the placement the console would; it may wait until a machine has room "
+                             "and then start by itself."
+                             + (" allow_data_loss is not sent without an explicit placement." if allow_data_loss else ""))
+                else:
+                    warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to another "
+                               "node. Obtain separate explicit consent and pass allow_data_loss=true." if loss else "")
+                    where = ((" It waits until a machine has room and then starts by itself."
+                              if choice in _WAITING_PLACEMENTS else "")
+                             + _same_node_note(choice, current.same_node_unavailable_reason))
                 return preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
-                                             "requires_data_loss_consent": loss, "data_loss_warning": warning},
+                                             # null: not known until the server picks the placement.
+                                             "requires_data_loss_consent": None if choice is None else loss,
+                                             "data_loss_warning": warning},
                                f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes at "
                                f"{money.hourly(current.price_per_hour)}/hour compute plus "
-                               f"{money.hourly(current.storage_rate_per_hour)}/hour storage."
-                               + (" It waits until a machine has room and then starts by itself."
-                                  if choice in _WAITING_PLACEMENTS else "")
-                               + _same_node_note(choice, current.same_node_unavailable_reason) + warning)
-            result = await call(client.start_pod, pod, ws, placement=choice, allow_data_loss=allow_data_loss)
+                               f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning)
+            # Consent is for a known move, so it goes only with an explicit placement.
+            result = await call(client.start_pod, pod, ws, placement=choice,
+                                allow_data_loss=allow_data_loss if choice is not None else False)
         out = to_dict(result)
-        if choice in _WAITING_PLACEMENTS:
-            out["next_step"] = ("The start was accepted. The pod is `waiting` until a machine has room, then starts by "
-                                "itself. Poll the pods tool for the new status.")
+        # The placement the server used; older servers don't report it.
+        used = getattr(result, "placement", None) or choice
+        out["placement"] = used
+        step = ""
+        if choice is None and used:
+            step = f"The server picked placement {used}, the console's default. "
+            if used in _MOVING_PLACEMENTS:
+                step += ("Tell the user the pod may start on another machine; local storage attached to it stays on "
+                         "the old machine. ")
+        if used in _WAITING_PLACEMENTS:
+            step += ("The start was accepted. The pod is `waiting` until a machine has room, then starts by itself. "
+                     "Poll the pods tool for the new status.")
         else:
-            out["next_step"] = "The start was accepted and runs asynchronously. Poll the pods tool for the new status."
+            step += "The start was accepted and runs asynchronously. Poll the pods tool for the new status."
+        out["next_step"] = step
         return out
 
     @meshive_tool(server, "restart_pod", title="Restart Pod", annotations=MUTATE)

@@ -17,8 +17,10 @@ from ..errors import translate, tool_error
 
 T = TypeVar("T")
 MAX_RESPONSE_BYTES = 1024 * 1024
-# Errors that end the operation for good — the generic "retry with the same operation_id" advice would contradict them.
-_NO_RETRY_CODES = {"pod_creation_failed"}
+# Errors whose next_step already says whether and how to call again, so the generic "retry with the same operation_id and
+# the same arguments" advice would contradict it: a failed create is final, and a start refused for data-loss consent is
+# called again with the placement it names and allow_data_loss=true once the user agrees.
+_OWN_RETRY_ADVICE_CODES = {"pod_creation_failed", "data_loss_consent_required"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage",
            "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
@@ -87,7 +89,7 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                     result["operation_id"] = op
                     if "lookup" in operation:
                         result["operation_lookup"] = operation["lookup"]
-                    if result.get("code") not in _NO_RETRY_CODES:
+                    if result.get("code") not in _OWN_RETRY_ADVICE_CODES:
                         result["next_step"] = (result.get("next_step", "") +
                             " Check the resource/operation state first. Any retry MUST reuse this operation_id and the same arguments; never submit a new operation for an unknown outcome.")
                 return _bounded_result(result, is_error=True)

@@ -60,10 +60,13 @@ not resource completion; pending/unknown require reconciliation. not_found alone
 
 Moving pods: start_pod with placement=any_node or wait_any_node can move the pod to another machine, which \
 permanently deletes unpreserved workspace files. confirm=true approves resuming billing; allow_data_loss=true requires \
-separate explicit consent for this pod's move. wait_same_node and wait_any_node leave the pod `waiting` until a machine \
-has room. Show storage charges separately. Pod/task price caps limit the final compute rate, including CPU/RAM; before \
-a pod is created its cap is also checked against the estimate, which includes new local_volumes. Existing storage and \
-Asset Hub retention are separate. Task input fetching can add compute time, so estimates are not total-bill ceilings.
+separate explicit consent for this pod's move. Without a placement the server picks what the console would; if that \
+pick moves a pod with unpreserved files, start_pod returns data_loss_consent_required with the placement, and a retry \
+needs that placement, allow_data_loss=true and the same separate consent. wait_same_node and wait_any_node leave the \
+pod `waiting` until a machine has room. Show storage charges separately. Pod/task price caps limit the final compute \
+rate, including CPU/RAM; before a pod is created its cap is also checked against the estimate, which includes new \
+local_volumes. Existing storage and Asset Hub retention are separate. Task input fetching can add compute time, so \
+estimates are not total-bill ceilings.
 
 Secrets: `pods` with show_secrets=true and `ssh_access` return passwords. Ask for them only when the user wants to log in, \
 give them to that user and nobody else, and never write them into files, commits or other tools.

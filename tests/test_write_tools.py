@@ -75,8 +75,24 @@ async def test_pod_tool_descriptions_cover_the_console_rules(mcp_client, fake, w
         assert "EXISTING network (nfs) storage" in desc and "NEW local storage" in desc, name
         assert "at least 10 GiB" in desc and "spot" in desc and "cpus tool" in desc, name
         assert "8 cores / 32 GiB" in desc and "`region` is accepted for compatibility and ignored" in desc, name
+        assert "`template_ports` changes the ports the template opens" in desc and "can't be removed" in desc, name
         props = tools[name].input_schema["properties"]
-        assert {"local_volumes", "cpu_line", "region", "volumes"} <= set(props), name
+        assert {"local_volumes", "cpu_line", "region", "volumes", "template_ports"} <= set(props), name
+
+
+async def test_template_ports_are_passed_to_estimate_and_create(mcp_client, fake, with_key):
+    changes = [{"port": 8188, "name": "ui", "new_port": 8189, "external": False}]
+    est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 457, "template_ports": changes}))
+    assert est["price_per_hour"] == "0.068423"
+    assert _calls(fake, "estimate_pod")[0][2]["template_ports"] == changes
+    prev = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457, "template_ports": changes}))
+    assert _calls(fake, "estimate_pod")[0][2]["template_ports"] == changes
+    _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457, "template_ports": changes,
+                                                       "confirm": True, "operation_id": prev["operation_id"]}))
+    assert _calls(fake, "create_pod")[0][2]["template_ports"] == changes
+    # Left out when not given, so the SDK and server defaults apply.
+    _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 457}))
+    assert "template_ports" not in _calls(fake, "estimate_pod")[0][2]
 
 
 async def test_delete_pod_preview_then_delete(mcp_client, fake, with_key):
@@ -139,11 +155,84 @@ async def test_start_pod_preview_hides_secrets_and_says_why_same_node_waits(mcp_
     from conftest import POD_PASSWORD
 
     fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "capacity")
-    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2"})
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "same_node"})
     assert POD_PASSWORD not in result.content[0].text                 # previews carry the whole Pod too
     prev = _payload(result)
     assert "cannot start on its original machine now (capacity)" in prev["question"]
     assert prev["data_loss_warning"] == ""
+
+
+async def test_start_pod_without_placement_lets_the_server_pick(mcp_client, fake, with_key):
+    """No placement: the server picks what the console would. The tool can't know in advance whether that moves the pod,
+    so the preview says the server asks for consent itself, and allow_data_loss isn't sent without a known placement."""
+    prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2"}))
+    assert prev["confirmed"] is False and prev["placement"] is None and prev["requires_data_loss_consent"] is None
+    assert "The server picks the placement the console would" in prev["question"]
+    assert "data_loss_consent_required" in prev["data_loss_warning"] and prev["data_loss_warning"] in prev["question"]
+    assert not _calls(fake, "start_pod")
+
+    fake["setup"] = lambda inst: setattr(inst, "unpreserved_workspace", False)      # nothing to lose: no warning
+    quiet = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "allow_data_loss": True}))
+    assert quiet["data_loss_warning"] == "" and "permanently deleted" not in quiet["question"]
+    assert "allow_data_loss is not sent without an explicit placement" in quiet["question"]
+
+    # An older server doesn't report the placement it used.
+    fake["setup"] = None
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True, "allow_data_loss": True,
+                                                             "operation_id": prev["operation_id"]}))
+    (_, args, kw), = _calls(fake, "start_pod")
+    assert args[:2] == ("pod-2", WS) and kw["placement"] is None and kw["allow_data_loss"] is False
+    assert done["placement"] is None and "picked" not in done["next_step"] and "asynchronously" in done["next_step"]
+
+
+@pytest.mark.parametrize("picked,says", [("same_node", "asynchronously"), ("wait_same_node", "`waiting` until"),
+                                         ("any_node", "another machine"), ("wait_any_node", "another machine")])
+async def test_start_pod_reports_the_placement_the_server_picked(mcp_client, fake, with_key, picked, says):
+    fake["setup"] = lambda inst: setattr(inst, "start_placement", picked)
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True,
+                                                             "operation_id": "test-operation-0001"}))
+    assert done["placement"] == picked and f"The server picked placement {picked}" in done["next_step"]
+    assert says in done["next_step"]
+
+
+async def test_start_pod_explicit_placement_is_reported_as_sent(mcp_client, fake, with_key):
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": " Same_Node ", "confirm": True,
+                                                             "operation_id": "test-operation-0001"}))
+    assert done["placement"] == "same_node" and "picked" not in done["next_step"]
+    assert _calls(fake, "start_pod")[0][2]["placement"] == "same_node"
+
+
+async def test_defaulted_start_that_would_move_files_asks_for_consent(mcp_client, fake, with_key):
+    """The server answers a start whose pick moves a pod with unpreserved files with 409 and the placement it picked;
+    the agent is told to get consent and call again with that placement — not to repeat the same arguments."""
+    detail = {"title": "Data Loss Consent Required", "message": "Moving this pod permanently deletes files.",
+              "podName": "pod-2", "workspace": WS, "placement": "any_node", "hasUnpreservedWorkspace": True}
+    fake["setup"] = lambda inst: inst.raise_on.update(start_pod=ConflictError(
+        409, detail["message"], title=detail["title"], raw={"detail": detail}))
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True,
+                                                      "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "data_loss_consent_required" and body["placement"] == "any_node"
+    assert body["operation_id"] == "test-operation-0001"
+    step = body["next_step"]
+    assert "Nothing was started" in step and "placement set to that `placement`" in step
+    assert "allow_data_loss=true" in step and "same operation_id" in step and "explicit consent" in step
+    assert "same arguments" not in step
+
+
+async def test_storage_usage_warning_and_minimum_size(mcp_client, fake, with_key):
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["create_storage"]
+    assert "at least 10" in desc and "usage_warning_threshold" in desc
+    args = {"name": "data", "size_gb": 20, "usage_warning": True, "usage_warning_threshold": 0.8}
+    prev = _payload(await mcp_client.call_tool("create_storage", args))
+    assert "A usage warning is sent when it is 80% full." in prev["question"]
+    (_, _, kw), = _calls(fake, "estimate_storage")
+    assert kw["usage_warning"] is True and kw["usage_warning_threshold"] == 0.8
+    _payload(await mcp_client.call_tool("create_storage", {**args, "confirm": True, "operation_id": prev["operation_id"]}))
+    (_, _, kw), = _calls(fake, "create_storage")
+    assert kw["usage_warning"] is True and kw["usage_warning_threshold"] == 0.8
+    default = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 20, "usage_warning": True}))
+    assert "90% full" in default["question"] and "usage_warning_threshold" not in _calls(fake, "estimate_storage")[0][2]
 
 
 async def test_storage_tools(mcp_client, fake, with_key):

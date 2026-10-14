@@ -60,6 +60,7 @@ def _api(status, title, message="m", **detail):
     ("RAM Not Offered", "ram_not_offered", "`allowed`"),
     ("Port In Use", "port_in_use", "ports"),
     ("Port Name In Use", "port_name_in_use", "name"),
+    ("Port Not In Template", "port_not_in_template", "`templatePorts`"),
     ("Required Env Missing", "required_env_missing", "`keys`"),
     ("Duplicate Mount Path", "duplicate_mount_path", "mount_path"),
     ("Storage Required", "storage_required", "local_volumes"),
@@ -77,6 +78,10 @@ def test_bad_request_details_reach_the_agent():
     assert b["keys"] == ["HF_TOKEN"]
     b = _body(_api(400, "Command Too Long", maxLength=4096))
     assert b["maxLength"] == 4096
+    b = _body(_api(400, "Port Not In Template", "The template does not open port 9999.", templatePorts=[8188, 8888]))
+    assert b["code"] == "port_not_in_template" and b["templatePorts"] == [8188, 8888] and "`ports`" in b["next_step"]
+    b = _body(_api(400, "Port In Use", port=8188))
+    assert b["port"] == 8188 and "template_ports" in b["next_step"]
     b = _body(_api(400, "Some New Rule", allowed=[1, 2]))           # unknown titles keep the generic hint and the detail
     assert b["code"] == "invalid_request" and b["allowed"] == [1, 2]
     assert _body(MeshiveAPIError(422, "m", raw={"detail": [{"loc": ["body"]}]}))["code"] == "invalid_request"
@@ -102,3 +107,14 @@ def test_sdk_argument_errors_become_invalid_argument():
     assert b["code"] == "invalid_argument" and "absolute path" in b["message"]
     with pytest.raises(UnicodeDecodeError):                          # other ValueError kinds are still treated as bugs
         translate(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"))
+
+
+def test_data_loss_consent_names_the_placement_to_retry_with():
+    """A start without a placement can be refused for data-loss consent; the server's pick is in detail.placement."""
+    from meshive.exceptions import ConflictError
+
+    b = _body(ConflictError(409, "Moving this pod deletes files.", title="Data Loss Consent Required",
+                            raw={"detail": {"title": "Data Loss Consent Required", "message": "x", "podName": "p-0",
+                                            "placement": "wait_any_node", "hasUnpreservedWorkspace": True}}))
+    assert b["code"] == "data_loss_consent_required" and b["placement"] == "wait_any_node"
+    assert "allow_data_loss=true" in b["next_step"] and "`placement`" in b["next_step"]
