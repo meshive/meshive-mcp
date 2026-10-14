@@ -3,6 +3,42 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.2.0
+
+Pods and storage can now be edited the way the console edits them, storage can be opened over SSH, and pods can start
+with a model set. Built on the `meshive` Python SDK 1.2. Tool names and existing arguments are unchanged.
+
+### New
+
+- **`update_pod` tool:** change an existing pod like the console's Edit, passing only what changes: name, template,
+  rental type, GPU or CPU line and size, variables, ports, start command and storage (attach, detach or create local
+  storage). The preview lists the changes, the hourly price before and after and whether the pod restarts. A running
+  pod restarts with the new settings; a stopped pod uses them at its next start; a rename alone doesn't restart it.
+  The pod type, premiums and image can't change, and template variables and ports can't be removed.
+- **Moving a pod for an edit:** when the pod's machine can't fit the change, `update_pod` returns
+  `node_migration_required` and changes nothing. Calling again with `allow_node_migration` needs the user's agreement,
+  and for a pod with unpreserved workspace files also `allow_data_loss`, the same separate consent as moving a pod
+  with `start_pod`.
+- **`update_storage` tool:** rename a volume, grow it (it can't shrink) or set its usage warning. The preview shows the
+  new size and the hourly price before and after.
+- **`connect_storage` tool:** an SSH login to a volume's files, like the console's Connect. Encrypted storage is
+  unlocked and locks again by itself after a set time. The one-time password is handled like `ssh_access`: only when
+  you ask, only to you, and never kept as a replayable operation record.
+- **`model_sets` tool and `model_set` argument:** list the model sets a template recommends and pass one to
+  `estimate_pod` and `create_pod`. The estimate shows the set's file count, size and minimum GPU memory. Creating
+  with a set fetches its files first and can take several minutes; if a file can't be added, no pod is created and the
+  files already added are reused next time.
+- **Clear errors for edits and model sets:** each refusal comes with a code and a next step, for example
+  `nothing_to_change`, `pod_type_locked`, `template_env_not_removable`, `storage_not_attached`,
+  `local_storage_on_another_machine`, `cannot_change_resources`, `harvest_roots_orphaned` (with the watched folders
+  to confirm), `storage_cannot_shrink`, `model_set_unavailable` (with the files that failed) and
+  `model_set_not_for_template` (with the sets that fit).
+
+### Changed
+
+- The instructions every agent receives now cover editing pods and storage, Connect and model sets.
+- `name_taken` and `local_volume_not_allowed` also say what to do when renaming a pod or editing it into a spot pod.
+
 ## v1.1.0
 
 Pods are now created the way the console creates them, with optional new local storage, a choice of CPU line and the

@@ -22,7 +22,13 @@ from meshive.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    WaitTimeoutError,
 )
+
+try:    # SDK 1.2: connect_storage found the storage in phase "error"
+    from meshive.exceptions import StorageConnectionError
+except ImportError:     # an SDK without it reports the failure as a phase in the result instead
+    StorageConnectionError = None  # type: ignore[assignment,misc]
 
 CONSOLE_URL = "https://console.meshive.ai"
 
@@ -67,7 +73,7 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
 
 
 # The kind of 409 is told apart by the server's detail.title. Extra info (availability, pricePerHourUsd,
-# linkedPods, available) is carried in detail as-is and passed on to the model.
+# linkedPods, available, resourceBreakdownComplete) is carried in detail as-is and passed on to the model.
 _CONFLICT_CODES = {
     "operation outcome unknown": ("operation_outcome_unknown", "Check operation_status and the recorded task/transaction. "
                                    "The request will not execute again; pending/unknown records require reconciliation."),
@@ -88,7 +94,8 @@ _CONFLICT_CODES = {
     # A 409 after retrying a create whose response was lost is common — only saying "use another name" makes the model create one more resource.
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
-                                 "anything else. Otherwise pick another name or use the existing one."),
+                                 "anything else. Otherwise pick another name or use the existing one. For a rename "
+                                 "(update_pod `name`), ask the user for another name."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
@@ -107,10 +114,42 @@ _CONFLICT_CODES = {
                                          "Waiting for its original machine won't help. Offer placement any_node or "
                                          "wait_any_node instead; start_pod's preview says whether moving needs "
                                          "data-loss consent."),
+    # update_pod: the pod's machine can't fit the edit. Nothing changed; moving it needs the user's agreement.
+    "node migration required": ("node_migration_required",
+                                "Nothing was changed. The pod's machine can't fit this change, so the pod would have to "
+                                "move to another machine, which permanently deletes its unpreserved workspace files. "
+                                "Tell the user why and ask whether to move it. Only if they agree, call update_pod again "
+                                "with allow_node_migration=true, confirm=true and the same operation_id; its preview "
+                                "says whether the move also needs separate consent to the file loss "
+                                "(allow_data_loss=true). Otherwise suggest a smaller change."),
+    # update_pod: attached local storage keeps the pod on its machine, and that machine can't fit the edit.
+    "cannot change resources": ("cannot_change_resources",
+                                "Nothing was changed. The pod has local storage attached, which keeps it on its machine, "
+                                "and that machine can't fit the change. Ask the user whether to detach the local storage "
+                                "(update_pod `detach_storages`; the storage and its data stay, but the pod can no longer "
+                                "use them) or to keep the current resources. Then preview the edit again."),
+    # update_pod on an older pod whose RAM size can't be read back exactly.
+    "resource values need confirmation": ("resource_values_need_confirmation",
+                                          "This older pod's RAM size can't be read back exactly. Ask the user which RAM "
+                                          "size to use, pass it as `ram_gb` together with the change and preview the "
+                                          "edit again."),
+    # update_pod while the pod is starting, stopping or already being edited.
+    "operation in progress": ("operation_in_progress",
+                              "Another operation on this pod (starting, stopping or an earlier edit) is still running, "
+                              "so nothing was changed. Wait until the pods tool shows the pod running or stopped, then "
+                              "try again."),
 }
 
-# The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength, templatePorts) is
-# passed on.
+# update_pod's own data-loss refusal carries no placement (start_pod's does): the move would come from
+# allow_node_migration.
+_DATA_LOSS_EDIT_STEP = ("Nothing was changed. If this edit moves the pod to another machine (allow_node_migration), its "
+                        "unpreserved workspace files are permanently deleted. Show the user that warning for this pod and "
+                        "get separate explicit consent to the loss. Only then call update_pod again with the same "
+                        "arguments plus allow_data_loss=true, confirm=true and the same operation_id. Without that "
+                        "consent, call it without allow_node_migration instead.")
+
+# The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength, templatePorts,
+# attached, paths, currentSizeGb, failed, available) is passed on.
 _BAD_REQUEST_CODES = {
     "local storage not attachable": ("local_storage_not_attachable",
                                      "That storage is local to one machine, and a new pod can only attach network "
@@ -121,7 +160,8 @@ _BAD_REQUEST_CODES = {
                                     "local storage together with a pod through create_pod `local_volumes`."),
     "local volume not allowed": ("local_volume_not_allowed",
                                  "Spot pods can't have local storage. Drop `local_volumes` and use network storage in "
-                                 "`volumes`, or use rental_type \"demand\"; ask the user which."),
+                                 "`volumes`, or use rental_type \"demand\"; ask the user which. To make an existing pod "
+                                 "spot, detach its local storage in the same update_pod call (`detach_storages`)."),
     "command too long": ("command_too_long",
                          "`command` is limited to `maxLength` characters. Put the long script in a file (in the image, "
                          "on storage or in an input asset) and make `command` run that file."),
@@ -148,6 +188,72 @@ _BAD_REQUEST_CODES = {
                                                      "and `local_volumes` its own path."),
     "storage required": ("storage_required", "This template needs a persistent volume. Attach network storage in "
                                              "`volumes` or create local storage in `local_volumes`; ask the user which."),
+    # --- update_pod (console Pod Edit rules) ---
+    "nothing to change": ("nothing_to_change", "Pass at least one setting to change. update_pod sends only what changes, "
+                                               "so give just the arguments the user wants different."),
+    "pod type locked": ("pod_type_locked", "A pod's type can't change: a GPU pod stays a GPU pod (`gpu_model`, "
+                                           "`gpu_count`, `gpu_vram_gb`) and a CPU pod stays a CPU pod (`cpu_line`). "
+                                           "Premiums and the image can't change either. For another type, the user "
+                                           "creates a new pod; ask them."),
+    "template env not removable": ("template_env_not_removable",
+                                   "This variable comes from the template and can't be removed; set another value in "
+                                   "`env` instead. `remove_env` removes only variables the user added."),
+    "template port not removable": ("template_port_not_removable",
+                                    "This port comes from the template and can't be removed; rename, renumber or hide it "
+                                    "(external=false) with `template_ports` instead. `remove_ports` closes only ports the "
+                                    "user added."),
+    "env not found": ("env_not_found", "The pod has no variable with this name. Leave it out of `remove_env`."),
+    "port not found": ("port_not_found", "The pod doesn't open this `port`. Leave it out of `remove_ports`; the pods "
+                                         "tool lists the pod's ports under `endpoints`."),
+    "storage not attached": ("storage_not_attached", "`detach_storages` names storage that isn't attached to this pod. "
+                                                     "Use pv_names from `attached`."),
+    "storage already attached": ("storage_already_attached", "That storage is already attached to this pod; leave it out "
+                                                             "of `volumes`. To mount it at another path, list it in "
+                                                             "`detach_storages` and `volumes` in the same call."),
+    "local storage on another machine": ("local_storage_on_another_machine",
+                                         "Existing local storage can only be attached on the pod's current machine, and "
+                                         "this storage is on another one. Attach network storage in `volumes` or create "
+                                         "new local storage in `local_volumes`; ask the user which."),
+    "template deleted": ("template_deleted", "This pod's template was deleted, so the edit needs a new one. Ask the user "
+                                             "which template to use and pass its `template_id` (from the templates "
+                                             "tool)."),
+    "not with a new template": ("not_with_a_new_template", "`remove_env` and `remove_ports` apply to the current "
+                                                           "template. With `template_id` the pod starts from the new "
+                                                           "template's variables and ports, so leave them out."),
+    "not a pod template": ("not_a_pod_template", "Pick a pod template from the templates tool."),
+    "incompatible hardware": ("incompatible_hardware", "That template runs only on the other pod type (GPU or CPU), and "
+                                                       "a pod's type can't change. Pick a template for this pod's type, "
+                                                       "or the user creates a new pod; ask them."),
+    "invalid pod settings": ("invalid_pod_settings", "The server rejected the combined settings; the message says "
+                                                     "which. Fix that argument and preview the edit again."),
+    # The server's own detail.code is harvest_roots_orphaned; detail.paths lists the folders.
+    "watched folders would be removed": ("harvest_roots_orphaned",
+                                         "Nothing was changed. After this edit the watched folders in `paths` would no "
+                                         "longer be on any storage attached to the pod, so they would be removed. Show "
+                                         "the user these paths and ask whether to remove them. Only if they agree, call "
+                                         "update_pod again with the same arguments plus drop_watched_folders set to "
+                                         "`paths`, confirm=true and the same operation_id. Otherwise keep the storage "
+                                         "those folders are on."),
+    # --- update_storage ---
+    "storage cannot shrink": ("storage_cannot_shrink", "Storage can grow but not shrink; `currentSizeGb` is its current "
+                                                       "size in GiB. Pass a larger `size_gb` or leave the size as it is. "
+                                                       "For a smaller volume the user creates a new one and copies the "
+                                                       "data."),
+    # --- model sets (estimate_pod / create_pod `model_set`) ---
+    "model set unavailable": ("model_set_unavailable",
+                              "No pod was created and nothing is billed for it. `failed` lists the files of the model "
+                              "set that couldn't be added and why; files that were added stay in Asset Hub and are "
+                              "reused next time. Tell the user, then ask whether to try again later (the same arguments "
+                              "and operation_id), pick another model set or create the pod without one (a new preview)."),
+    "model set not for template": ("model_set_not_for_template",
+                                   "`model_set` must be a slug the model_sets tool lists for this template; "
+                                   "`available` lists them. Ask the user which one to use."),
+    "model sets not supported": ("model_sets_not_supported",
+                                 "This template has no model folders, so it takes no model set. Leave `model_set` out, "
+                                 "or pick a template whose model_sets list is `selectable`."),
+    "model set added automatically": ("model_set_added_automatically",
+                                      "This template adds its own model set when the pod is created. Leave `model_set` "
+                                      "out."),
 }
 
 
@@ -165,7 +271,11 @@ def _conflict(exc: ConflictError) -> ToolError:
     title = (exc.title or "").strip().lower()
     code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
                                                               "before retrying."))
-    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **_detail_extras(exc))
+    extras = _detail_extras(exc)
+    if code == "data_loss_consent_required" and "placement" not in extras:
+        # Only start_pod names a placement; without one the refusal comes from update_pod's allow_node_migration.
+        next_step = _DATA_LOSS_EDIT_STEP
+    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **extras)
 
 
 def _bad_request(exc: MeshiveAPIError) -> ToolError:
@@ -233,6 +343,16 @@ def translate(exc: BaseException) -> ToolError:
     if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
         return tool_error("temporarily_unavailable", f"Could not reach the Meshive API: {exc.__class__.__name__}",
                           NEXT_STEP_UNAVAILABLE.format(retry_after=15), retry_after=15)
+    if StorageConnectionError is not None and isinstance(exc, StorageConnectionError):
+        return tool_error("storage_connection_failed", str(exc) or "The storage could not be opened for SSH.",
+                          "The storage's access pod could not be prepared, so there is no login. Tell the user; they "
+                          "can try connecting again in a moment or check the storage in the console. Don't retry on "
+                          "your own.")
+    if isinstance(exc, WaitTimeoutError):
+        # The SDK stopped waiting; the server keeps going with what it already accepted.
+        return tool_error("wait_timeout", str(exc) or "Timed out waiting.",
+                          "It is still in progress on the server. Check its state with the matching tool before doing "
+                          "anything else, and don't start it again.")
     if isinstance(exc, MeshiveError):
         return tool_error("sdk_error", str(exc), "Tell the user. Do not retry.")
     if type(exc) is ValueError:

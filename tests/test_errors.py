@@ -118,3 +118,93 @@ def test_data_loss_consent_names_the_placement_to_retry_with():
                                             "placement": "wait_any_node", "hasUnpreservedWorkspace": True}}))
     assert b["code"] == "data_loss_consent_required" and b["placement"] == "wait_any_node"
     assert "allow_data_loss=true" in b["next_step"] and "`placement`" in b["next_step"]
+
+
+@pytest.mark.parametrize("title,code,hint", [
+    # update_pod
+    ("Nothing To Change", "nothing_to_change", "at least one setting"),
+    ("Pod Type Locked", "pod_type_locked", "can't change"),
+    ("Template Env Not Removable", "template_env_not_removable", "`env`"),
+    ("Template Port Not Removable", "template_port_not_removable", "`template_ports`"),
+    ("Env Not Found", "env_not_found", "`remove_env`"),
+    ("Port Not Found", "port_not_found", "`remove_ports`"),
+    ("Storage Not Attached", "storage_not_attached", "`attached`"),
+    ("Storage Already Attached", "storage_already_attached", "`detach_storages`"),
+    ("Local Storage On Another Machine", "local_storage_on_another_machine", "current machine"),
+    ("Local Volume Not Allowed", "local_volume_not_allowed", "`detach_storages`"),
+    ("Template Deleted", "template_deleted", "`template_id`"),
+    ("Not With A New Template", "not_with_a_new_template", "new template's"),
+    ("Not A Pod Template", "not_a_pod_template", "templates tool"),
+    ("Incompatible Hardware", "incompatible_hardware", "type can't change"),
+    ("Invalid Pod Settings", "invalid_pod_settings", "preview the edit again"),
+    ("Watched folders would be removed", "harvest_roots_orphaned", "drop_watched_folders"),
+    # update_storage
+    ("Storage Cannot Shrink", "storage_cannot_shrink", "`currentSizeGb`"),
+    # model sets
+    ("Model Set Unavailable", "model_set_unavailable", "`failed`"),
+    ("Model Set Not For Template", "model_set_not_for_template", "`available`"),
+    ("Model Sets Not Supported", "model_sets_not_supported", "`selectable`"),
+    ("Model Set Added Automatically", "model_set_added_automatically", "Leave `model_set` out"),
+])
+def test_edit_and_model_set_titles_map_to_codes(title, code, hint):
+    b = _body(_api(400, title))
+    assert b["code"] == code and hint in b["next_step"], b
+
+
+@pytest.mark.parametrize("title,code,hint", [
+    ("Node Migration Required", "node_migration_required", "allow_node_migration=true"),
+    ("Cannot Change Resources", "cannot_change_resources", "`detach_storages`"),
+    ("Resource values need confirmation", "resource_values_need_confirmation", "`ram_gb`"),
+    ("Operation in progress", "operation_in_progress", "Wait until"),
+    ("Price Exceeds Cap", "price_exceeds_cap", "cap"),
+    ("Name Taken", "name_taken", "another name"),
+])
+def test_edit_conflicts_map_to_codes(title, code, hint):
+    from meshive.exceptions import ConflictError
+
+    b = _body(ConflictError(409, "m", title=title, raw={"detail": {"title": title, "message": "m"}}))
+    assert b["code"] == code and hint in b["next_step"], b
+
+
+def test_edit_error_details_reach_the_agent():
+    """The paths to drop, the attached storage, the current size and the failed files are how the agent continues."""
+    b = _body(_api(400, "Watched folders would be removed", code="harvest_roots_orphaned", paths=["/data/out"]))
+    assert b["paths"] == ["/data/out"] and b["server_code"] == "harvest_roots_orphaned"
+    b = _body(_api(400, "Storage Not Attached", attached=["pv-a"]))
+    assert b["attached"] == ["pv-a"]
+    b = _body(_api(400, "Storage Cannot Shrink", currentSizeGb=100))
+    assert b["currentSizeGb"] == 100
+    failed = [{"slug": "vae", "name": "ae.safetensors", "error": "404"}]
+    b = _body(_api(400, "Model Set Unavailable", "Couldn't add FLUX.1 dev", modelSet="flux-dev", failed=failed))
+    assert b["failed"] == failed and b["modelSet"] == "flux-dev" and "No pod was created" in b["next_step"]
+    b = _body(_api(400, "Model Set Not For Template", available=["flux-dev", "sdxl"]))
+    assert b["available"] == ["flux-dev", "sdxl"]
+
+
+def test_data_loss_consent_without_a_placement_is_about_update_pod():
+    """update_pod's refusal names no placement; its advice must not send the agent to start_pod."""
+    from meshive.exceptions import ConflictError
+
+    b = _body(ConflictError(409, "Moving deletes files.", title="Data Loss Consent Required",
+                            raw={"detail": {"title": "Data Loss Consent Required", "message": "x", "podName": "p-0",
+                                            "hasUnpreservedWorkspace": True}}))
+    assert b["code"] == "data_loss_consent_required" and "placement" not in b
+    assert "update_pod again" in b["next_step"] and "allow_node_migration" in b["next_step"]
+    assert "start_pod" not in b["next_step"]
+
+
+def test_wait_timeout_says_the_server_keeps_going():
+    from meshive.exceptions import WaitTimeoutError
+
+    b = _body(WaitTimeoutError("Storage pv-1 was not ready within 60s."))
+    assert b["code"] == "wait_timeout" and "still in progress" in b["next_step"] and "don't start it again" in b["next_step"]
+
+
+def test_storage_connection_error_has_its_own_code():
+    import meshive.exceptions
+
+    cls = getattr(meshive.exceptions, "StorageConnectionError", None)
+    if cls is None:
+        pytest.skip("this SDK reports a failed connection as a phase instead")
+    b = _body(cls("pv-1"))
+    assert b["code"] == "storage_connection_failed" and "Don't retry" in b["next_step"]

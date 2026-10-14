@@ -1,10 +1,13 @@
 """Write tools — pods (write scope).
 
-For create_pod and start_pod (resuming billing of a stopped pod), which cost money, and delete_pod, which can't be undone, **the server (this tool)**
-enforces the `confirm` gate: with confirm=false (the default) it returns only an estimate/summary and does nothing. It doesn't rely on the model's attention.
+For create_pod and start_pod (resuming billing of a stopped pod), which cost money, update_pod, which restarts a running
+pod and can raise its price, and delete_pod, which can't be undone, **the server (this tool)** enforces the `confirm`
+gate: with confirm=false (the default) it returns only an estimate/summary and does nothing. It doesn't rely on the
+model's attention.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -13,7 +16,7 @@ from .. import money
 from ..client import meshive_client
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod
-from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
+from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview, price_change
 
 _POD_ARGS_DOC = """`workspace` takes the id from the workspaces tool (a label also works). `template_id` comes from the templates tool.
 GPU pod: pass `gpu_model` (from the gpus tool) and optionally `gpu_count`/`gpu_vram_gb`; vCPU/RAM default to the GPU's recommended sizes.
@@ -27,7 +30,8 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value fro
 `max_price_per_hour` is checked against the estimate (compute plus new local_volumes) before creating and caps the final COMPUTE hourly rate at placement; an over-cap placement fails asynchronously.
 Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
 `input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"]}] (default place /inputs/<asset name> or the template's path for that role); they add an input volume billed by size.
-`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false}] (the template's own output folders are watched already); `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage."""
+`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false}] (the template's own output folders are watched already); `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
+`model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time."""
 
 
 def _pod_kwargs(**kw: Any) -> dict[str, Any]:
@@ -47,6 +51,53 @@ def _local_storage_note(est: Any) -> str:
         return ""
     return (f" This includes {money.hourly(rate)}/hour for the new local storage, which is billed until that storage "
             "is deleted, also while the pod is stopped.")
+
+
+def _bytes_size(value: Any) -> str:
+    """Byte count → GiB like the console's other sizes (MiB under 1 GiB)."""
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return "size unknown"
+    if not math.isfinite(raw) or raw < 0:
+        return "size unknown"
+    gib = raw / 1024 ** 3
+    if gib >= 10:
+        return f"{gib:,.0f} GiB"
+    if gib >= 1:
+        return f"{gib:.1f} GiB"
+    return f"{raw / 1024 ** 2:.0f} MiB"
+
+
+def _model_set(est: Any) -> dict[str, Any] | None:
+    """The model set summary the server adds to a pod estimate when `model_set` was passed."""
+    summary = getattr(est, "model_set", None) or (getattr(est, "raw", None) or {}).get("modelSet")
+    return summary if isinstance(summary, dict) else None
+
+
+def _model_set_note(est: Any) -> str:
+    """Sentence for the user about the model set in an estimate, or "" when there is none."""
+    summary = _model_set(est)
+    if summary is None:
+        return ""
+    note = (f" It adds model set '{summary.get('name') or summary.get('slug')}' ({summary.get('file_count')} files, "
+            f"{_bytes_size(summary.get('total_size_bytes'))})")
+    need = summary.get("min_vram_gb")
+    if isinstance(need, (int, float)) and need > 0:
+        note += (f", which needs at least {need:g} GB of GPU memory"
+                 + (" (estimated)" if summary.get("min_vram_estimated") else ""))
+        have = (est.resources or {}).get("vram_gb")
+        if isinstance(have, (int, float)) and have < need:
+            note += f", more than the {have:g} GB of the chosen GPU"
+    return note + ". Its files are fetched before the pod is created, which can take several minutes."
+
+
+# update_pod arguments that guard an edit rather than change the pod.
+_EDIT_CONTROLS = {"drop_watched_folders", "max_price_per_hour"}
+
+# A create with a model set waits for its files, so the call itself may outlast the client's timeout.
+_SLOW_CREATE = (" If the create call times out, don't create the pod again: check operation_status with this "
+                "operation_id and the pods tool first.")
 
 
 # start_pod placements that may land on another machine — both need separate data-loss consent.
@@ -85,7 +136,8 @@ def register(server: MCPServer) -> None:
                            region: str | None = None, max_price_per_hour: float | None = None,
                            input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
                            harvest_destination: dict[str, Any] | None = None,
-                           template_ports: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                           template_ports: list[dict[str, Any]] | None = None,
+                           model_set: str | None = None) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
         Call this first, show the user the price and hardware, then call create_pod with the same arguments.
         """
@@ -99,10 +151,14 @@ def register(server: MCPServer) -> None:
                 secret_keys=secret_keys, ports=ports, template_ports=template_ports, command=command,
                 internet_premium=internet_premium,
                 uptime_premium=uptime_premium, cpu_premium=cpu_premium, max_price_per_hour=max_price_per_hour,
-                input_assets=input_assets, watched_folders=watched_folders, harvest_destination=harvest_destination))
+                input_assets=input_assets, watched_folders=watched_folders, harvest_destination=harvest_destination,
+                model_set=model_set))
         out = to_dict(est)
         out["workspace"] = ws
+        if _model_set(est) is not None:
+            out["model_set"] = _model_set(est)
         out["next_step"] = ("Show the price per hour and hardware to the user." + _local_storage_note(est) +
+                            _model_set_note(est) +
                             " Create the pod only after they agree, by calling create_pod with the same arguments and "
                             "confirm=true.")
         return out
@@ -122,10 +178,12 @@ def register(server: MCPServer) -> None:
                          input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
                          harvest_destination: dict[str, Any] | None = None,
                          template_ports: list[dict[str, Any]] | None = None,
+                         model_set: str | None = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
         after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
+        With `model_set` the confirmed call returns only after the set's files were added, which can take minutes.
         """
         kwargs = _pod_kwargs(gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type,
                              vcpu=vcpu, ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes,
@@ -133,15 +191,20 @@ def register(server: MCPServer) -> None:
                              command=command,
                              internet_premium=internet_premium, uptime_premium=uptime_premium, cpu_premium=cpu_premium,
                              max_price_per_hour=max_price_per_hour, input_assets=input_assets,
-                             watched_folders=watched_folders, harvest_destination=harvest_destination)
+                             watched_folders=watched_folders, harvest_destination=harvest_destination,
+                             model_set=model_set)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
             if not confirm:
                 est = await call(client.estimate_pod, name, template_id, workspace=ws, **kwargs)
-                return preview("create_pod", {"estimate": to_dict(est), "workspace": ws, "name": name},
-                               f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est))
+                payload = {"estimate": to_dict(est), "workspace": ws, "name": name}
+                if _model_set(est) is not None:
+                    payload["model_set"] = _model_set(est)
+                return preview("create_pod", payload,
+                               f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est)
+                               + _model_set_note(est) + (_SLOW_CREATE if _model_set(est) is not None else ""))
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
         tx = created.transaction_id
@@ -270,6 +333,98 @@ def register(server: MCPServer) -> None:
             result = await call(client.delete_pod, pod, ws, delete_local_storages=delete_local_storages)
         out = to_dict(result)
         out["next_step"] = "Deletion was accepted. The pod disappears from the pods list within a minute."
+        return out
+
+    # --- Edit (the console's Pod Edit) ---------------------------------------------------------------------
+
+    @meshive_tool(server, "update_pod", title="Edit Pod", annotations=MUTATE)
+    async def update_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, name: str | None = None,
+                         template_id: int | None = None, rental_type: str | None = None,
+                         gpu_model: str | None = None, gpu_vram_gb: int | None = None, gpu_count: int | None = None,
+                         vcpu: int | None = None, ram_gb: int | None = None, cpu_line: str | None = None,
+                         env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
+                         remove_env: list[str] | None = None, ports: list[Any] | None = None,
+                         template_ports: list[dict[str, Any]] | None = None, remove_ports: list[int] | None = None,
+                         command: str | None = None, volumes: list[dict[str, str]] | None = None,
+                         local_volumes: list[dict[str, Any]] | None = None, detach_storages: list[str] | None = None,
+                         allow_node_migration: bool = False, allow_data_loss: bool = False,
+                         drop_watched_folders: list[str] | None = None, max_price_per_hour: float | None = None,
+                         confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
+        """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name also works).
+        With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
+        A running pod restarts with the new settings and a stopped pod uses them at its next start; renaming alone (`name`) doesn't restart it. Input assets and watched folders are kept.
+        Locked like the console: the pod type (GPU or CPU), premiums and the image can't change.
+        Hardware: `gpu_model`/`gpu_vram_gb`/`gpu_count` for GPU pods, `cpu_line` for CPU pods, `rental_type` demand or spot. Changing the GPU resets vCPU and RAM per GPU to the new GPU's recommended sizes, changing only `gpu_count` keeps the per-GPU ratio, and changing the CPU line resets cores and RAM to the console's default. `vcpu` and `ram_gb` are pod totals and must be sizes the console offers. An older pod may need `ram_gb` passed with any change.
+        `template_id` moves the pod to another template; its variables and ports then start from that template.
+        `env` sets or adds variables (`secret_keys` names the secret ones) and `remove_env` removes variables the user added. `ports` opens new ports, `template_ports` renames, renumbers or exposes/hides current ports ([{"port": 8188, "name": "ui", "new_port": 8189, "external": false}]) and `remove_ports` closes ports the user added. Template variables and ports can't be removed. `command` replaces the start command ("" = back to the template's).
+        Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Spot pods can't have local storage, so detach it to switch to spot.
+        If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes unpreserved workspace files: when the pod has any, allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
+        If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
+        `max_price_per_hour` refuses the edit when the new estimate is above it."""
+        changes = _pod_kwargs(name=name, template_id=template_id, rental_type=rental_type, gpu_model=gpu_model,
+                              gpu_vram_gb=gpu_vram_gb, gpu_count=gpu_count, vcpu=vcpu, ram_gb=ram_gb,
+                              cpu_line=cpu_line, env=env, secret_keys=secret_keys, remove_env=remove_env, ports=ports,
+                              template_ports=template_ports, remove_ports=remove_ports, command=command,
+                              volumes=volumes, local_volumes=local_volumes, detach_storages=detach_storages,
+                              drop_watched_folders=drop_watched_folders, max_price_per_hour=max_price_per_hour)
+        async with meshive_client(ctx) as client:
+            ws = await resolve(client, workspace)
+            if needs_input(ws):
+                return ws
+            pod = await resolve_pod(client, ws, pod)
+            # A move deletes unpreserved workspace files, so it needs the same separate consent as start_pod any_node.
+            loss = False
+            if allow_node_migration:
+                current = await call(client.get_pod, pod, ws)
+                loss = current.has_unpreserved_workspace is not False
+            if not confirm or (loss and not allow_data_loss):
+                # The consent flags don't change the estimate; without them the server prices the edit instead of
+                # refusing it for consent, and the consent question is asked here.
+                est = await call(client.estimate_pod_update, pod, ws, **changes)
+                label = est.name or pod
+                question = f"Change pod '{label}': {'; '.join(est.changes) if est.changes else 'no visible change'}?"
+                question += price_change(est)
+                if set(changes) - _EDIT_CONTROLS == {"name"}:
+                    question += " Only the name changes; the pod isn't restarted."
+                elif est.restarts:
+                    question += " The pod is running, so it restarts with the new settings."
+                elif est.restarts is None:
+                    question += " A running pod restarts with the new settings; a stopped one uses them at its next start."
+                else:
+                    question += " The pod isn't running; it uses the new settings at its next start."
+                question += _local_storage_note(est)
+                warning = ""
+                if allow_node_migration:
+                    question += " If its machine can't fit the change, the pod moves to another machine."
+                    if loss:
+                        warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to "
+                                   "another machine. Obtain separate explicit consent and pass allow_data_loss=true.")
+                elif allow_data_loss:
+                    question += " allow_data_loss is only sent together with allow_node_migration."
+                return preview("update_pod", {"pod": pod, "workspace": ws, "estimate": to_dict(est),
+                                              "allow_node_migration": allow_node_migration,
+                                              "requires_data_loss_consent": loss, "data_loss_warning": warning},
+                               question + warning)
+            result = await call(client.update_pod, pod, ws, **changes, allow_node_migration=allow_node_migration,
+                                allow_data_loss=allow_data_loss if allow_node_migration else False)
+        out = to_dict(result)
+        tx = result.transaction_id
+        if result.renamed_only:
+            out["next_step"] = "Renamed; the pod wasn't restarted. The pods tool shows the new name."
+            return out
+        step = "The edit was accepted" + (f" (transaction {tx})" if tx is not None else "") + "."
+        restarts = result.estimate.restarts if result.estimate is not None else None
+        if restarts:
+            step += " The pod restarts with the new settings; poll the pods tool until it is `running` again."
+        elif restarts is None:
+            step += (" A running pod restarts with the new settings and a stopped one uses them at its next start; "
+                     "poll the pods tool for its status.")
+        else:
+            step += " The pod uses the new settings at its next start (start_pod)."
+        if tx is not None:
+            step += (f" If it doesn't come back as expected, call the transactions tool with transaction_id={tx}: it "
+                     "shows the current step and why it failed.")
+        out["next_step"] = step
         return out
 
     # --- Watched folders (harvest folders of a running Pod) ---------------------------------------------------

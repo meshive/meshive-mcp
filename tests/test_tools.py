@@ -8,10 +8,11 @@ from meshive.exceptions import AuthenticationError, RateLimitError
 
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "cpus", "templates", "servings", "tasks",
               "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task",
-              "download_links", "models", "detect_model", "source_credentials", "watched_folders"}
-WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage", "delete_storage",
-               "deploy_serving", "scale_serving", "pause_serving", "delete_serving", "submit_task", "stop_task",
-               "register_model", "delete_model", "import_asset", "set_watched_folders", "ssh_access"}
+              "download_links", "models", "detect_model", "source_credentials", "watched_folders", "model_sets"}
+WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
+               "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
+               "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
+               "set_watched_folders", "ssh_access"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model"}
 
 
@@ -23,7 +24,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 40
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 44
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
