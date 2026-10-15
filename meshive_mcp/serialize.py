@@ -19,10 +19,19 @@ from . import money
 _DROP = {"raw"}
 # Fields per dataclass that aren't sent to the model. Credit's paid/bonus are leftovers of the split from before free credits were retired (2026-10) —
 # the server sends paid = balance, bonus = 0, and the SDK keeps the fields only for backward compatibility. Sending them makes the model explain a split that no longer exists.
-_DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"}}
+#
+# One-time SSH logins never go out through to_dict: ssh_access and connect_storage put the command and password into their
+# own response, once, and the browser-terminal URL (which carries the password) is never sent.
+_DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"},
+                                       "SshAccess": {"password", "web_url"},
+                                       "StorageConnection": {"ssh"}}
 
 # Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
-_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour"}
+# current_price_per_hour is the rate before an edit (pod and storage update estimates).
+_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour", "current_price_per_hour"}
+# Hourly unit prices whose names don't say "per_hour" → checked together with the dataclass name. The console's CPU
+# picker shows the per-core and per-GiB RAM rates of a line with 3 decimals, like every other hourly rate.
+_HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "ram_price_per_gb"}}
 # Other amounts can't be told apart by name alone (e.g. DailyCost.pod is an amount, WorkspaceResources.pod a count)
 # → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {
@@ -38,7 +47,7 @@ _USD_FIELDS: dict[str, set[str]] = {
     "TaskEstimate": {"max_cost"},
 }
 # A pod estimate breakdown is a set of hourly amounts like {"gpu": "0.068", ...} — the console's Receipt shows 3 decimals per line too.
-_HOURLY_DICT_FIELDS = {("PodEstimate", "breakdown")}
+_HOURLY_DICT_FIELDS = {("PodEstimate", "breakdown"), ("PodUpdateEstimate", "breakdown")}
 # Only numeric strings with a decimal point or exponent are touched. Integer strings like "457" may be ids, so they stay as-is.
 _DECIMAL_STR = re.compile(r"^-?(\d+\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)$")
 
@@ -63,6 +72,7 @@ def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
         usd_fields = _USD_FIELDS.get(cls, frozenset())
+        hourly_fields = _HOURLY_FIELDS | _HOURLY_FIELDS_BY_CLASS.get(cls, set())
         drop = _DROP_BY_CLASS.get(cls, frozenset())
         out: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
@@ -70,7 +80,7 @@ def to_dict(obj: Any) -> Any:
                 continue
             value = getattr(obj, f.name)
             out[f.name] = to_dict(value)
-            if f.name in _HOURLY_FIELDS:
+            if f.name in hourly_fields:
                 out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
                 out[f"{f.name}_display"] = money.hourly(value)
             elif f.name in usd_fields:

@@ -46,7 +46,9 @@ client, so they need no network and no API key.
   people. Return them as data, and keep the warning in the tool description, in the response and in the server
   instructions.
 - **Secrets stay hidden.** Connect passwords are hidden in every response unless the user asks for one pod with
-  `show_secrets=true`.
+  `show_secrets=true`. Tools that return a one-time SSH password (`ssh_access`, `connect_storage`) send no
+  `Idempotency-Key`, so the API never keeps a replayable copy of the response, and they never return the
+  browser-terminal URL, which carries the password.
 - Responses are capped at 1 MiB and lists are paged.
 - When adding or removing a tool, update the tool sets in `tests/test_tools.py`, the tool table in `README.md` and
   `CHANGELOG.md`.

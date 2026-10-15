@@ -13,15 +13,22 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
+from .. import money
 from ..errors import translate, tool_error
 
 T = TypeVar("T")
 MAX_RESPONSE_BYTES = 1024 * 1024
-# Errors that end the operation for good — the generic "retry with the same operation_id" advice would contradict them.
-_NO_RETRY_CODES = {"pod_creation_failed"}
+# Errors whose next_step already says whether and how to call again, so the generic "retry with the same operation_id and
+# the same arguments" advice would contradict it: a failed create is final, a start refused for data-loss consent is
+# called again with the placement it names and allow_data_loss=true once the user agrees, and an edit refused for a
+# move, local storage or watched folders is called again with the argument the user agreed to.
+_OWN_RETRY_ADVICE_CODES = {"pod_creation_failed", "data_loss_consent_required", "node_migration_required",
+                           "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
-_WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "create_storage",
-           "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
+# SDK methods that take an Idempotency-Key. connect_storage and ssh_access are left out on purpose: their responses carry
+# a one-time password, which the server must not keep as a replayable operation record.
+_WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
+           "update_storage", "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
            "submit_task", "stop_task", "register_model", "delete_model", "import_asset", "set_watched_folders"}
 
 
@@ -56,6 +63,16 @@ def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]
     return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
+def price_change(est: Any) -> str:
+    """Sentence with the hourly price before and after an edit, from a pod or storage update estimate."""
+    after = money.hourly(est.price_per_hour)
+    if est.current_price_per_hour is None:
+        return f" Its price will be {after}/hour."
+    before = money.hourly(est.current_price_per_hour)
+    return (f" Its price stays at {after}/hour." if before == after else
+            f" Its price goes from {before}/hour to {after}/hour.")
+
+
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
     (2) a ToolError raised by the tool as an `isError` result whose body is **pure JSON with no prefix**. The SDK's default prepends "Error executing tool <name>: ...",
@@ -87,7 +104,7 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                     result["operation_id"] = op
                     if "lookup" in operation:
                         result["operation_lookup"] = operation["lookup"]
-                    if result.get("code") not in _NO_RETRY_CODES:
+                    if result.get("code") not in _OWN_RETRY_ADVICE_CODES:
                         result["next_step"] = (result.get("next_step", "") +
                             " Check the resource/operation state first. Any retry MUST reuse this operation_id and the same arguments; never submit a new operation for an unknown outcome.")
                 return _bounded_result(result, is_error=True)

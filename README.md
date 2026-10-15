@@ -107,6 +107,8 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 - *"My pod has been creating for ten minutes. What is it doing?"*
 - *"Show me the last 50 lines of my-pod's logs."*
 - *"Stop all running pods in my workspace."*
+- *"Give my-pod two GPUs instead of one. What will it cost?"*
+- *"Which model sets can I start a ComfyUI pod with?"*
 - *"How much credit do I have left, and what did my workspace spend this week?"*
 - *"Give me download links for the outputs of my last task."*
 
@@ -116,7 +118,8 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
   anything, the agent gets a price or a summary, shows it to you and waits for your go-ahead.
 - **A Read only key stays read-only.** With one, the agent can look at everything but change nothing.
 - **Logs are treated as data.** Text printed inside your pods is never followed as instructions.
-- **Passwords go only to you.** Pod logins and SSH passwords stay hidden unless you ask for them.
+- **Passwords go only to you.** Pod logins and SSH passwords for pods and storage stay hidden unless you ask for
+  them.
 - **Your key isn't stored.** The server keeps no state: your key travels with each request and is passed on to the
   Meshive API.
 
@@ -126,9 +129,9 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | --- | --- |
 | Account and billing | `account`, `billing_history` |
 | Workspaces | `workspaces` |
-| GPUs and templates | `gpus` (also works without a key), `templates` |
-| Pods | `pods`, `estimate_pod`, `create_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
-| Storage | `storages`, `create_storage`, `delete_storage` |
+| GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
+| Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
+| Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task` |
 | Files (Asset Hub) | `assets`, `import_asset`, `download_links`, `source_credentials` |

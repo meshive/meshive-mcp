@@ -2,7 +2,7 @@
 import json
 
 import pytest
-from meshive.exceptions import ConflictError, InsufficientCreditError, NotFoundError
+from meshive.exceptions import ConflictError, InsufficientCreditError, MeshiveAPIError, NotFoundError
 
 pytestmark = pytest.mark.anyio
 
@@ -34,10 +34,81 @@ async def test_create_pod_with_confirm_creates(mcp_client, fake, with_key):
         "volumes": [{"storage": "pv-a", "mount_path": "/data"}], "env": {"A": "1"}, "ports": [8888],
         "max_price_per_hour": 0.2, "confirm": True, "operation_id": "test-operation-0001"}))
     assert body["transaction_id"] == 14765 and body["pod_name"] is None and "Poll the pods tool" in body["next_step"]
+    # A failed create drops off the transactions list after ~3 minutes — point the agent at the lookup by id.
+    assert "usually runs within a minute" in body["next_step"]
+    assert "transactions tool with transaction_id=14765" in body["next_step"]
     (_, args, kw), = _calls(fake, "create_pod")
     assert args == ("p", 457) and kw["workspace"] == WS and kw["gpu_count"] == 2 and kw["rental_type"] == "spot"
     assert kw["volumes"] == [{"storage": "pv-a", "mount_path": "/data"}] and kw["max_price_per_hour"] == 0.2
     assert "vcpu" not in kw   # None arguments are left to the SDK defaults
+
+
+async def test_create_pod_passes_local_volumes_and_cpu_line_but_not_region(mcp_client, fake, with_key):
+    local = [{"name": "scratch", "mount_path": "/scratch", "size_gb": 50, "encrypted": True}]
+    args = {"name": "p", "template_id": 457, "local_volumes": local, "cpu_line": "amd-epyc-4-ddr5", "region": "KR"}
+    prev = _payload(await mcp_client.call_tool("create_pod", args))
+    (_, _, kw), = _calls(fake, "estimate_pod")
+    assert kw["local_volumes"] == local and kw["cpu_line"] == "amd-epyc-4-ddr5"
+    assert "region" not in kw                       # accepted for 1.x callers, ignored by the server, so never sent
+    # The new local storage is part of the hourly total and keeps billing after the pod stops — say so in the question.
+    assert "$0.082/hour" in prev["question"] and "$0.014/hour for the new local storage" in prev["question"]
+    assert prev["estimate"]["breakdown_display"]["local_storage"] == "$0.014"
+
+    _payload(await mcp_client.call_tool("create_pod", {**args, "confirm": True, "operation_id": prev["operation_id"]}))
+    (_, _, kw), = _calls(fake, "create_pod")
+    assert kw["local_volumes"] == local and kw["cpu_line"] == "amd-epyc-4-ddr5" and "region" not in kw
+
+
+async def test_estimate_pod_mentions_local_storage_only_when_present(mcp_client, fake, with_key):
+    plain = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 1, "region": "KR"}))
+    assert "local storage" not in plain["next_step"] and "region" not in _calls(fake, "estimate_pod")[0][2]
+    local = _payload(await mcp_client.call_tool("estimate_pod", {
+        "name": "p", "template_id": 1, "local_volumes": [{"name": "s", "mount_path": "/s", "size_gb": 10}]}))
+    assert "$0.014/hour for the new local storage" in local["next_step"]
+    assert local["price_per_hour_display"] == "$0.082"
+
+
+async def test_pod_tool_descriptions_cover_the_console_rules(mcp_client, fake, with_key):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_pod", "create_pod"):
+        desc = tools[name].description
+        assert "EXISTING network (nfs) storage" in desc and "NEW local storage" in desc, name
+        assert "at least 10 GiB" in desc and "spot" in desc and "cpus tool" in desc, name
+        assert "8 cores / 32 GiB" in desc and "`region` is accepted for compatibility and ignored" in desc, name
+        assert "`template_ports` changes the ports the template opens" in desc and "can't be removed" in desc, name
+        props = tools[name].input_schema["properties"]
+        assert {"local_volumes", "cpu_line", "region", "volumes", "template_ports"} <= set(props), name
+
+
+async def test_template_ports_are_passed_to_estimate_and_create(mcp_client, fake, with_key):
+    changes = [{"port": 8188, "name": "ui", "new_port": 8189, "external": False}]
+    est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 457, "template_ports": changes}))
+    assert est["price_per_hour"] == "0.068423"
+    assert _calls(fake, "estimate_pod")[0][2]["template_ports"] == changes
+    prev = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457, "template_ports": changes}))
+    assert _calls(fake, "estimate_pod")[0][2]["template_ports"] == changes
+    _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457, "template_ports": changes,
+                                                       "confirm": True, "operation_id": prev["operation_id"]}))
+    assert _calls(fake, "create_pod")[0][2]["template_ports"] == changes
+    # Left out when not given, so the SDK and server defaults apply.
+    _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 457}))
+    assert "template_ports" not in _calls(fake, "estimate_pod")[0][2]
+
+
+async def test_watched_template_folders_and_strip_prefix_reach_the_sdk(mcp_client, fake, with_key):
+    """The console's create screen: template watched folders turned off, Keep structure for chosen asset files."""
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_pod", "create_pod"):
+        assert "watched_template_folders" in tools[name].input_schema["properties"], name
+        assert '"strip_prefix": ""' in tools[name].description and "Only these keys" in tools[name].description, name
+    folders = {"/outputs": {"enabled": False}}
+    assets = [{"asset": "asset_b", "paths": ["unet/"], "strip_prefix": ""}]
+    args = {"name": "p", "template_id": 457, "watched_template_folders": folders, "input_assets": assets}
+    prev = _payload(await mcp_client.call_tool("create_pod", args))
+    assert _calls(fake, "estimate_pod")[0][2]["watched_template_folders"] == folders
+    _payload(await mcp_client.call_tool("create_pod", {**args, "confirm": True, "operation_id": prev["operation_id"]}))
+    kw = _calls(fake, "create_pod")[0][2]
+    assert kw["watched_template_folders"] == folders and kw["input_assets"] == assets
 
 
 async def test_delete_pod_preview_then_delete(mcp_client, fake, with_key):
@@ -71,21 +142,123 @@ async def test_start_pod_needs_confirm_because_billing_resumes(mcp_client, fake,
     assert args[:2] == ("pod-2", WS) and kw["placement"] == "any_node"
 
 
+@pytest.mark.parametrize("placement", ["wait_same_node", "wait_any_node"])
+async def test_start_pod_wait_placements_are_passed_through(mcp_client, fake, with_key, placement):
+    prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": placement}))
+    assert prev["confirmed"] is False and prev["placement"] == placement and not _calls(fake, "start_pod")
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": placement, "confirm": True,
+                                                             "allow_data_loss": True, "operation_id": prev["operation_id"]}))
+    assert "`waiting` until a machine has room" in done["next_step"]
+    assert _calls(fake, "start_pod")[0][2]["placement"] == placement
+
+
+async def test_start_pod_same_node_notes_cover_wait_same_node(mcp_client, fake, with_key):
+    """spec_mismatch refuses both same-machine placements — waiting would never finish — so the preview says so for both."""
+    fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "spec_mismatch")
+    for placement in ("same_node", "wait_same_node"):
+        prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": placement}))
+        assert "same_node and wait_same_node are refused" in prev["question"], placement
+        assert "any_node or wait_any_node" in prev["question"], placement
+    moving = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "wait_any_node"}))
+    assert "refused" not in moving["question"]
+
+    fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "node_unavailable")
+    waiting = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "wait_same_node"}))
+    assert "can't take it now (node unavailable)" in waiting["question"] and "keeps it waiting" in waiting["question"]
+
+
 async def test_start_pod_preview_hides_secrets_and_says_why_same_node_waits(mcp_client, fake, with_key):
     from conftest import POD_PASSWORD
 
     fake["setup"] = lambda inst: setattr(inst, "same_node_reason", "capacity")
-    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2"})
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": "same_node"})
     assert POD_PASSWORD not in result.content[0].text                 # previews carry the whole Pod too
     prev = _payload(result)
     assert "cannot start on its original machine now (capacity)" in prev["question"]
     assert prev["data_loss_warning"] == ""
 
 
+async def test_start_pod_without_placement_lets_the_server_pick(mcp_client, fake, with_key):
+    """No placement: the server picks what the console would. The tool can't know in advance whether that moves the pod,
+    so the preview says the server asks for consent itself, and allow_data_loss isn't sent without a known placement."""
+    prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2"}))
+    assert prev["confirmed"] is False and prev["placement"] is None and prev["requires_data_loss_consent"] is None
+    assert "The server picks the placement the console would" in prev["question"]
+    assert "data_loss_consent_required" in prev["data_loss_warning"] and prev["data_loss_warning"] in prev["question"]
+    assert not _calls(fake, "start_pod")
+
+    fake["setup"] = lambda inst: setattr(inst, "unpreserved_workspace", False)      # nothing to lose: no warning
+    quiet = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "allow_data_loss": True}))
+    assert quiet["data_loss_warning"] == "" and "permanently deleted" not in quiet["question"]
+    assert "allow_data_loss is not sent without an explicit placement" in quiet["question"]
+
+    # An older server doesn't report the placement it used.
+    fake["setup"] = None
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True, "allow_data_loss": True,
+                                                             "operation_id": prev["operation_id"]}))
+    (_, args, kw), = _calls(fake, "start_pod")
+    assert args[:2] == ("pod-2", WS) and kw["placement"] is None and kw["allow_data_loss"] is False
+    assert done["placement"] is None and "picked" not in done["next_step"] and "asynchronously" in done["next_step"]
+
+
+@pytest.mark.parametrize("picked,says", [("same_node", "asynchronously"), ("wait_same_node", "`waiting` until"),
+                                         ("any_node", "another machine"), ("wait_any_node", "another machine")])
+async def test_start_pod_reports_the_placement_the_server_picked(mcp_client, fake, with_key, picked, says):
+    fake["setup"] = lambda inst: setattr(inst, "start_placement", picked)
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True,
+                                                             "operation_id": "test-operation-0001"}))
+    assert done["placement"] == picked and f"The server picked placement {picked}" in done["next_step"]
+    assert says in done["next_step"]
+
+
+async def test_start_pod_explicit_placement_is_reported_as_sent(mcp_client, fake, with_key):
+    done = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2", "placement": " Same_Node ", "confirm": True,
+                                                             "operation_id": "test-operation-0001"}))
+    assert done["placement"] == "same_node" and "picked" not in done["next_step"]
+    assert _calls(fake, "start_pod")[0][2]["placement"] == "same_node"
+
+
+async def test_defaulted_start_that_would_move_files_asks_for_consent(mcp_client, fake, with_key):
+    """The server answers a start whose pick moves a pod with unpreserved files with 409 and the placement it picked;
+    the agent is told to get consent and call again with that placement — not to repeat the same arguments."""
+    detail = {"title": "Data Loss Consent Required", "message": "Moving this pod permanently deletes files.",
+              "podName": "pod-2", "workspace": WS, "placement": "any_node", "hasUnpreservedWorkspace": True}
+    fake["setup"] = lambda inst: inst.raise_on.update(start_pod=ConflictError(
+        409, detail["message"], title=detail["title"], raw={"detail": detail}))
+    result = await mcp_client.call_tool("start_pod", {"pod": "pod-2", "confirm": True,
+                                                      "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "data_loss_consent_required" and body["placement"] == "any_node"
+    assert body["operation_id"] == "test-operation-0001"
+    step = body["next_step"]
+    assert "Nothing was started" in step and "placement set to that `placement`" in step
+    assert "allow_data_loss=true" in step and "same operation_id" in step and "explicit consent" in step
+    assert "same arguments" not in step
+
+
+async def test_storage_usage_warning_and_minimum_size(mcp_client, fake, with_key):
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["create_storage"]
+    assert "at least 10" in desc and "usage_warning_threshold" in desc
+    args = {"name": "data", "size_gb": 20, "usage_warning": True, "usage_warning_threshold": 0.8}
+    prev = _payload(await mcp_client.call_tool("create_storage", args))
+    assert "A usage warning is sent when it is 80% full." in prev["question"]
+    (_, _, kw), = _calls(fake, "estimate_storage")
+    assert kw["usage_warning"] is True and kw["usage_warning_threshold"] == 0.8
+    _payload(await mcp_client.call_tool("create_storage", {**args, "confirm": True, "operation_id": prev["operation_id"]}))
+    (_, _, kw), = _calls(fake, "create_storage")
+    assert kw["usage_warning"] is True and kw["usage_warning_threshold"] == 0.8
+    default = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 20, "usage_warning": True}))
+    assert "90% full" in default["question"] and "usage_warning_threshold" not in _calls(fake, "estimate_storage")[0][2]
+
+
 async def test_storage_tools(mcp_client, fake, with_key):
-    prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "storage_type": "hostPath"}))
-    assert prev["confirmed"] is False and prev["estimate"]["max_size_gb"] == 305 and "hostPath" in prev["question"]
-    assert "Create 10 GiB hostPath storage" in prev["question"]        # size_gb is GiB (capacity × 1024 MiB)
+    prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "disk_type": "HDD",
+                                                                  "region": "KR"}))
+    assert prev["confirmed"] is False and prev["estimate"]["max_size_gb"] == 305
+    assert "Create 10 GiB network (nfs) storage" in prev["question"]   # size_gb is GiB (capacity × 1024 MiB)
+    (_, _, kw), = _calls(fake, "estimate_storage")
+    # disk_type and region are accepted for 1.x callers but ignored by the server, so they are not sent.
+    assert kw == {"workspace": WS, "storage_type": "nfs", "encrypted": False, "max_price_per_hour": None}
     done = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["transaction_id"] == 5 and "storages tool" in done["next_step"]
     prev = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1"}))
@@ -94,6 +267,23 @@ async def test_storage_tools(mcp_client, fake, with_key):
     assert "(100 GiB, 1 linked pod(s))" in prev["question"] and prev["storage"]["total_size"] == 102400.0
     done = _payload(await mcp_client.call_tool("delete_storage", {"storage": "pv-1", "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["resource"] == "storage" and done["action"] == "delete"
+
+
+async def test_local_storage_errors_say_where_local_storage_comes_from(mcp_client, fake, with_key):
+    """Local storage is created with a pod now; the server's 400s come back with a next step that says so."""
+    def detail(title, message):
+        return MeshiveAPIError(400, message, title=title, raw={"detail": {"title": title, "message": message}})
+
+    fake["setup"] = lambda inst: inst.raise_on.update(estimate_storage=detail(
+        "Local Storage Not Supported", "Local storage can't be created on its own."))
+    body = _payload(await mcp_client.call_tool("create_storage", {"name": "d", "size_gb": 10, "storage_type": "hostPath"}))
+    assert body["code"] == "local_storage_not_supported" and "local_volumes" in body["next_step"]
+
+    fake["setup"] = lambda inst: inst.raise_on.update(estimate_pod=detail(
+        "Local Storage Not Attachable", "'pv-l' is local storage."))
+    body = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 1,
+                                                              "volumes": [{"storage": "pv-l", "mount_path": "/d"}]}))
+    assert body["code"] == "local_storage_not_attachable" and "local_volumes" in body["next_step"]
 
 
 async def test_volume_size_follows_the_cli_rule():
