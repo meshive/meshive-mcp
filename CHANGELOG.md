@@ -3,6 +3,23 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.3.0
+
+Quick Deploy model sets that are gated on Hugging Face can now be deployed with the user's own Hugging Face token, as
+in the console's Quick Deploy panel. Built on the `meshive` Python SDK 1.3. Tool names and existing arguments are
+unchanged.
+
+### New
+
+- `estimate_pod` and `create_pod` take `hf_token_id`: for a Quick Deploy template whose model set is gated on Hugging
+  Face, the id of a workspace token (from `source_credentials`) whose Hugging Face account accepted the model's
+  license. The set's files download with that token. Like `model_set`, a confirmed create with it returns only after
+  the files were linked.
+- `model_sets` reports `hf_token_required` and `gated_sources` (the page where each repo's license is accepted) per
+  set and `hf_gated` per file, and its `next_step` tells the agent where the user accepts the license.
+- New error codes with next steps: `hf_token_required`, `hf_license_not_accepted`, `hf_access_not_approved`,
+  `hf_token_rejected` and `model_set_needs_token` (a gated set passed as `model_set` on another template).
+
 ## v1.2.0
 
 Pods and storage can now be edited the way the console edits them, storage can be opened over SSH, and pods can start

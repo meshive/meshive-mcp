@@ -31,7 +31,8 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value fro
 Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
 `input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"], "strip_prefix": ""}] (default place /inputs/<asset name> or the template's path for that role); "paths" picks some files or folders, copied from the asset's file list exactly as written there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only these keys are accepted. They add an input volume billed by size.
 `watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false, "enabled": true}] (the template's own output folders are watched already); `watched_template_folders` changes those template folders from the start, like the console's create screen: {"/outputs": {"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files. `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
-`model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time."""
+`model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time.
+`hf_token_id` is for Quick Deploy templates whose model set is gated on Hugging Face (the model_sets tool shows `hf_token_required` and `gated_sources`): the id of a workspace token from the source_credentials tool whose Hugging Face account accepted the model's license. The set's files download with that token, so the user must first accept the license on the page in `gated_sources` with the same Hugging Face account. Without it the server refuses with hf_token_required; hf_license_not_accepted / hf_access_not_approved mean that account hasn't accepted the license or isn't approved yet, and hf_token_rejected means the token is invalid. Like `model_set`, a confirmed create with it returns only after the files were linked, which can take minutes."""
 
 
 def _pod_kwargs(**kw: Any) -> dict[str, Any]:
@@ -138,7 +139,7 @@ def register(server: MCPServer) -> None:
                            watched_template_folders: dict[str, dict[str, Any]] | None = None,
                            harvest_destination: dict[str, Any] | None = None,
                            template_ports: list[dict[str, Any]] | None = None,
-                           model_set: str | None = None) -> dict[str, Any]:
+                           model_set: str | None = None, hf_token_id: int | None = None) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
         Call this first, show the user the price and hardware, then call create_pod with the same arguments.
         """
@@ -154,7 +155,7 @@ def register(server: MCPServer) -> None:
                 uptime_premium=uptime_premium, cpu_premium=cpu_premium, max_price_per_hour=max_price_per_hour,
                 input_assets=input_assets, watched_folders=watched_folders,
                 watched_template_folders=watched_template_folders, harvest_destination=harvest_destination,
-                model_set=model_set))
+                model_set=model_set, hf_token_id=hf_token_id))
         out = to_dict(est)
         out["workspace"] = ws
         if _model_set(est) is not None:
@@ -181,12 +182,13 @@ def register(server: MCPServer) -> None:
                          watched_template_folders: dict[str, dict[str, Any]] | None = None,
                          harvest_destination: dict[str, Any] | None = None,
                          template_ports: list[dict[str, Any]] | None = None,
-                         model_set: str | None = None,
+                         model_set: str | None = None, hf_token_id: int | None = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
         after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
-        With `model_set` the confirmed call returns only after the set's files were added, which can take minutes.
+        With `model_set` or `hf_token_id` the confirmed call returns only after the set's files were added, which can
+        take minutes.
         """
         kwargs = _pod_kwargs(gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type,
                              vcpu=vcpu, ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes,
@@ -195,7 +197,8 @@ def register(server: MCPServer) -> None:
                              internet_premium=internet_premium, uptime_premium=uptime_premium, cpu_premium=cpu_premium,
                              max_price_per_hour=max_price_per_hour, input_assets=input_assets,
                              watched_folders=watched_folders, watched_template_folders=watched_template_folders,
-                             harvest_destination=harvest_destination, model_set=model_set)
+                             harvest_destination=harvest_destination, model_set=model_set,
+                             hf_token_id=hf_token_id)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -207,7 +210,8 @@ def register(server: MCPServer) -> None:
                     payload["model_set"] = _model_set(est)
                 return preview("create_pod", payload,
                                f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est)
-                               + _model_set_note(est) + (_SLOW_CREATE if _model_set(est) is not None else ""))
+                               + _model_set_note(est)
+                               + (_SLOW_CREATE if _model_set(est) is not None or hf_token_id is not None else ""))
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
         tx = created.transaction_id
