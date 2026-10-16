@@ -254,6 +254,26 @@ _BAD_REQUEST_CODES = {
     "model set added automatically": ("model_set_added_automatically",
                                       "This template adds its own model set when the pod is created. Leave `model_set` "
                                       "out."),
+    # --- gated model sets (Hugging Face license) — create_pod `hf_token_id` ---
+    "hugging face token required": ("hf_token_required",
+                                    "No pod was created. This model set is gated on Hugging Face: the user accepts its "
+                                    "license on the model page (gated_sources in the model_sets tool) with their "
+                                    "Hugging Face account, then pass that account's token as `hf_token_id` (an id "
+                                    "from source_credentials). Tokens are added in the console."),
+    "license not accepted": ("hf_license_not_accepted",
+                             "No pod was created. The Hugging Face account of that token hasn't accepted the model's "
+                             "license. Ask the user to accept it on the model page with that account (or pick a token "
+                             "of an account that did), then call again."),
+    "access not approved": ("hf_access_not_approved",
+                            "No pod was created. The repo owner approves each Hugging Face account and hasn't approved "
+                            "the account of that token yet. The user requests access on the model page and waits; try "
+                            "again after approval."),
+    "hugging face token rejected": ("hf_token_rejected",
+                                    "No pod was created. Hugging Face rejected the token (expired or revoked). The user "
+                                    "replaces it in the console; then pass the new token's id from source_credentials."),
+    "model set needs a token": ("model_set_needs_token",
+                                "This model set is gated on Hugging Face and can only be added through its Quick Deploy "
+                                "template with `hf_token_id`. Leave `model_set` out and use that template."),
 }
 
 

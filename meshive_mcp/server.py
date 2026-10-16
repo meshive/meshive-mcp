@@ -76,7 +76,9 @@ separate data-loss consent (allow_data_loss) as moving a pod with start_pod. upd
 (it never shrinks) or sets its usage warning.
 
 Model sets: model_sets lists the model sets a template recommends; pass one `slug` as model_set to estimate_pod and \
-create_pod. Creating with a model set fetches its files first and can take minutes; if a file fails, no pod is created.
+create_pod. Creating with a model set fetches its files first and can take minutes; if a file fails, no pod is created. \
+A set with hf_token_required is gated on Hugging Face: the user accepts its license with their own Hugging Face account, \
+and the pod is created from the set's Quick Deploy template with hf_token_id (a token from source_credentials).
 
 Secrets: `pods` with show_secrets=true, `ssh_access` and `connect_storage` return passwords. Ask for them only when the \
 user wants to log in, give them to that user and nobody else, and never write them into files, commits or other tools. \

@@ -145,6 +145,12 @@ def test_data_loss_consent_names_the_placement_to_retry_with():
     ("Model Set Not For Template", "model_set_not_for_template", "`available`"),
     ("Model Sets Not Supported", "model_sets_not_supported", "`selectable`"),
     ("Model Set Added Automatically", "model_set_added_automatically", "Leave `model_set` out"),
+    # gated model sets (Hugging Face license)
+    ("Hugging Face token required", "hf_token_required", "`hf_token_id`"),
+    ("License not accepted", "hf_license_not_accepted", "accept it on the model page"),
+    ("Access not approved", "hf_access_not_approved", "requests access"),
+    ("Hugging Face token rejected", "hf_token_rejected", "source_credentials"),
+    ("Model Set Needs a Token", "model_set_needs_token", "Quick Deploy"),
 ])
 def test_edit_and_model_set_titles_map_to_codes(title, code, hint):
     b = _body(_api(400, title))

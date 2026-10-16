@@ -427,3 +427,36 @@ async def test_server_instructions_cover_editing_connect_and_model_sets():
                    "allow_node_migration=true", "it never shrinks", "pass one `slug` as model_set",
                    "`ssh_access` and `connect_storage` return passwords", "model set names"):
         assert phrase in INSTRUCTIONS, phrase
+
+
+async def test_gated_model_sets_and_the_hf_token(mcp_client, fake, with_key):
+    """A set gated on Hugging Face: model_sets says where to accept the license, create_pod passes the user's token."""
+    from meshive import ModelSet, ModelSetGatedSource, ModelSetList
+
+    async def gated_sets(self, workspace, template_id):
+        self._rec("list_model_sets", workspace, template_id)
+        return ModelSetList(template_id=template_id, selectable=False,
+                            reason="This template adds its own model set when the pod is created.",
+                            model_sets=[ModelSet(slug="flux3-klein", name="FLUX 3 Image Klein", hf_token_required=True,
+                                                 gated_sources=[ModelSetGatedSource(
+                                                     hf_repo="org/gated", url="https://huggingface.co/org/gated",
+                                                     mode="auto")])])
+
+    fake["setup"] = lambda inst: setattr(inst, "list_model_sets", gated_sets.__get__(inst))
+    body = _payload(await mcp_client.call_tool("model_sets", {"template_id": 483}))
+    assert body["model_sets"][0]["hf_token_required"] is True
+    step = body["next_step"]
+    assert "FLUX 3 Image Klein is gated" in step and "https://huggingface.co/org/gated" in step
+    assert "`hf_token_id`" in step and "source_credentials" in step
+
+    fake["setup"] = None
+    est = _payload(await mcp_client.call_tool("estimate_pod", {"name": "p", "template_id": 483, "hf_token_id": 4}))
+    assert _calls(fake, "estimate_pod")[0][2]["hf_token_id"] == 4 and "workspace" in est
+    preview = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 483, "hf_token_id": 4}))
+    assert "operation_status" in json.dumps(preview)          # the slow-create warning, as with model_set
+    _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 483, "hf_token_id": 4,
+                                                       "confirm": True, "operation_id": preview["operation_id"]}))
+    assert _calls(fake, "create_pod")[-1][2]["hf_token_id"] == 4
+
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
+    assert "hf_token_id" in desc["create_pod"] and "hf_token_required" in desc["model_sets"]

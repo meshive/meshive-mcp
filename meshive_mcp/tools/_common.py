@@ -23,7 +23,9 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # called again with the placement it names and allow_data_loss=true once the user agrees, and an edit refused for a
 # move, local storage or watched folders is called again with the argument the user agreed to.
 _OWN_RETRY_ADVICE_CODES = {"pod_creation_failed", "data_loss_consent_required", "node_migration_required",
-                           "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable"}
+                           "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
+                           "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
+                           "hf_token_rejected"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key. connect_storage and ssh_access are left out on purpose: their responses carry
 # a one-time password, which the server must not keep as a replayable operation record.
