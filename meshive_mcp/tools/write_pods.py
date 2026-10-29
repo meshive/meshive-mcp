@@ -30,7 +30,7 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value fro
 `max_price_per_hour` is checked against the estimate (compute plus new local_volumes) before creating and caps the final COMPUTE hourly rate at placement; an over-cap placement fails asynchronously.
 Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
 `input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"], "strip_prefix": ""}] (default place /inputs/<asset name> or the template's path for that role); "paths" picks some files or folders, copied from the asset's file list exactly as written there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only these keys are accepted. They add an input volume billed by size.
-`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false, "enabled": true}] (the template's own output folders are watched already); `watched_template_folders` changes those template folders from the start, like the console's create screen: {"/outputs": {"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files. `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
+`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false, "enabled": true}] (the template's own output folders are watched already). It works on templates without an output folder too (for example NIM or vLLM), as long as the pod has storage the folders sit in (`volumes` or `local_volumes`). `watched_template_folders` changes those template folders from the start, like the console's create screen: {"/outputs": {"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files, and {"/workspace/output": {"path": "/workspace/results"}} moves an output folder (its $MESHIVE_OUTPUT_DIR and storage follow; output folders only). `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
 `model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time.
 `hf_token_id` is for Quick Deploy templates whose model set is gated on Hugging Face (the model_sets tool shows `hf_token_required` and `gated_sources`): the id of a workspace token from the source_credentials tool whose Hugging Face account accepted the model's license. The set's files download with that token, so the user must first accept the license on the page in `gated_sources` with the same Hugging Face account. Without it the server refuses with hf_token_required; hf_license_not_accepted / hf_access_not_approved mean that account hasn't accepted the license or isn't approved yet, and hf_token_rejected means the token is invalid. Like `model_set`, a confirmed create with it returns only after the files were linked, which can take minutes."""
 
@@ -356,6 +356,7 @@ def register(server: MCPServer) -> None:
                          local_volumes: list[dict[str, Any]] | None = None, detach_storages: list[str] | None = None,
                          allow_node_migration: bool = False, allow_data_loss: bool = False,
                          drop_watched_folders: list[str] | None = None, max_price_per_hour: float | None = None,
+                         enable_folder_saving: bool = False,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name also works).
         With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
@@ -368,13 +369,15 @@ def register(server: MCPServer) -> None:
         Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Spot pods can't have local storage, so detach it to switch to spot.
         If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes unpreserved workspace files: when the pod has any, allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
         If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
+        `enable_folder_saving=true` adds the uploader to an older pod that has none (watched_folders shows editable false with reason no_sidecar), so its folders can be watched; it needs storage on the pod and restarts a running pod once.
         `max_price_per_hour` refuses the edit when the new estimate is above it."""
         changes = _pod_kwargs(name=name, template_id=template_id, rental_type=rental_type, gpu_model=gpu_model,
                               gpu_vram_gb=gpu_vram_gb, gpu_count=gpu_count, vcpu=vcpu, ram_gb=ram_gb,
                               cpu_line=cpu_line, env=env, secret_keys=secret_keys, remove_env=remove_env, ports=ports,
                               template_ports=template_ports, remove_ports=remove_ports, command=command,
                               volumes=volumes, local_volumes=local_volumes, detach_storages=detach_storages,
-                              drop_watched_folders=drop_watched_folders, max_price_per_hour=max_price_per_hour)
+                              drop_watched_folders=drop_watched_folders, max_price_per_hour=max_price_per_hour,
+                              enable_folder_saving=True if enable_folder_saving else None)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -441,7 +444,8 @@ def register(server: MCPServer) -> None:
     async def watched_folders(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Show a pod's watched folders: folders whose new files are uploaded as Asset Hub assets.
         Each folder has `origin` (template or user), `enabled`, its include patterns and `blocked_reason` (network_storage = on network storage, never watched).
-        `revision` is what set_watched_folders needs as `expected_version`; `editable` false (with a reason) means it can't be changed now."""
+        `revision` is what set_watched_folders needs as `expected_version`; `editable` false (with a reason) means it can't be changed now.
+        Reason no_sidecar means the pod has no uploader: when `can_enable_saving` is true, update_pod with enable_folder_saving=true adds it (one restart); otherwise the pod first needs storage (update_pod `volumes`/`local_volumes`)."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -459,6 +463,7 @@ def register(server: MCPServer) -> None:
         """Replace a running pod's watched folders without restarting it. Read watched_folders first and send the WHOLE set back:
         `template` = {template folder path: {"enabled": bool, "include": [...] or null}} and `user` = [{"path", "include", "enabled", "include_existing"}].
         `expected_version` is the `revision` you read; a version conflict means someone else changed it — read again.
+        A running pod's template folder can't be moved: to save another folder instead, turn the template folder off and add the new path to `user` (the app keeps writing to $MESHIVE_OUTPUT_DIR, so tell the user to point the app there).
         Adding or turning on a folder can raise storage costs (uploaded files are stored and billed): with confirm=false (default) such a change only returns a summary; call again with confirm=true after the user agreed. Removing or turning off applies immediately."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
