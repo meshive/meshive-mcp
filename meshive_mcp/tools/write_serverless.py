@@ -154,7 +154,12 @@ def register(server: MCPServer) -> None:
 reaches the logs. Pass exactly one of `gpu_model` (GPU task, optional `gpu_count`/`gpu_vram_gb`) or `cpu_preset`
 (e.g. "micro-2c8g", "small-4c16g", "standard-8c32g"). `max_duration` seconds (3600..86400) is a hard stop.
 `max_price_per_hour` caps the final compute rate only; storage, Asset Hub retention and fetch-time charges are separate.
-The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "target_dir": dir}] under /inputs."""
+The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub assets as ["asset_id" or {"asset": id, "target_dir": dir}] under /inputs.
+`output_include` uploads only the /outputs files matching these globs, relative to /outputs and case-sensitive:
+["*.safetensors"] matches at any depth, ["samples/*.png"] only in that folder, ["checkpoints/"] every folder of that name
+with its contents; omitted = every file. Files left out still use /outputs disk while the task runs.
+A task's `output_include` is null when no filter was given; if you passed `output_include` and the submitted task's is
+null, the server ignores the filter and uploads every file."""
 
     async def estimate_task(ctx: Context[Any, Any], name: str, script: str, workspace: str | None = None,
                             image: str | None = None, template_id: int | None = None, requirements: str | None = None,
@@ -162,7 +167,8 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
                             args: list[str] | None = None, gpu_model: str | None = None, gpu_count: int | None = None,
                             gpu_vram_gb: int | None = None, cpu_preset: str | None = None, max_duration: int = 3600,
                             webhook_url: str | None = None, input_assets: list[Any] | None = None,
-                            max_price_per_hour: float | None = None) -> dict[str, Any]:
+                            max_price_per_hour: float | None = None,
+                            output_include: list[str] | None = None) -> dict[str, Any]:
         """Estimate a one-off task's compute hourly price (total cost can be unknown) before submitting it; nothing runs.
         """
         async with meshive_client(ctx) as client:
@@ -172,7 +178,8 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
             est = await call(client.estimate_task, name, script, workspace=ws, image=image, template_id=template_id,
                              requirements=requirements, env=env, secret_keys=secret_keys, args=args, gpu_model=gpu_model,
                              gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, cpu_preset=cpu_preset, max_duration=max_duration,
-                             webhook_url=webhook_url, input_assets=input_assets, max_price_per_hour=max_price_per_hour)
+                             webhook_url=webhook_url, input_assets=input_assets, max_price_per_hour=max_price_per_hour,
+                             output_include=output_include)
         out = to_dict(est)
         out["workspace"] = ws
         out["next_step"] = "Show the price and max cost to the user, then submit_task with confirm=true if they agree."
@@ -187,7 +194,8 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
                           args: list[str] | None = None, gpu_model: str | None = None, gpu_count: int | None = None,
                           gpu_vram_gb: int | None = None, cpu_preset: str | None = None, max_duration: int = 3600,
                           webhook_url: str | None = None, input_assets: list[Any] | None = None,
-                          max_price_per_hour: float | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
+                          max_price_per_hour: float | None = None, output_include: list[str] | None = None,
+                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Submit a one-off task (a script that runs to completion on a GPU or CPU). It is billed while it runs, up to
         `max_duration`. With confirm=false (default) it only returns the estimate; call again with confirm=true after the
         user agreed. Then poll the tasks tool for status and read output with logs.
@@ -195,7 +203,7 @@ The estimate is not a total-bill ceiling. `input_assets` attaches Asset Hub asse
         kwargs = dict(image=image, template_id=template_id, requirements=requirements, env=env, secret_keys=secret_keys,
                       args=args, gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, cpu_preset=cpu_preset,
                       max_duration=max_duration, webhook_url=webhook_url, input_assets=input_assets,
-                      max_price_per_hour=max_price_per_hour)
+                      max_price_per_hour=max_price_per_hour, output_include=output_include)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):

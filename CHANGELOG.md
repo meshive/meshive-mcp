@@ -3,6 +3,20 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.5.0
+
+A task can now keep only some of the files it writes to `/outputs`, as in the console's submit form. Built on the
+`meshive` Python SDK 1.5. Tool names and existing arguments are unchanged.
+
+### New
+
+- `estimate_task` and `submit_task` take `output_include`: globs relative to `/outputs` (`["*.safetensors"]` at any
+  depth, `["samples/*.png"]` in that folder, `["checkpoints/"]` every folder of that name with its contents). Only
+  matching files are uploaded; omitted, every file is, as before. Files left out still use the `/outputs` disk while
+  the task runs.
+- Tasks report `output_include` (null = no filter, every file). If a filter was passed and the submitted task reports
+  null, the server predates the filter and uploads every file.
+
 ## v1.4.0
 
 Pods made from templates without an output folder (for example NIM or vLLM) can now save files from the user's own

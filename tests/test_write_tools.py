@@ -340,6 +340,27 @@ async def test_task_tools(mcp_client, fake, with_key):
     assert body["resource"] == "task"
 
 
+async def test_task_tools_pass_the_output_filter(mcp_client, fake, with_key):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_task", "submit_task"):
+        assert "output_include" in tools[name].input_schema["properties"], name
+        assert "relative to /outputs" in tools[name].description, name
+        assert "null when no filter was given" in tools[name].description, name     # null alone isn't "ignored"
+    patterns = ["*.safetensors", "samples/*.png"]
+    args = {"name": "t", "script": "print(1)", "image": "img", "gpu_model": "RTX 3060", "output_include": patterns}
+    _payload(await mcp_client.call_tool("estimate_task", args))
+    assert _calls(fake, "estimate_task")[0][2]["output_include"] == patterns
+    _payload(await mcp_client.call_tool("submit_task", args))       # the preview estimates with the same filter
+    assert _calls(fake, "estimate_task")[0][2]["output_include"] == patterns and not _calls(fake, "submit_task")
+    done = _payload(await mcp_client.call_tool("submit_task", {**args, "confirm": True,
+                                                               "operation_id": "test-operation-0001"}))
+    assert _calls(fake, "submit_task")[0][2]["output_include"] == patterns
+    assert done["task"]["output_include"] == patterns               # the server's echo reaches the agent
+    _payload(await mcp_client.call_tool("estimate_task", {"name": "t", "script": "print(1)", "image": "img",
+                                                          "gpu_model": "RTX 3060"}))
+    assert _calls(fake, "estimate_task")[0][2]["output_include"] is None     # omitted: every file
+
+
 async def test_logs_tool(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("logs", {"pod": "pod-1", "tail": 50, "wait": 3}))
     assert body["text"] == "tick 1\ntick 2" and body["source"] == "live"
