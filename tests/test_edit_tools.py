@@ -63,6 +63,14 @@ async def test_update_pod_confirm_sends_the_edit_with_the_operation_id(mcp_clien
     assert refused["code"] == "operation_id_required" and not _calls(fake, "update_pod")
 
 
+async def test_update_pod_enable_folder_saving_is_sent_only_when_asked(mcp_client, fake, with_key):
+    await mcp_client.call_tool("update_pod", {"pod": POD, "enable_folder_saving": True})
+    (_, args, kw), = _calls(fake, "estimate_pod_update")
+    assert args == (POD, WS) and kw == {"enable_folder_saving": True}
+    await mcp_client.call_tool("update_pod", {"pod": POD, "vcpu": 16, "enable_folder_saving": False})
+    assert "enable_folder_saving" not in _calls(fake, "estimate_pod_update")[-1][2]
+
+
 async def test_update_pod_rename_only_does_not_restart(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("update_pod", {"pod": POD, "name": "renamed"}))
     assert "Only the name changes; the pod isn't restarted." in prev["question"]

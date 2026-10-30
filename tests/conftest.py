@@ -435,7 +435,7 @@ class FakeMeshive:
         return TaskSubmitted.from_dict({"task": {"externalId": "task_1", "name": name, "namespaceName": kw["workspace"],
                                                 "status": "queued", "podName": "task-1", "image": "img", "gpuCount": 1,
                                                 "cpuCores": 4, "ramGb": 12, "pricePerHour": "0.068", "costSoFar": "0",
-                                                "totalCost": "0"},
+                                                "totalCost": "0", "outputInclude": kw.get("output_include")},
                                        "estimate": {"pricePerHourUsd": "0.068423", "maxCostUsd": "0.068423",
                                                     "maxDurationS": 3600, "resources": {}}})
 

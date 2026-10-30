@@ -3,6 +3,36 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.5.0
+
+A task can now keep only some of the files it writes to `/outputs`, as in the console's submit form. Built on the
+`meshive` Python SDK 1.5. Tool names and existing arguments are unchanged.
+
+### New
+
+- `estimate_task` and `submit_task` take `output_include`: globs relative to `/outputs` (`["*.safetensors"]` at any
+  depth, `["samples/*.png"]` in that folder, `["checkpoints/"]` every folder of that name with its contents). Only
+  matching files are uploaded; omitted, every file is, as before. Files left out still use the `/outputs` disk while
+  the task runs.
+- Tasks report `output_include` (null = no filter, every file). If a filter was passed and the submitted task reports
+  null, the server predates the filter and uploads every file.
+
+## v1.4.0
+
+Pods made from templates without an output folder (for example NIM or vLLM) can now save files from the user's own
+folders, and a template's output folder can be moved when a pod is created. Built on the `meshive` Python SDK 1.4.
+Tool names and existing arguments are unchanged.
+
+### New
+
+- `estimate_pod` and `create_pod` take `watched_folders` on templates without an output folder too, as long as the
+  pod has storage the folders sit in. `watched_template_folders` takes `"path"` to move an output folder
+  (`{"/workspace/output": {"path": "/workspace/results"}}`); `$MESHIVE_OUTPUT_DIR` and its storage follow.
+- `update_pod` takes `enable_folder_saving`: it adds the uploader to an older pod that has none, so its folders can be
+  watched (one restart). `watched_folders` reports `can_enable_saving` when that is possible.
+- `set_watched_folders` explains how to save another folder instead of a template folder on a running pod (turn the
+  template folder off and add the new one).
+
 ## v1.3.0
 
 Quick Deploy model sets that are gated on Hugging Face can now be deployed with the user's own Hugging Face token, as
