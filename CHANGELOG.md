@@ -3,6 +3,23 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.5.1
+
+Connecting no longer takes 25 seconds, and the server now works on Windows PCs running Avast or Norton with HTTPS
+scanning on. Tool names and arguments are unchanged.
+
+### Fixed
+
+- Claude Code took about 25 seconds to connect. The server no longer offers `subscriptions/listen`: its tools don't
+  change while it runs, so `server/discover` now reports `listChanged: false` and clients go straight to `tools/list`.
+- Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
+  `Invalid character in chunk size`. Avast and Norton rewrite MCP responses that carry a `Content-Length`, so responses
+  are now sent chunked.
+
+### Self-hosting
+
+- Behind a reverse proxy, keep response buffering off: it adds the `Content-Length` back to short responses.
+
 ## v1.5.0
 
 A task can now keep only some of the files it writes to `/outputs`, as in the console's submit form. Built on the

@@ -1,6 +1,7 @@
 """HTTP transport: /healthz, Bearer header passthrough, GET /mcp rejection."""
 import json
 
+import anyio
 import httpx
 import pytest
 
@@ -42,6 +43,71 @@ async def test_healthz(http, monkeypatch):
 async def test_get_mcp_is_not_a_stream(http):
     r = await http.get("/mcp", headers={"Accept": "text/event-stream"})
     assert r.status_code == 405
+
+
+@pytest.mark.parametrize("method, path, headers, body", [
+    ("GET", "/healthz", {}, None),
+    ("GET", "/healthz", {"MCP-Protocol-Version": "2025-06-18"}, None),
+    ("GET", "/mcp", {}, None),
+    ("GET", "/.well-known/oauth-protected-resource/mcp", {}, None),
+    ("POST", "/mcp", HEADERS, _rpc("ping")),
+    ("POST", "/mcp", HEADERS, _rpc("notifications/initialized", id=None)),
+])
+async def test_responses_carry_no_content_length(http, method, path, headers, body):
+    """Avast and Norton break MCP responses that have a Content-Length, even short and empty ones."""
+    r = await http.request(method, path, headers=headers, json=body)
+    assert "content-length" not in r.headers
+
+
+async def test_body_over_the_limit_is_refused(http):
+    """Deployments don't buffer requests at the proxy, so this limit is what keeps a body out of memory."""
+    limit = 4 * 1024 * 1024
+
+    async def in_pieces():
+        for _ in range(5):
+            yield b"x" * (1024 * 1024)
+
+    assert (await http.post("/mcp", headers=HEADERS, content=b"x" * (limit + 1))).status_code == 413
+    assert (await http.post("/mcp", headers=HEADERS, content=in_pieces())).status_code == 413
+
+
+async def test_body_within_the_limit_reaches_the_server(http):
+    async def in_pieces():
+        raw = json.dumps(_rpc("ping")).encode()
+        yield raw[:10]
+        yield raw[10:]
+
+    r = await http.post("/mcp", headers=HEADERS, content=in_pieces())
+    assert r.status_code == 200 and r.json()["id"] == 1
+
+
+MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": {"name": "test-agent", "version": "9.9"},
+    "io.modelcontextprotocol/clientCapabilities": {},
+}
+
+
+async def _modern_post(http, method, **params):
+    headers = {**HEADERS, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method}
+    with anyio.fail_after(5):
+        return await http.post("/mcp", headers=headers, json=_rpc(method, {"_meta": MODERN_META, **params}))
+
+
+async def test_discover_offers_no_change_notifications(http):
+    """A client that sees listChanged opens subscriptions/listen, and waits on it if a proxy buffers the stream."""
+    r = await _modern_post(http, "server/discover")
+    assert r.status_code == 200, r.text
+    capabilities = r.json()["result"]["capabilities"]
+    assert capabilities["tools"]["listChanged"] is False
+    assert capabilities["prompts"]["listChanged"] is False
+    assert capabilities["resources"]["listChanged"] is False
+
+
+async def test_listen_is_refused_instead_of_held_open(http):
+    r = await _modern_post(http, "subscriptions/listen", notifications={"toolsListChanged": True})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == -32601
 
 
 async def test_bearer_reaches_sdk_client(http, fake):

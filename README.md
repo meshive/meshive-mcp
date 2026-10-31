@@ -185,6 +185,9 @@ repository you can also run `pip install .` and then `meshive-mcp` (HTTP on `127
 | `MESHIVE_MCP_ALLOWED_HOSTS` | Comma-separated `Host` allowlist; empty turns off DNS-rebinding checks (use behind a reverse proxy) |
 | `MESHIVE_API_KEY` | Fallback key, **stdio mode only** |
 
+Behind a reverse proxy, keep response buffering off. It adds a `Content-Length` back to short responses, and the HTTPS
+scanning in Avast and Norton breaks MCP responses that have one.
+
 ## Contributing
 
 See [DEVELOPMENT.md](DEVELOPMENT.md).

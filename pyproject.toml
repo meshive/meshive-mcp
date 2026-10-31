@@ -14,7 +14,8 @@ authors = [
 dynamic = ["version"]
 dependencies = [
     # 2.x is the new API where FastMCP became MCPServer. Not compatible with 1.x code, hence the upper bound.
-    "mcp>=2.1,<3",
+    # 2.3 adds MCPServer(subscriptions=False).
+    "mcp>=2.3,<3",
     # The SDK major version this server is built and tested against; 1.2 adds update_pod, update_storage,
     # connect_storage, list_model_sets and model_set on pod creation, which the tools use; 1.4 adds
     # update_pod(enable_folder_saving) and moving a template output folder on creation; 1.5 adds

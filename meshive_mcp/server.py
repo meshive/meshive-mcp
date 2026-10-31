@@ -14,7 +14,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import __version__
 from .settings import settings
@@ -106,6 +106,32 @@ class RefuseStreams:
         await self.app(scope, receive, send)
 
 
+class OmitContentLength:
+    """Send every response without Content-Length, so uvicorn frames it with chunked transfer encoding.
+
+    The HTTPS scanning in Avast and Norton (Windows) treats a request as MCP traffic by its path or by its MCP protocol
+    and session headers, on any URL. It then replaces a response's Content-Length with `Transfer-Encoding: chunked` but
+    leaves the body unchunked, so clients fail on an invalid chunk or wait for an end that never comes. Responses that
+    are already chunked pass through intact. A proxy that buffers responses puts the length back, so don't buffer them.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_without_length(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [h for h in message.get("headers", []) if h[0].lower() != b"content-length"]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_without_length)
+
+
 def create_server() -> MCPServer:
     server = MCPServer(
         name="meshive",
@@ -113,6 +139,9 @@ def create_server() -> MCPServer:
         version=__version__,
         instructions=INSTRUCTIONS,
         website_url="https://meshive.ai",
+        # Tools don't change while the server runs, so there is nothing to subscribe to. Serving `subscriptions/listen`
+        # would hold an idle stream per client, and a client behind a buffering proxy would wait out its own timeout.
+        subscriptions=False,
     )
     register_all(server)
 
@@ -142,4 +171,6 @@ def create_http_app(server: MCPServer | None = None) -> Starlette:
         transport_security=security,
     )
     app.add_middleware(RefuseStreams)
+    # Last added runs outermost, so this also covers the 405 from RefuseStreams.
+    app.add_middleware(OmitContentLength)
     return app
