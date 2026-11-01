@@ -129,7 +129,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Area | Tools |
 | --- | --- |
 | Account and billing | `account`, `billing_history` |
-| Workspaces | `workspaces`, `create_workspace` |
+| Workspaces | `workspaces`, `create_workspace`, `update_workspace`, `delete_workspace` |
 | GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
 | Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
@@ -153,6 +153,7 @@ common ones:
 | `invalid_api_key` | The key is wrong, revoked or expired. Create a new one under **Settings → API keys** and replace it (in Claude Code, `claude mcp remove meshive`, then `add` again). |
 | `write_scope_required` | The key is **Read only**. Use a **Read & write** key to create, change or delete. |
 | `unknown_workspace` | The workspace ID or name doesn't match one of yours. The agent can list them with `workspaces`. |
+| `workspace_not_empty` | A key can only delete an empty workspace. The agent tells you what is left. Clear it, or delete the workspace yourself in the console, which removes what's in it for good. |
 | `insufficient_credit` | Top up credit in the [console](https://console.meshive.ai). |
 | `rate_limited` | Too many calls in a short time. The agent waits the number of seconds it was told, then tries again. |
 | The agent doesn't see any Meshive tools | Check that the server is listed and connected (`claude mcp list` in Claude Code), then start a new session. |

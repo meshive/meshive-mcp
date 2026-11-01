@@ -5,8 +5,8 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 
 ## v1.6.0
 
-An agent can now create a workspace for a user who has none, or who wants another. Built on the `meshive` Python SDK
-1.6. Tool names and existing arguments are unchanged.
+An agent can now create a workspace for a user who has none or who wants another, rename one, and delete an empty one.
+Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
 
 ### New
 
@@ -21,6 +21,18 @@ An agent can now create a workspace for a user who has none, or who wants anothe
   `running` before creating anything in it, and what to tell the user if setup fails or takes longer than usual.
 - `workspaces` with an empty list, and every tool that finds no workspace (`no_workspace`), now offer
   `create_workspace`.
+- `update_workspace` renames a workspace. Its ID stays the same and every member sees the new name. With
+  `confirm=false` (the default) it shows the old and new name and changes nothing; a name that is taken is `name_taken`.
+  It needs a Read & write key, and the admin or billing role in that workspace.
+- `delete_workspace` deletes an empty workspace, which can't be undone. It takes `confirm` the same way. A workspace
+  that still holds anything is refused with `workspace_not_empty`, and `blockers` counts what is left: pods, storage,
+  servings, tasks (finished ones too), assets, custom templates and models, credentials, webhooks, inference keys, other
+  members, open invitations, task outputs still being saved, pending payouts and operations in progress. No tool can
+  delete a workspace that still holds things; a person can still delete it in the console, which removes what's in it
+  for good. The tool needs a Read & write key, and the admin or billing role in that workspace. Other refusals come
+  back as `workspace_not_deletable`.
+- Both tools need `workspace` and never pick one for the user, even when there is only one. The preview takes an ID or a
+  label; `confirm=true` takes the ID only, so a retry still works after the workspace is renamed or deleted.
 
 ### Changed
 

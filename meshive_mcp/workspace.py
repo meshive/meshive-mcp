@@ -84,6 +84,22 @@ async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str]
     return [one]  # type: ignore[list-item]
 
 
+async def resolve_target(client: AsyncMeshive, workspace: str, *, confirm: bool) -> str:
+    """For tools that change the workspace itself (update_workspace, delete_workspace). Unlike `resolve`, nothing is picked
+    for the caller: a blank value is refused even when the user has one workspace. A label works on the preview only: it
+    stops resolving once the workspace is renamed or deleted, so a confirmed call and its retries go by the id."""
+    workspace = (workspace or "").strip()
+    if not workspace:
+        raise invalid_argument("`workspace` is required — pass the workspace's id or label. This tool never picks one.")
+    if _ID_RE.match(workspace):
+        return workspace
+    if confirm:
+        raise tool_error("invalid_argument", f"confirm=true needs the workspace id, not the label '{workspace}'.",
+                         "Nothing was sent. Use the id in the preview's `workspace` field in place of the label (call "
+                         "without confirm to get it), and keep that id for every retry.")
+    return _by_label(await client.list_workspaces(), workspace)
+
+
 def needs_input(value: Any) -> bool:
     return isinstance(value, dict) and "needs_input" in value
 

@@ -60,6 +60,24 @@ NEXT_STEP_NOT_FOUND = (
 )
 NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a write, check operation_status first; "
                         "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome.")
+# delete_workspace, on its preview and on the server's own refusal. A key can only delete an empty workspace, on purpose.
+NEXT_STEP_WORKSPACE_NOT_EMPTY = (
+    "Nothing was deleted. Tell the user what `blockers` says is left, and clear nothing on your own. Pods, storage, "
+    "servings and custom models can be deleted with their tools and running tasks stopped with stop_task, but only if "
+    "the user asks. Assets, finished tasks, credentials, webhooks, custom templates, inference keys, members and "
+    "invitations are managed in the console. `pods` also counts serving replicas, which go with their serving, and "
+    "system pods, which go with their storage volume (delete_storage); the pods tool lists those with "
+    "include_system=true. A volume the storages tool still shows stays and bills until it is deleted; only a deleted "
+    "pod's hidden temporary volume can stay under `storages` for a few minutes and clear by itself. "
+    "`operations_in_progress` and `task_outputs` clear on their own. `operations_in_progress` usually clears within "
+    "minutes, at most about 30 minutes, so check again shortly with delete_workspace without confirm. `task_outputs` "
+    "clears about 30 minutes after the task ended or when its upload finishes; if it is still listed after that, stop "
+    "checking and tell the user to look at the task in the console or contact support. `pending_payouts` clears once "
+    "the earnings are paid out, usually within a day; earnings on hold, or a failed payout, can take longer, so tell "
+    "the user to contact support. Deleting in the console before that loses them. Never suggest a way around this "
+    "check. No tool can delete a workspace that still holds things. A person can still delete it in the console, which "
+    "removes what's in it for good."
+)
 
 
 def tool_error(code: str, message: str, next_step: str, **extra: Any) -> ToolError:
@@ -95,13 +113,14 @@ _CONFLICT_CODES = {
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one. For a rename "
-                                 "(update_pod or update_storage `name`), ask the user for another name. A workspace's "
-                                 "name stays taken for a while after it is deleted, even though the list no longer "
-                                 "shows it."),
+                                 "(update_pod, update_storage or update_workspace `name`), ask the user for another "
+                                 "name. For create_workspace, a workspace's name stays taken for a while after it is "
+                                 "deleted, even though the list no longer shows it; this doesn't affect a rename."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
                                          "first (ask the user)."),
+    "workspace not empty": ("workspace_not_empty", NEXT_STEP_WORKSPACE_NOT_EMPTY),
     "request in progress": ("in_progress", "The same request is still being processed. Wait a few seconds, then check the "
                                            "matching list tool instead of resubmitting."),
     "vram tier required": ("vram_tier_required", "Pass `gpu_vram_gb` — this GPU model comes in several VRAM tiers "
@@ -198,6 +217,11 @@ _BAD_REQUEST_CODES = {
     # where to watch it. The same title is used for a workspace being deleted, which the list no longer shows.
     "workspace not found or not ready": ("workspace_not_ready", _WORKSPACE_NOT_READY),
     "workspace is not ready": ("workspace_not_ready", _WORKSPACE_NOT_READY),
+    # delete_workspace: a protected workspace, or a last-moment change the check before it couldn't see. The message says which.
+    "unable to delete workspace": ("workspace_not_deletable",
+                                   "Nothing was deleted. Tell the user the reason in the message. If it names something "
+                                   "still in the workspace, delete_workspace without confirm shows what is left; "
+                                   "otherwise don't retry."),
     # --- update_pod (console Pod Edit rules) ---
     "nothing to change": ("nothing_to_change", "Pass at least one setting to change. update_pod sends only what changes, "
                                                "so give just the arguments the user wants different."),

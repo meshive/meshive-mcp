@@ -12,8 +12,8 @@ READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
                "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
                "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
-               "set_watched_folders", "ssh_access", "create_workspace"}
-DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model"}
+               "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace"}
+DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace"}
 
 
 def _payload(result):
@@ -24,7 +24,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 45
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 47
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -368,3 +368,11 @@ async def test_server_instructions_cover_creating_a_workspace():
     assert "`no_workspace`" in INSTRUCTIONS and "can get one from create_workspace" in INSTRUCTIONS
     assert "`creating` until it is `running`" in INSTRUCTIONS and "setup failed" in INSTRUCTIONS
     assert "taking longer than usual and don't create another" in INSTRUCTIONS
+
+
+async def test_server_instructions_list_the_workspace_writes_among_the_tools_that_take_confirm():
+    from meshive_mcp.server import INSTRUCTIONS
+
+    section = next(s for s in INSTRUCTIONS.split("\n\n") if s.startswith("Spending, changing and deleting:"))
+    listed = section.split("take `confirm`")[0]
+    assert "update_workspace" in listed and "delete_workspace" in listed

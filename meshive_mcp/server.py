@@ -33,7 +33,7 @@ user wants to log in, give them to that user and nobody else, and never write th
 connect_storage also unlocks encrypted storage until it locks again by itself.
 
 Spending, changing and deleting: create_pod, update_pod, create_storage, update_storage, connect_storage, \
-create_workspace, deploy_serving, submit_task, start_pod, delete_pod, delete_storage and delete_serving take `confirm`; so do \
+update_workspace, create_workspace, deploy_serving, submit_task, start_pod, delete_pod, delete_storage, delete_workspace and delete_serving take `confirm`; so do \
 pause_serving when resuming (paused=false) and scale_serving when it raises the replica range, enables autoscale, or \
 raises the per-replica price cap. For these actions, confirm=false returns an estimate or summary and changes nothing. \
 Show that to the user, get an explicit yes, and only then call again with confirm=true. Never set confirm=true \
