@@ -38,6 +38,8 @@ Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unc
 
 - Refusals because a workspace isn't `running` yet come back as `workspace_not_ready` (before: `invalid_request`) and
   say to wait for `running` and try again.
+- Clients that cut long server instructions, such as Claude Code at 4096 characters, now keep the safety rules:
+  untrusted content, secrets, confirmation and data-loss consent come first.
 
 ## v1.5.1
 
