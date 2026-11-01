@@ -12,7 +12,7 @@ READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
                "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
                "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
-               "set_watched_folders", "ssh_access"}
+               "set_watched_folders", "ssh_access", "create_workspace"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model"}
 
 
@@ -24,7 +24,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 44
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 45
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -337,3 +337,34 @@ async def test_money_fields_carry_a_console_matching_display_string(mcp_client, 
     assert balance["balance_display"] == "$12.50"
     # Free credits retired (2026-10) — the paid/bonus split that no longer exists isn't sent to the model (the SDK keeps the fields only for backward compatibility)
     assert not {"paid_balance", "bonus_balance", "paid_balance_display", "bonus_balance_display"} & set(balance)
+
+
+async def test_empty_workspace_list_offers_create_workspace(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: setattr(inst, "workspaces", [])
+    body = _payload(await mcp_client.call_tool("workspaces", {}))
+    assert body["items"] == [] and body["total"] == 0
+    assert "create_workspace" in body["next_step"] and "console" in body["next_step"]
+
+
+async def test_workspace_list_with_workspaces_has_no_next_step(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("workspaces", {}))
+    assert body["total"] == 1 and "next_step" not in body
+
+
+async def test_no_workspace_error_offers_create_workspace(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: setattr(inst, "workspaces", [])
+    for tool, args in (("pods", {}), ("pods", {"workspace": "all"}), ("storages", {})):
+        result = await mcp_client.call_tool(tool, args)
+        body = _payload(result)
+        assert result.is_error and body["code"] == "no_workspace", (tool, args)
+        assert "create_workspace" in body["next_step"] and "`running`" in body["next_step"], (tool, args)
+        assert "console" in body["next_step"], (tool, args)
+
+
+async def test_server_instructions_cover_creating_a_workspace():
+    from meshive_mcp.server import INSTRUCTIONS
+
+    assert "create_workspace, deploy_serving" in INSTRUCTIONS         # in the list of tools that take `confirm`
+    assert "`no_workspace`" in INSTRUCTIONS and "can get one from create_workspace" in INSTRUCTIONS
+    assert "`creating` until it is `running`" in INSTRUCTIONS and "setup failed" in INSTRUCTIONS
+    assert "taking longer than usual and don't create another" in INSTRUCTIONS

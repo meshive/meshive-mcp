@@ -20,6 +20,8 @@ from .errors import invalid_argument, tool_error
 NEEDS_WORKSPACE = "workspace"
 ALL = "all"
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
+_NO_WORKSPACE_STEP = ("Offer to create one with the create_workspace tool (it costs nothing by itself), or the user can "
+                      "add one in the console. A new workspace is usable once the workspaces tool shows it `running`.")
 
 
 def _summary(workspaces: list[Workspace]) -> list[dict[str, str]]:
@@ -60,8 +62,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
     if len(workspaces) == 1:
         return workspaces[0].namespace_name
     if not workspaces:
-        raise tool_error("no_workspace", "The user has no workspace.",
-                         "Ask the user to create a workspace in the console first.")
+        raise tool_error("no_workspace", "The user has no workspace.", _NO_WORKSPACE_STEP)
     return {
         "needs_input": NEEDS_WORKSPACE,
         "workspaces": _summary(workspaces),
@@ -75,8 +76,7 @@ async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str]
     if workspace is not None and workspace.strip().lower() == ALL:
         workspaces = await client.list_workspaces()
         if not workspaces:
-            raise tool_error("no_workspace", "The user has no workspace.",
-                             "Ask the user to create a workspace in the console first.")
+            raise tool_error("no_workspace", "The user has no workspace.", _NO_WORKSPACE_STEP)
         return [w.namespace_name for w in workspaces]
     one = await resolve(client, workspace)
     if isinstance(one, dict):

@@ -214,3 +214,12 @@ def test_storage_connection_error_has_its_own_code():
         pytest.skip("this SDK reports a failed connection as a phase instead")
     b = _body(cls("pv-1"))
     assert b["code"] == "storage_connection_failed" and "Don't retry" in b["next_step"]
+
+
+@pytest.mark.parametrize("title", ["Workspace not found or not ready", "Workspace is not ready"])
+def test_a_workspace_that_is_not_running_yet_has_its_own_code(title):
+    b = _body(_api(400, title, "Workspace 0123456789abcdef is not ready please try later"))
+    assert b["code"] == "workspace_not_ready" and "0123456789abcdef" in b["message"]
+    assert "`workspaces` tool with no arguments" in b["next_step"] and "`running`" in b["next_step"]
+    assert "isn't listed" in b["next_step"] and "tell the user" in b["next_step"]
+    assert _body(_api(400, "Workspace does not exist"))["code"] == "invalid_request"      # other titles are untouched

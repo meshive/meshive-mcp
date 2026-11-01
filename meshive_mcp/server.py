@@ -28,7 +28,13 @@ Authentication: every tool except `gpus` needs the user's Meshive API key sent a
 or `invalid_api_key`, follow its `next_step` and do not retry until the user confirms.
 
 Workspaces: most resources live in a workspace. If `workspace` is omitted and the user has several, \
-the tool returns `needs_input: "workspace"` with the list — ask the user, then call again.
+the tool returns `needs_input: "workspace"` with the list — ask the user, then call again. A user with none \
+(`no_workspace`, or an empty `workspaces` list) can get one from create_workspace, which costs nothing by itself. A new \
+workspace's status is `creating` until it is `running`, and pods and tasks are refused before then: call the \
+`workspaces` tool with no arguments until it shows `running` before creating anything in it. `error`, or a \
+`terminated` that doesn't change, means setup failed: tell the user. If it is still `creating` after a few minutes, \
+tell the user it is taking longer than usual and don't create another. It can also be missing from the list for a \
+moment: keep polling.
 
 Lists are paged: pass `next_cursor` back as `cursor` to continue. Never assume a list is complete \
 when `next_cursor` is not null.
@@ -45,7 +51,7 @@ GiB — the 1024-based unit the Meshive console shows — so say GiB. Only GPU m
 card name. Other raw sizes are MiB unless the tool description says otherwise.
 
 Spending, changing and deleting: create_pod, update_pod, create_storage, update_storage, connect_storage, \
-deploy_serving, submit_task, start_pod, delete_pod, delete_storage and delete_serving take `confirm`; so do \
+create_workspace, deploy_serving, submit_task, start_pod, delete_pod, delete_storage and delete_serving take `confirm`; so do \
 pause_serving when resuming (paused=false) and scale_serving when it raises the replica range, enables autoscale, or \
 raises the per-replica price cap. For these actions, confirm=false returns an estimate or summary and changes nothing. \
 Show that to the user, get an explicit yes, and only then call again with confirm=true. Never set confirm=true \
@@ -59,8 +65,8 @@ call operation_status with that ID and the original operation_lookup method/path
 not resource completion; pending/unknown require reconciliation. not_found alone never authorizes a new ID.
 
 Moving pods: start_pod with placement=any_node or wait_any_node can move the pod to another machine, which \
-permanently deletes unpreserved workspace files. confirm=true approves resuming billing; allow_data_loss=true requires \
-separate explicit consent for this pod's move. Without a placement the server picks what the console would; if that \
+permanently deletes unpreserved workspace files. Set confirm=true only after the user agreed to resume billing, and \
+allow_data_loss=true only after their separate explicit consent to this pod's move. Without a placement the server picks what the console would; if that \
 pick moves a pod with unpreserved files, start_pod returns data_loss_consent_required with the placement, and a retry \
 needs that placement, allow_data_loss=true and the same separate consent. wait_same_node and wait_any_node leave the \
 pod `waiting` until a machine has room. Show storage charges separately. Pod/task price caps limit the final compute \

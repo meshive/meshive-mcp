@@ -1,9 +1,9 @@
 """Write tools — pods (write scope).
 
 For create_pod and start_pod (resuming billing of a stopped pod), which cost money, update_pod, which restarts a running
-pod and can raise its price, and delete_pod, which can't be undone, **the server (this tool)** enforces the `confirm`
-gate: with confirm=false (the default) it returns only an estimate/summary and does nothing. It doesn't rely on the
-model's attention.
+pod and can raise its price, and delete_pod, which can't be undone, `confirm` defaults to false: with confirm=false the
+tool returns only an estimate/summary and does nothing. A call with confirm=true runs as sent; the server can't tell
+whether the user agreed.
 """
 from __future__ import annotations
 

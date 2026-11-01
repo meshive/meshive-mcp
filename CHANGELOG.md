@@ -3,6 +3,30 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.6.0
+
+An agent can now create a workspace for a user who has none, or who wants another. Built on the `meshive` Python SDK
+1.6. Tool names and existing arguments are unchanged.
+
+### New
+
+- `create_workspace` creates a workspace. `name` is optional (at most 63 characters, and different from the name of
+  each of the user's workspaces); without one a name like `my-workspace-ab12` is generated. Like `create_pod` and
+  `create_storage` it takes `confirm`: with `confirm=false` (the default) it only checks the name and creates nothing, and with
+  `confirm=true` it creates the workspace. The agent is told to set it only after the user agrees; the server can't
+  check that. A workspace costs nothing by itself; the pods, storage and tasks in it are billed as usual. It needs a
+  Read & write key. API keys work across the whole account, so the key that created the workspace can use it.
+- A new workspace is set up in the background. Its `status` in `workspaces` is `creating` until it is `running`, and
+  pods and tasks are refused until then. `create_workspace` and the server instructions tell the agent to wait for
+  `running` before creating anything in it, and what to tell the user if setup fails or takes longer than usual.
+- `workspaces` with an empty list, and every tool that finds no workspace (`no_workspace`), now offer
+  `create_workspace`.
+
+### Changed
+
+- Refusals because a workspace isn't `running` yet come back as `workspace_not_ready` (before: `invalid_request`) and
+  say to wait for `running` and try again.
+
 ## v1.5.1
 
 Connecting no longer takes 25 seconds, and the server now works on Windows PCs running Avast or Norton with HTTPS

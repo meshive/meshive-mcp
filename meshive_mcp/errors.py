@@ -95,7 +95,9 @@ _CONFLICT_CODES = {
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one. For a rename "
-                                 "(update_pod or update_storage `name`), ask the user for another name."),
+                                 "(update_pod or update_storage `name`), ask the user for another name. A workspace's "
+                                 "name stays taken for a while after it is deleted, even though the list no longer "
+                                 "shows it."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
@@ -148,6 +150,10 @@ _DATA_LOSS_EDIT_STEP = ("Nothing was changed. If this edit moves the pod to anot
                         "arguments plus allow_data_loss=true, confirm=true and the same operation_id. Without that "
                         "consent, call it without allow_node_migration instead.")
 
+_WORKSPACE_NOT_READY = ("No pod or task was created. Call the `workspaces` tool with no arguments and wait until this "
+                        "workspace's status is `running` (a new one stays `creating` while it is set up), then try "
+                        "again. If the workspace isn't listed or doesn't reach `running`, tell the user.")
+
 # The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength, templatePorts,
 # attached, paths, currentSizeGb, failed, available) is passed on.
 _BAD_REQUEST_CODES = {
@@ -188,6 +194,10 @@ _BAD_REQUEST_CODES = {
                                                      "and `local_volumes` its own path."),
     "storage required": ("storage_required", "This template needs a persistent volume. Attach network storage in "
                                              "`volumes` or create local storage in `local_volumes`; ask the user which."),
+    # Pods and tasks are refused while a new workspace is still `creating`; the detail route has no status, so the list is
+    # where to watch it. The same title is used for a workspace being deleted, which the list no longer shows.
+    "workspace not found or not ready": ("workspace_not_ready", _WORKSPACE_NOT_READY),
+    "workspace is not ready": ("workspace_not_ready", _WORKSPACE_NOT_READY),
     # --- update_pod (console Pod Edit rules) ---
     "nothing to change": ("nothing_to_change", "Pass at least one setting to change. update_pod sends only what changes, "
                                                "so give just the arguments the user wants different."),

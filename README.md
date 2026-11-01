@@ -114,8 +114,9 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 
 ## You stay in control
 
-- **Nothing is spent or deleted without your OK.** Before creating, starting, deleting or raising the cost of
-  anything, the agent gets a price or a summary, shows it to you and waits for your go-ahead.
+- **Spending and deleting start with a preview.** Tools that spend or delete return a price or a summary unless the
+  agent sets `confirm`, and the agent is told to show it to you and wait for your go-ahead. That step is an instruction
+  to the agent: the server can't tell whether you agreed, so give a Read & write key only to an agent you trust.
 - **A Read only key stays read-only.** With one, the agent can look at everything but change nothing.
 - **Logs are treated as data.** Text printed inside your pods is never followed as instructions.
 - **Passwords go only to you.** Pod logins and SSH passwords for pods and storage stay hidden unless you ask for
@@ -128,7 +129,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Area | Tools |
 | --- | --- |
 | Account and billing | `account`, `billing_history` |
-| Workspaces | `workspaces` |
+| Workspaces | `workspaces`, `create_workspace` |
 | GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
 | Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
