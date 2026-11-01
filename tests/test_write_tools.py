@@ -2,7 +2,9 @@
 import json
 
 import pytest
-from meshive.exceptions import ConflictError, InsufficientCreditError, MeshiveAPIError, NotFoundError
+from meshive.exceptions import (AuthenticationError, ConflictError, InsufficientCreditError, MeshiveAPIError,
+                                NotFoundError, PermissionDeniedError)
+from meshive.models import WorkspaceDeleteCheck
 
 pytestmark = pytest.mark.anyio
 
@@ -572,3 +574,381 @@ async def test_ssh_access_returns_command_and_password_but_not_the_web_url(mcp_c
     assert body["command"] == "ssh -p 2222 root@m.example" and body["password"] == "pw-123"
     assert body["expires_at"].startswith("2030-") and "only to the user" in body["note"]
     assert "cHctMTIz" not in result.content[0].text and "web_url" not in body
+
+
+async def test_create_workspace_without_confirm_only_checks_the_name(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("create_workspace", {"name": "research-2"}))
+    assert body["confirmed"] is False and body["action"] == "create_workspace" and body["name"] == "research-2"
+    assert "'research-2'" in body["question"] and "costs nothing by itself" in body["question"]
+    assert "billed as usual" in body["question"] and "confirm=true" in body["next_step"]
+    assert body["estimate"]["name"] == "research-2" and body["estimate"]["price_per_hour"] == "0"
+    assert "raw" not in body["estimate"]
+    # The preview is a read: nothing is created, and the read call carries no Idempotency-Key.
+    assert _calls(fake, "estimate_workspace") == [("estimate_workspace", ("research-2",), {})]
+    assert not _calls(fake, "create_workspace")
+    # The preview's operation_id is the one the confirmation reuses.
+    assert body["operation_id"] and "Reuse this operation_id" in body["next_step"]
+
+
+async def test_create_workspace_with_confirm_creates_and_says_to_wait_for_running(mcp_client, fake, with_key):
+    prev = _payload(await mcp_client.call_tool("create_workspace", {"name": "research-2"}))
+    done = _payload(await mcp_client.call_tool("create_workspace", {"name": "research-2", "confirm": True,
+                                                                     "operation_id": prev["operation_id"]}))
+    assert done["workspace"] == "fedcba9876543210" and done["name"] == "research-2" and done["transaction_id"] == 21
+    assert done["estimate"]["price_per_hour"] == "0" and done["operation_id"] == prev["operation_id"]
+    step = done["next_step"]
+    assert "`fedcba9876543210`" in step and "transaction" not in step  # the transactions tool can't look it up
+    assert "`workspaces` tool with no arguments until its status is `running`" in step
+    assert "before creating anything in it" in step and "setup failed: tell the user" in step
+    assert "taking longer than usual and don't create another" in step
+    (_, args, kw), = _calls(fake, "create_workspace")
+    assert args == ("research-2",) and kw == {"idempotency_key": prev["operation_id"]}
+    assert not _calls(fake, "estimate_workspace")                 # the confirmed call does not estimate again
+
+    again = _payload(await mcp_client.call_tool("create_workspace", {"name": "research-2", "confirm": True,
+                                                                      "operation_id": prev["operation_id"]}))
+    assert again["operation_id"] == prev["operation_id"]        # a retry reuses the key, so the server can replay
+    assert [c[2] for c in _calls(fake, "create_workspace")] == [{"idempotency_key": prev["operation_id"]}]
+
+
+async def test_create_workspace_confirm_needs_an_operation_id(mcp_client, fake, with_key):
+    refused = await mcp_client.call_tool("create_workspace", {"name": "research-2", "confirm": True})
+    assert refused.is_error and _payload(refused)["code"] == "operation_id_required"
+    assert not _calls(fake, "create_workspace")
+
+
+async def test_create_workspace_strips_the_name_and_generates_one_when_blank(mcp_client, fake, with_key):
+    _payload(await mcp_client.call_tool("create_workspace", {"name": "  research-2  "}))
+    assert _calls(fake, "estimate_workspace")[0][1] == ("research-2",)
+
+    for blank in (None, "", "   "):
+        args = {} if blank is None else {"name": blank}
+        prev = _payload(await mcp_client.call_tool("create_workspace", args))
+        assert prev["name"] is None and "generated name" in prev["question"], blank
+        assert "costs nothing by itself" in prev["question"], blank
+        assert _calls(fake, "estimate_workspace")[-1][1] == (None,), blank
+        done = _payload(await mcp_client.call_tool("create_workspace", {**args, "confirm": True,
+                                                                         "operation_id": prev["operation_id"]}))
+        assert done["name"] == "my-workspace-ab12" and "'my-workspace-ab12'" in done["next_step"], blank
+        assert _calls(fake, "create_workspace")[-1][1] == (None,), blank
+
+
+async def test_create_workspace_tool_description(mcp_client):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    tool = tools["create_workspace"]
+    assert tool.title == "Create Workspace"
+    assert tool.annotations.read_only_hint is False and tool.annotations.destructive_hint is False
+    assert "costs nothing" in tool.description and "63 characters" in tool.description
+    assert "`creating` until it is `running`" in tool.description and "workspaces tool" in tool.description
+    assert {"name", "confirm", "operation_id"} <= set(tool.input_schema["properties"])
+    assert "workspace" not in tool.input_schema["properties"]
+    assert "create_workspace" in tools["workspaces"].description
+
+
+async def test_create_workspace_name_taken_keeps_the_operation_id(mcp_client, fake, with_key):
+    taken = ConflictError(409, "You already have a workspace named 'research'. Choose a different name.",
+                          title="Name Taken")
+    fake["setup"] = lambda inst: inst.raise_on.update(estimate_workspace=taken)
+    result = await mcp_client.call_tool("create_workspace", {"name": "research"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "name_taken" and "'research'" in body["message"]
+    assert "list tool" in body["next_step"] and "pick another name" in body["next_step"]
+    assert not _calls(fake, "create_workspace")
+
+    # A confirmed create refused for the same reason keeps its operation_id, like every other write.
+    fake["setup"] = lambda inst: inst.raise_on.update(create_workspace=taken)
+    result = await mcp_client.call_tool("create_workspace", {"name": "research", "confirm": True,
+                                                              "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "name_taken" and body["operation_id"] == "test-operation-0001"
+    assert "Any retry MUST" not in body["next_step"]                  # it says to pick another name, not the same arguments
+
+
+async def test_create_workspace_without_a_cluster_asks_to_wait(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        create_workspace=MeshiveAPIError(503, "No cluster can host a new workspace right now.",
+                                         title="No Cluster Available"))
+    result = await mcp_client.call_tool("create_workspace", {"name": "research-2", "confirm": True,
+                                                              "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "temporarily_unavailable" and body["retry_after"] == 30
+    assert body["operation_id"] == "test-operation-0001" and "MUST reuse this operation_id" in body["next_step"]
+
+
+async def test_create_workspace_needs_a_write_key_but_the_preview_does_not(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        create_workspace=PermissionDeniedError(403, "API key lacks required scope: write"))
+    prev = _payload(await mcp_client.call_tool("create_workspace", {"name": "research-2"}))
+    assert prev["confirmed"] is False                       # only estimate_workspace (read scope) was called
+    result = await mcp_client.call_tool("create_workspace", {"name": "research-2", "confirm": True,
+                                                              "operation_id": prev["operation_id"]})
+    assert result.is_error and _payload(result)["code"] == "write_scope_required"
+
+
+async def test_create_workspace_needs_a_key(mcp_client, fake):
+    for args in ({}, {"confirm": True, "operation_id": "test-operation-0001"}):
+        result = await mcp_client.call_tool("create_workspace", args)
+        assert result.is_error and _payload(result)["code"] == "no_api_key"
+    assert "last" not in fake
+
+
+# --- update_workspace, delete_workspace ---
+
+RENAME = {"workspace": WS, "name": "lab-2"}
+OP = "test-operation-0001"
+_BOTH_TOOLS = [("update_workspace", {"name": "lab-2"}), ("delete_workspace", {})]
+
+
+async def test_update_workspace_without_confirm_only_checks_the_name(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("update_workspace", RENAME))
+    assert body["confirmed"] is False and body["action"] == "update_workspace"
+    assert body["workspace"] == WS and body["current_name"] == "research" and body["name"] == "lab-2"
+    assert "'research' to 'lab-2'" in body["question"] and "Other members see the new name" in body["question"]
+    assert body["operation_id"] and "Reuse this operation_id" in body["next_step"]
+    assert _calls(fake, "estimate_workspace_update") == [("estimate_workspace_update", (WS,), {"name": "lab-2"})]
+    assert not _calls(fake, "update_workspace") and not _calls(fake, "list_workspaces")  # an id needs no lookup
+
+
+async def test_update_workspace_with_confirm_renames_and_says_to_keep_using_the_id(mcp_client, fake, with_key):
+    done = _payload(await mcp_client.call_tool("update_workspace", {**RENAME, "confirm": True, "operation_id": OP}))
+    assert done["workspace"] == WS and done["name"] == "lab-2" and done["operation_id"] == OP
+    assert f"`{WS}`" in done["next_step"] and "Keep using the id" in done["next_step"]
+    assert "can take a moment to show the new name" in done["next_step"]
+    assert _calls(fake, "update_workspace") == [("update_workspace", (WS,), {"name": "lab-2", "idempotency_key": OP})]
+    assert not _calls(fake, "estimate_workspace_update")           # the confirmed call does not estimate again
+
+
+async def test_update_workspace_name_is_required_and_stripped(mcp_client, fake, with_key):
+    _payload(await mcp_client.call_tool("update_workspace", {"workspace": WS, "name": "  lab-2  "}))
+    assert _calls(fake, "estimate_workspace_update")[0][2] == {"name": "lab-2"}
+
+    fake.clear()
+    for confirm in (False, True):
+        result = await mcp_client.call_tool("update_workspace", {"workspace": WS, "name": "   ", "confirm": confirm,
+                                                                 "operation_id": OP})
+        body = _payload(result)
+        assert result.is_error and body["code"] == "invalid_argument" and "`name`" in body["message"], confirm
+    assert "last" not in fake                                      # refused before any client was built
+
+
+async def test_update_workspace_name_taken_keeps_the_operation_id(mcp_client, fake, with_key):
+    taken = ConflictError(409, "You already have a workspace named 'lab'.", title="Name Taken")
+    fake["setup"] = lambda inst: inst.raise_on.update(estimate_workspace_update=taken)
+    result = await mcp_client.call_tool("update_workspace", {"workspace": WS, "name": "lab"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "name_taken" and "update_workspace" in body["next_step"]
+    assert not _calls(fake, "update_workspace")
+
+    fake["setup"] = lambda inst: inst.raise_on.update(update_workspace=taken)
+    result = await mcp_client.call_tool("update_workspace", {"workspace": WS, "name": "lab", "confirm": True,
+                                                             "operation_id": OP})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "name_taken" and body["operation_id"] == OP
+    assert "Any retry MUST" not in body["next_step"]               # it says to ask for another name, not the same arguments
+
+
+async def test_delete_workspace_without_confirm_checks_and_deletes_nothing(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("delete_workspace", {"workspace": WS}))
+    assert body["confirmed"] is False and body["action"] == "delete_workspace" and body["workspace"] == WS
+    assert body["deletable"] is True and body["blockers"] == {}
+    assert "'research'" in body["question"] and f"`{WS}`" in body["question"] and "can't be undone" in body["question"]
+    assert body["operation_id"] and "Reuse this operation_id" in body["next_step"]
+    assert _calls(fake, "check_workspace_delete") == [("check_workspace_delete", (WS,), {})]
+    assert not _calls(fake, "delete_workspace")
+
+
+async def test_delete_workspace_preview_of_a_workspace_with_things_left_is_refused(mcp_client, fake, with_key):
+    blockers = {"assets": 3, "pods": 1, "task_outputs": 1}
+    fake["setup"] = lambda inst: setattr(inst, "workspace_blockers", blockers)
+    result = await mcp_client.call_tool("delete_workspace", {"workspace": WS})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "workspace_not_empty" and body["blockers"] == blockers
+    assert "confirmed" not in body and "question" not in body      # nothing to agree to
+    assert "'research'" in body["message"] and "only if the user asks" in body["next_step"]
+    assert "A person can still delete it in the console" in body["next_step"]
+    assert "Any retry MUST" not in body["next_step"]               # it says what to do for each blocker instead
+    assert not _calls(fake, "delete_workspace")
+
+
+async def test_delete_workspace_treats_a_check_without_an_answer_as_blocked(mcp_client, fake, with_key):
+    def unanswered(inst):
+        async def check(workspace):
+            return WorkspaceDeleteCheck.from_dict({"workspace": workspace, "name": "research"})
+        inst.check_workspace_delete = check
+    fake["setup"] = unanswered
+    result = await mcp_client.call_tool("delete_workspace", {"workspace": WS})
+    assert result.is_error and _payload(result)["code"] == "workspace_not_empty"
+
+
+async def test_delete_workspace_with_confirm_deletes_and_a_retry_reuses_the_key(mcp_client, fake, with_key):
+    done = _payload(await mcp_client.call_tool("delete_workspace", {"workspace": WS, "confirm": True, "operation_id": OP}))
+    assert done["resource"] == "workspace" and done["id"] == WS and done["action"] == "delete"
+    assert done["operation_id"] == OP
+    step = done["next_step"]
+    assert "Deletion was accepted" in step and "leaves the workspaces list within a moment" in step
+    assert "the delete didn't fail, so don't delete it again" in step and "name stays taken for a while" in step
+    assert "right away" not in step and "for a moment" not in step
+    assert _calls(fake, "delete_workspace") == [("delete_workspace", (WS,), {"idempotency_key": OP})]
+    assert not _calls(fake, "check_workspace_delete")              # the server checks again itself
+
+    # The workspace is gone from the list by now; a retry by id doesn't depend on it.
+    fake["setup"] = lambda inst: setattr(inst, "workspaces", [])
+    again = _payload(await mcp_client.call_tool("delete_workspace", {"workspace": WS, "confirm": True, "operation_id": OP}))
+    assert again["operation_id"] == OP and _calls(fake, "delete_workspace")[0][2] == {"idempotency_key": OP}
+    assert not _calls(fake, "list_workspaces")
+
+
+async def test_delete_workspace_refused_by_the_server_after_a_clean_preview(mcp_client, fake, with_key):
+    blockers = {"pods": 1}
+    fake["setup"] = lambda inst: inst.raise_on.update(delete_workspace=ConflictError(
+        409, "'research' still holds: pods (1).", title="Workspace Not Empty",
+        raw={"detail": {"title": "Workspace Not Empty", "message": "'research' still holds: pods (1).",
+                        "blockers": blockers}}))
+    result = await mcp_client.call_tool("delete_workspace", {"workspace": WS, "confirm": True, "operation_id": OP})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "workspace_not_empty" and body["blockers"] == blockers
+    assert body["operation_id"] == OP and "only if the user asks" in body["next_step"]
+    assert "without confirm" in body["next_step"]                  # not "the same arguments", which are confirm=true
+    assert "Any retry MUST" not in body["next_step"]
+
+
+async def test_delete_workspace_refused_as_not_deletable_has_its_own_retry_advice(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: inst.raise_on.update(delete_workspace=MeshiveAPIError(
+        400, "This workspace is protected and cannot be deleted.", title="Unable to delete workspace"))
+    result = await mcp_client.call_tool("delete_workspace", {"workspace": WS, "confirm": True, "operation_id": OP})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "workspace_not_deletable" and body["operation_id"] == OP
+    assert "don't retry" in body["next_step"] and "Any retry MUST" not in body["next_step"]
+
+
+async def test_delete_workspace_has_no_way_to_force_it(mcp_client):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    tool = tools["delete_workspace"]
+    assert set(tool.input_schema["properties"]) == {"workspace", "confirm", "operation_id"}
+    assert "force" not in tool.description.lower()
+
+
+async def test_workspace_tool_descriptions(mcp_client):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    update, delete = tools["update_workspace"], tools["delete_workspace"]
+    assert update.title == "Rename Workspace" and delete.title == "Delete Workspace"
+    assert update.annotations.destructive_hint is False and delete.annotations.destructive_hint is True
+    assert set(update.input_schema["required"]) == {"workspace", "name"}
+    assert set(delete.input_schema["required"]) == {"workspace"}
+    assert "63 characters" in update.description and "every member sees the new name" in update.description
+    assert "can't be undone" in delete.description and "workspace_not_empty" in delete.description
+    assert "finished ones too" in delete.description and "`blockers`" in delete.description
+    for tool in (update, delete):
+        assert "never picked for you" in tool.description and "a label is refused there" in tool.description
+    assert "update_workspace" in tools["workspaces"].description and "delete_workspace" in tools["workspaces"].description
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+@pytest.mark.parametrize("blank", ["", "   "])
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_workspace_writes_never_pick_the_only_workspace(mcp_client, fake, with_key, tool, extra, blank, confirm):
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": blank, "confirm": confirm, "operation_id": OP})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "invalid_argument" and "`workspace` is required" in body["message"]
+    assert [c[0] for c in fake["last"].calls] == ["close"]         # the user has one workspace, and it wasn't touched
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_take_a_label_on_the_preview_and_tell_the_agent_to_confirm_by_id(mcp_client, fake, with_key,
+                                                                                                tool, extra):
+    body = _payload(await mcp_client.call_tool(tool, {**extra, "workspace": "ReSearch"}))
+    assert body["confirmed"] is False and body["workspace"] == WS
+    step = body["next_step"]
+    assert f"`workspace` set to the id `{WS}`" in step and "confirm=true" in step and "Never set confirm=true" in step
+    assert "same arguments" not in step                            # the same arguments would be the refused label
+
+    done = await mcp_client.call_tool(tool, {**extra, "workspace": WS, "confirm": True,
+                                             "operation_id": body["operation_id"]})
+    assert not done.is_error and _calls(fake, tool)[0][1] == (WS,)
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_refuse_a_label_with_confirm(mcp_client, fake, with_key, tool, extra):
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": "research", "confirm": True, "operation_id": OP})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "invalid_argument" and body["operation_id"] == OP
+    assert "'research'" in body["message"] and "the preview's `workspace` field" in body["next_step"]
+    assert "keep that id for every retry" in body["next_step"]
+    assert [c[0] for c in fake["last"].calls] == ["close"]         # not looked up, and nothing was sent
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_look_up_a_label_like_every_other_tool(mcp_client, fake, with_key, tool, extra):
+    from conftest import _ws
+
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": "nope"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "unknown_workspace" and body["workspaces"][0]["workspace"] == WS
+
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": "all"})
+    assert result.is_error and _payload(result)["code"] == "unknown_workspace"     # "all" is no shortcut here
+
+    def twins(inst):
+        inst.workspaces = [_ws(WS, "lab"), _ws("fedcba9876543210", "lab")]
+    fake["setup"] = twins
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": "lab"})
+    assert result.is_error and _payload(result)["code"] == "ambiguous_workspace"
+    assert not _calls(fake, tool)
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_translate_a_failed_label_lookup(mcp_client, fake, with_key, tool, extra):
+    fake["setup"] = lambda inst: inst.raise_on.update(list_workspaces=AuthenticationError(401, "API key has expired."))
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": "research"})
+    assert result.is_error and _payload(result)["code"] == "invalid_api_key"
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_confirm_needs_an_operation_id(mcp_client, fake, with_key, tool, extra):
+    refused = await mcp_client.call_tool(tool, {**extra, "workspace": WS, "confirm": True})
+    assert refused.is_error and _payload(refused)["code"] == "operation_id_required"
+    assert not _calls(fake, tool)
+
+
+@pytest.mark.parametrize("tool,extra,preview_call", [("update_workspace", {"name": "lab-2"}, "estimate_workspace_update"),
+                                                     ("delete_workspace", {}, "check_workspace_delete")])
+async def test_a_viewer_is_told_on_the_preview_not_after_agreeing(mcp_client, fake, with_key, tool, extra, preview_call):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        **{preview_call: PermissionDeniedError(403, "You are not admin of this workspace")})
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": WS})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "forbidden" and "Tell the user" in body["next_step"]
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_need_a_write_key_but_their_previews_do_not(mcp_client, fake, with_key, tool, extra):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        **{tool: PermissionDeniedError(403, "API key lacks required scope: write")})
+    prev = _payload(await mcp_client.call_tool(tool, {**extra, "workspace": WS}))
+    assert prev["confirmed"] is False
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": WS, "confirm": True,
+                                               "operation_id": prev["operation_id"]})
+    assert result.is_error and _payload(result)["code"] == "write_scope_required"
+
+
+@pytest.mark.parametrize("tool,extra", _BOTH_TOOLS)
+async def test_workspace_writes_on_a_workspace_that_is_gone(mcp_client, fake, with_key, tool, extra):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        **{tool: NotFoundError(404, f"No workspace '{WS}'.", title="Workspace Not Found")})
+    result = await mcp_client.call_tool(tool, {**extra, "workspace": WS, "confirm": True, "operation_id": OP})
+    assert result.is_error and _payload(result)["code"] == "not_found"
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("create_pod", {"name": "p", "template_id": 1}),
+    ("submit_task", {"name": "t", "script": "pass", "image": "img", "cpu_preset": "micro-2c8g"}),
+])
+@pytest.mark.parametrize("title", ["Workspace not found or not ready", "Workspace is not ready"])
+async def test_a_workspace_that_is_not_running_yet_says_to_wait(mcp_client, fake, with_key, tool, args, title):
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        **{tool: MeshiveAPIError(400, "Workspace 0123456789abcdef is not ready please try later", title=title)})
+    result = await mcp_client.call_tool(tool, {**args, "confirm": True, "operation_id": "test-operation-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "workspace_not_ready" and body["operation_id"] == "test-operation-0001"
+    assert "`workspaces` tool with no arguments" in body["next_step"] and "`running`" in body["next_step"]
+    assert "tell the user" in body["next_step"]

@@ -20,6 +20,8 @@ from .errors import invalid_argument, tool_error
 NEEDS_WORKSPACE = "workspace"
 ALL = "all"
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
+_NO_WORKSPACE_STEP = ("Offer to create one with the create_workspace tool (it costs nothing by itself), or the user can "
+                      "add one in the console. A new workspace is usable once the workspaces tool shows it `running`.")
 
 
 def _summary(workspaces: list[Workspace]) -> list[dict[str, str]]:
@@ -60,8 +62,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
     if len(workspaces) == 1:
         return workspaces[0].namespace_name
     if not workspaces:
-        raise tool_error("no_workspace", "The user has no workspace.",
-                         "Ask the user to create a workspace in the console first.")
+        raise tool_error("no_workspace", "The user has no workspace.", _NO_WORKSPACE_STEP)
     return {
         "needs_input": NEEDS_WORKSPACE,
         "workspaces": _summary(workspaces),
@@ -75,13 +76,28 @@ async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str]
     if workspace is not None and workspace.strip().lower() == ALL:
         workspaces = await client.list_workspaces()
         if not workspaces:
-            raise tool_error("no_workspace", "The user has no workspace.",
-                             "Ask the user to create a workspace in the console first.")
+            raise tool_error("no_workspace", "The user has no workspace.", _NO_WORKSPACE_STEP)
         return [w.namespace_name for w in workspaces]
     one = await resolve(client, workspace)
     if isinstance(one, dict):
         return one
     return [one]  # type: ignore[list-item]
+
+
+async def resolve_target(client: AsyncMeshive, workspace: str, *, confirm: bool) -> str:
+    """For tools that change the workspace itself (update_workspace, delete_workspace). Unlike `resolve`, nothing is picked
+    for the caller: a blank value is refused even when the user has one workspace. A label works on the preview only: it
+    stops resolving once the workspace is renamed or deleted, so a confirmed call and its retries go by the id."""
+    workspace = (workspace or "").strip()
+    if not workspace:
+        raise invalid_argument("`workspace` is required — pass the workspace's id or label. This tool never picks one.")
+    if _ID_RE.match(workspace):
+        return workspace
+    if confirm:
+        raise tool_error("invalid_argument", f"confirm=true needs the workspace id, not the label '{workspace}'.",
+                         "Nothing was sent. Use the id in the preview's `workspace` field in place of the label (call "
+                         "without confirm to get it), and keep that id for every retry.")
+    return _by_label(await client.list_workspaces(), workspace)
 
 
 def needs_input(value: Any) -> bool:

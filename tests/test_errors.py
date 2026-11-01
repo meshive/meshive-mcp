@@ -214,3 +214,80 @@ def test_storage_connection_error_has_its_own_code():
         pytest.skip("this SDK reports a failed connection as a phase instead")
     b = _body(cls("pv-1"))
     assert b["code"] == "storage_connection_failed" and "Don't retry" in b["next_step"]
+
+
+@pytest.mark.parametrize("title", ["Workspace not found or not ready", "Workspace is not ready"])
+def test_a_workspace_that_is_not_running_yet_has_its_own_code(title):
+    b = _body(_api(400, title, "Workspace 0123456789abcdef is not ready please try later"))
+    assert b["code"] == "workspace_not_ready" and "0123456789abcdef" in b["message"]
+    assert "`workspaces` tool with no arguments" in b["next_step"] and "`running`" in b["next_step"]
+    assert "isn't listed" in b["next_step"] and "tell the user" in b["next_step"]
+    assert _body(_api(400, "Workspace does not exist"))["code"] == "invalid_request"      # other titles are untouched
+
+
+def test_a_workspace_that_is_not_empty_passes_the_blockers_on():
+    from meshive.exceptions import ConflictError
+
+    blockers = {"assets": 3, "operations_in_progress": 1}
+    b = _body(ConflictError(409, "'lab' still holds: assets (3).", title="Workspace Not Empty",
+                            raw={"detail": {"title": "Workspace Not Empty", "message": "'lab' still holds: assets (3).",
+                                            "blockers": blockers}}))
+    assert b["code"] == "workspace_not_empty" and b["blockers"] == blockers and "'lab'" in b["message"]
+    step = b["next_step"]
+    assert "Tell the user" in step and "only if the user asks" in step and "managed in the console" in step
+    assert "`operations_in_progress` and `task_outputs` clear on their own" in step and "check again shortly" in step
+    assert "under `storages` for a few minutes" in step and "include_system=true" in step and "`pending_payouts`" in step
+    # What it never does: offer a way past the check, or a force option on a tool. A person has the console, and which
+    # button it shows depends on what is left, so none is named.
+    assert "Never suggest a way around" in step and "force" not in step.lower() and "Delete everything" not in step
+    assert "No tool can delete" in step and "in the console, which removes what's in it for good" in step
+
+
+def _not_empty_step():
+    from meshive.exceptions import ConflictError
+
+    return _body(ConflictError(409, "m", title="Workspace Not Empty"))["next_step"]
+
+
+def test_a_workspace_that_is_not_empty_sorts_what_tools_can_delete_from_what_the_console_does():
+    step = _not_empty_step()
+    assert "Pods, storage, servings and custom models can be deleted with their tools" in step
+    assert "Assets, finished tasks, credentials, webhooks, custom templates, inference keys" in step
+    assert "templates and models" not in step
+
+
+def test_a_workspace_that_is_not_empty_does_not_say_system_pods_or_kept_volumes_go_on_their_own():
+    step = _not_empty_step()
+    assert "serving replicas, which go with their serving" in step
+    assert "system pods, which go with their storage volume (delete_storage)" in step
+    assert "A volume the storages tool still shows stays and bills until it is deleted" in step
+    assert "only a deleted pod's hidden temporary volume" in step
+
+
+def test_a_workspace_that_is_not_empty_says_how_long_each_wait_is_and_when_to_stop():
+    step = _not_empty_step()
+    assert "usually clears within minutes, at most about 30 minutes" in step
+    assert "about 30 minutes after the task ended or when its upload finishes" in step
+    assert "stop checking and tell the user" in step and "look at the task in the console or contact support" in step
+    # Payouts follow a daily job, so they get their own sentence, outside the "check again shortly" one.
+    assert "`pending_payouts` clears once the earnings are paid out, usually within a day" in step
+    assert "on hold, or a failed payout, can take longer" in step and "contact support" in step
+    assert "Deleting in the console before that loses them" in step
+
+
+def test_a_refused_workspace_delete_says_why_and_does_not_invite_a_retry():
+    b = _body(_api(400, "Unable to delete workspace", "This workspace is protected and cannot be deleted."))
+    assert b["code"] == "workspace_not_deletable" and "protected" in b["message"]
+    assert "Tell the user" in b["next_step"] and "don't retry" in b["next_step"]
+
+
+def test_a_workspace_that_is_gone_is_not_found():
+    b = _body(NotFoundError(404, "No workspace 'abc'.", title="Workspace Not Found"))
+    assert b["code"] == "not_found" and "list tool" in b["next_step"]
+
+
+def test_a_taken_name_covers_renaming_a_workspace():
+    from meshive.exceptions import ConflictError
+
+    b = _body(ConflictError(409, "m", title="Name Taken", raw={"detail": {"title": "Name Taken", "message": "m"}}))
+    assert "update_pod, update_storage or update_workspace `name`" in b["next_step"]

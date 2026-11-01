@@ -20,18 +20,20 @@ T = TypeVar("T")
 MAX_RESPONSE_BYTES = 1024 * 1024
 # Errors whose next_step already says whether and how to call again, so the generic "retry with the same operation_id and
 # the same arguments" advice would contradict it: a failed create is final, a start refused for data-loss consent is
-# called again with the placement it names and allow_data_loss=true once the user agrees, and an edit refused for a
-# move, local storage or watched folders is called again with the argument the user agreed to.
-_OWN_RETRY_ADVICE_CODES = {"pod_creation_failed", "data_loss_consent_required", "node_migration_required",
+# called again with the placement it names and allow_data_loss=true once the user agrees, an edit refused for a
+# move, local storage or watched folders is called again with the argument the user agreed to, a taken name is
+# checked against the list or changed, and a refused workspace delete is checked again without confirm or left alone.
+_OWN_RETRY_ADVICE_CODES = {"name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
                            "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
-                           "hf_token_rejected"}
+                           "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key. connect_storage and ssh_access are left out on purpose: their responses carry
 # a one-time password, which the server must not keep as a replayable operation record.
 _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
            "update_storage", "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
-           "submit_task", "stop_task", "register_model", "delete_model", "import_asset", "set_watched_folders"}
+           "submit_task", "stop_task", "register_model", "delete_model", "import_asset", "set_watched_folders",
+           "create_workspace", "update_workspace", "delete_workspace"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:

@@ -12,7 +12,8 @@ import pytest
 from mcp.client import Client
 from meshive.models import (AssetDownload, AssetImported, CpuLine, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, SshAccess, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
                             Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WatchedFolders, WhoAmI,
-                            Workspace)
+                            Workspace, WorkspaceCreated, WorkspaceDeleteCheck, WorkspaceEstimate, WorkspaceUpdated,
+                            WorkspaceUpdateEstimate)
 
 from meshive_mcp import client as client_module
 from meshive_mcp.server import create_server
@@ -165,6 +166,7 @@ class FakeMeshive:
         self.storage_encrypted = True
         self.connect_phase = "ready"        # connect_storage / get_storage_connection
         self.model_sets_selectable = True
+        self.workspace_blockers: dict[str, int] = {}    # check_workspace_delete
 
     def _rec(self, name: str, /, *a: Any, **kw: Any) -> None:
         self.calls.append((name, a, kw))
@@ -395,6 +397,36 @@ class FakeMeshive:
             task="text-to-image", total_size_bytes=34359738368, min_vram_gb=16, min_vram_estimated=True,
             best_resolution="1024x1024", licenses=[{"license": "flux-1-dev-non-commercial", "count": 2}],
             license_unknown_count=1, workflows=[{"task": "text-to-image"}], items=[item])])
+
+    WORKSPACE_ESTIMATE = {"pricePerHourUsd": "0", "note": "A workspace costs nothing by itself. Pods, storage and tasks in "
+                                                          "it are billed as usual."}
+
+    async def estimate_workspace(self, name=None):
+        self._rec("estimate_workspace", name)
+        return WorkspaceEstimate.from_dict({**self.WORKSPACE_ESTIMATE, "name": name})
+
+    async def create_workspace(self, name=None, **kw):
+        self._rec("create_workspace", name, **kw)
+        return WorkspaceCreated.from_dict({"workspace": "fedcba9876543210", "name": name or "my-workspace-ab12",
+                                           "accepted": True, "transactionId": 21,
+                                           "estimate": {**self.WORKSPACE_ESTIMATE, "name": name}})
+
+    async def estimate_workspace_update(self, workspace, *, name):
+        self._rec("estimate_workspace_update", workspace, name=name)
+        return WorkspaceUpdateEstimate.from_dict({"workspace": workspace, "currentName": "research", "name": name})
+
+    async def update_workspace(self, workspace, *, name, **kw):
+        self._rec("update_workspace", workspace, name=name, **kw)
+        return WorkspaceUpdated.from_dict({"workspace": workspace, "name": name})
+
+    async def check_workspace_delete(self, workspace):
+        self._rec("check_workspace_delete", workspace)
+        return WorkspaceDeleteCheck.from_dict({"workspace": workspace, "name": "research",
+                                               "deletable": not self.workspace_blockers,
+                                               "blockers": self.workspace_blockers})
+
+    async def delete_workspace(self, workspace, **kw):
+        return await self._action("delete_workspace", "workspace", workspace, **kw)
 
     async def estimate_storage(self, name, size_gb, **kw):
         self._rec("estimate_storage", name, size_gb, **kw)

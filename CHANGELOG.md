@@ -3,6 +3,61 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.6.0
+
+An agent can now create a workspace for a user who has none or who wants another, rename one, and delete an empty one.
+Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
+
+### New
+
+- `create_workspace` creates a workspace. `name` is optional (at most 63 characters, and different from the name of
+  each of the user's workspaces); without one a name like `my-workspace-ab12` is generated. Like `create_pod` and
+  `create_storage` it takes `confirm`: with `confirm=false` (the default) it only checks the name and creates nothing, and with
+  `confirm=true` it creates the workspace. The agent is told to set it only after the user agrees; the server can't
+  check that. A workspace costs nothing by itself; the pods, storage and tasks in it are billed as usual. It needs a
+  Read & write key. API keys work across the whole account, so the key that created the workspace can use it.
+- A new workspace is set up in the background. Its `status` in `workspaces` is `creating` until it is `running`, and
+  pods and tasks are refused until then. `create_workspace` and the server instructions tell the agent to wait for
+  `running` before creating anything in it, and what to tell the user if setup fails or takes longer than usual.
+- `workspaces` with an empty list, and every tool that finds no workspace (`no_workspace`), now offer
+  `create_workspace`.
+- `update_workspace` renames a workspace. Its ID stays the same and every member sees the new name. With
+  `confirm=false` (the default) it shows the old and new name and changes nothing; a name that is taken is `name_taken`.
+  It needs a Read & write key, and the admin or billing role in that workspace.
+- `delete_workspace` deletes an empty workspace, which can't be undone. It takes `confirm` the same way. A workspace
+  that still holds anything is refused with `workspace_not_empty`, and `blockers` counts what is left: pods, storage,
+  servings, tasks (finished ones too), assets, custom templates and models, credentials, webhooks, inference keys, other
+  members, open invitations, task outputs still being saved, pending payouts and operations in progress. No tool can
+  delete a workspace that still holds things; a person can still delete it in the console, which removes what's in it
+  for good. The tool needs a Read & write key, and the admin or billing role in that workspace. Other refusals come
+  back as `workspace_not_deletable`.
+- Both tools need `workspace` and never pick one for the user, even when there is only one. The preview takes an ID or a
+  label; `confirm=true` takes the ID only, so a retry still works after the workspace is renamed or deleted.
+
+### Changed
+
+- Refusals because a workspace isn't `running` yet come back as `workspace_not_ready` (before: `invalid_request`) and
+  say to wait for `running` and try again.
+- Clients that cut long server instructions, such as Claude Code at 4096 characters, now keep the safety rules:
+  untrusted content, secrets, confirmation and data-loss consent come first.
+
+## v1.5.1
+
+Connecting no longer takes 25 seconds, and the server now works on Windows PCs running Avast or Norton with HTTPS
+scanning on. Tool names and arguments are unchanged.
+
+### Fixed
+
+- Claude Code took about 25 seconds to connect. The server no longer offers `subscriptions/listen`: its tools don't
+  change while it runs, so `server/discover` now reports `listChanged: false` and clients go straight to `tools/list`.
+- Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
+  `Invalid character in chunk size`. Avast and Norton rewrite MCP responses that carry a `Content-Length`, so responses
+  are now sent chunked.
+
+### Self-hosting
+
+- Behind a reverse proxy, keep response buffering off: it adds the `Content-Length` back to short responses.
+
 ## v1.5.0
 
 A task can now keep only some of the files it writes to `/outputs`, as in the console's submit form. Built on the
