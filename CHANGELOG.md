@@ -6,7 +6,8 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 ## v1.6.0
 
 An agent can now create a workspace for a user who has none or who wants another, rename one, and delete an empty one.
-Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
+Connecting no longer takes 25 seconds, and AI agents on Windows PCs running Norton with HTTPS scanning on can now
+connect. Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
 
 ### New
 
@@ -40,23 +41,31 @@ Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unc
   say to wait for `running` and try again.
 - Clients that cut long server instructions, such as Claude Code at 4096 characters, now keep the safety rules:
   untrusted content, secrets, confirmation and data-loss consent come first.
-
-## v1.5.1
-
-Connecting no longer takes 25 seconds, and the server now works on Windows PCs running Avast or Norton with HTTPS
-scanning on. Tool names and arguments are unchanged.
+- Requests over 1 MiB are refused with 413 (before: 4 MiB). A 256 KiB task script still fits.
+- A body that isn't UTF-8 JSON is refused with 400, and so is a request with more than 8192 JSON values or nested more
+  than 32 levels deep.
+- A request with `inputResponses` is refused with 400: no tool asks for input.
+- A tool call with more than 4096 argument values, counting a list sent as a JSON string, is refused with
+  `invalid_argument`.
+- 32 requests are handled at once, and 3 requests can be open with a body over 64 KiB or of unstated size. Others get
+  503 with `Retry-After`.
+- At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
+  two ends.
+- The HTTP server now runs with the `httptools` parser.
 
 ### Fixed
 
 - Claude Code took about 25 seconds to connect. The server no longer offers `subscriptions/listen`: its tools don't
-  change while it runs, so `server/discover` now reports `listChanged: false` and clients go straight to `tools/list`.
+  change while it runs, so `server/discover` now reports `listChanged: false` and clients don't wait on that stream.
 - Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
-  `Invalid character in chunk size`. Avast and Norton rewrite MCP responses that carry a `Content-Length`, so responses
-  are now sent chunked.
+  `Invalid character in chunk size`. Norton's HTTPS scanning (and Avast's, by user reports) breaks MCP responses that
+  aren't chunked, so responses are now sent chunked.
 
 ### Self-hosting
 
-- Behind a reverse proxy, keep response buffering off: it adds the `Content-Length` back to short responses.
+- Behind a reverse proxy, keep response buffering off: it can add a `Content-Length` back to short responses.
+- Without request buffering, slow uploads reach the server as they arrive, so limit concurrent requests per client at
+  the proxy.
 
 ## v1.5.0
 

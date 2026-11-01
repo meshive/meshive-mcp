@@ -7,18 +7,40 @@ tools-only v1 doesn't need.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import meshive
+import pydantic_core
 from mcp.server.mcpserver import MCPServer
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecuritySettings
+from mcp.types import INVALID_REQUEST, PARSE_ERROR
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import __version__
+from .errors import invalid_argument
 from .settings import settings
 from .tools import register_all
+
+# Fits a 256 KiB task script after JSON escaping, plus its other arguments. Parsing and validating a body can take many
+# times its size, so this also scales how much memory one request can use.
+MAX_REQUEST_BODY_BYTES = 1024 * 1024
+# Well above any real request. They are checked before parsing, because what a body costs depends on its shape.
+MAX_JSON_TOKENS = 8192
+MAX_JSON_DEPTH = 32
+# A request keeps its memory until it ends, even after its client has left, so work in progress needs its own limit.
+MAX_REQUESTS = 32
+# Nearly every request is smaller than this, so limiting the larger ones leaves ordinary tool calls alone.
+LARGE_BODY_BYTES = 64 * 1024
+MAX_LARGE_BODIES = 3
+# Well above what any tool takes. It bounds validation, which reports every bad item of a list.
+MAX_ARGUMENT_VALUES = 4096
+
+SERVER_BUSY = -32000
+_NOT_BRACKETS = bytes(set(range(256)) - set(b"[]{}"))
 
 # Claude Code keeps only the first 4096 characters of a server's instructions, so the order here matters. Safety rules
 # come first (tests/test_instructions.py holds them inside the cut), then the rules nothing else repeats. Only what a
@@ -119,12 +141,13 @@ class RefuseStreams:
 
 
 class OmitContentLength:
-    """Send every response without Content-Length, so uvicorn frames it with chunked transfer encoding.
+    """Send responses without Content-Length, so uvicorn frames them with chunked transfer encoding.
 
-    The HTTPS scanning in Avast and Norton (Windows) treats a request as MCP traffic by its path or by its MCP protocol
-    and session headers, on any URL. It then replaces a response's Content-Length with `Transfer-Encoding: chunked` but
-    leaves the body unchunked, so clients fail on an invalid chunk or wait for an end that never comes. Responses that
-    are already chunked pass through intact. A proxy that buffers responses puts the length back, so don't buffer them.
+    The HTTPS scanning in Norton on Windows (and in Avast, by user reports) treats an AI agent's request as MCP traffic
+    by its path or by its MCP protocol and session headers, on any URL. It then marks a response that isn't chunked as
+    `Transfer-Encoding: chunked` but leaves the body unchunked, so clients fail on an invalid chunk or wait for an end
+    that never comes. Responses that are already chunked pass through intact. A proxy that buffers responses puts the
+    length back, so don't buffer them.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -144,8 +167,151 @@ class OmitContentLength:
         await self.app(scope, receive, send_without_length)
 
 
+def _too_complex(body: bytes) -> bool:
+    """Tell whether JSON has more structure than any real request, at a small fraction of the cost of parsing it."""
+    text = body.replace(b"\\\\", b"").replace(b'\\"', b"")  # The quotes that are left only delimit strings.
+    if text.count(b'"') > 4 * MAX_JSON_TOKENS:
+        return True
+    structure = b"".join(text.split(b'"')[::2])
+    brackets = structure.translate(None, _NOT_BRACKETS)
+    if len(brackets) + structure.count(b",") > MAX_JSON_TOKENS:
+        return True
+    depth = 0
+    for bracket in brackets:
+        depth += 1 if bracket in b"[{" else -1
+        if depth > MAX_JSON_DEPTH:
+            return True
+    return False
+
+
+def _error(status: int, code: int, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
+    """A JSON-RPC error, so that MCP clients show the message instead of a bare HTTP status."""
+    return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}}, status, headers)
+
+
+def _busy() -> JSONResponse:
+    return _error(503, SERVER_BUSY, "Server busy. Retry in a few seconds.", {"Retry-After": "1"})
+
+
+def _refusal_on_reading(body: bytes) -> JSONResponse | None:
+    """Parse strictly, and refuse what's left of what the SDK shouldn't see.
+
+    The SDK's newest protocol path parses with `json.loads`, which also decodes UTF-16 and a BOM. `_too_complex` can't read
+    those, so nothing `pydantic_core.from_json` refuses may reach the SDK. No tool asks for input, so `inputResponses`,
+    which is validated before any tool runs, has no use here, and only parsing finds it: its key can be escaped.
+    """
+    try:
+        request = pydantic_core.from_json(body)
+    except ValueError:
+        return _error(400, PARSE_ERROR, "The request isn't UTF-8 JSON.")
+    params = request.get("params") if isinstance(request, dict) else None
+    if isinstance(params, dict) and "inputResponses" in params:
+        return _error(400, INVALID_REQUEST, "This server doesn't take inputResponses.")
+    return None
+
+
+def _may_be_large(scope: Scope) -> bool:
+    headers = Headers(scope=scope)
+    length = headers.get("content-length")
+    return length is None or "transfer-encoding" in headers or int(length) > LARGE_BODY_BYTES
+
+
+async def _read_and_drop(receive: Receive) -> None:
+    """Read a refused body without keeping it, so that the client gets to read the refusal."""
+    left = MAX_REQUEST_BODY_BYTES
+    while left > 0:
+        message = await receive()
+        if message["type"] != "http.request" or not message.get("more_body"):
+            return
+        left -= len(message.get("body", b""))
+
+
+class AdmitRequests:
+    """Refuse a `POST /mcp` that would cost too much, before the SDK parses it.
+
+    The SDK validates what it's sent item by item, so a small body can take far more memory and CPU than its size, and
+    it keeps going after a client disconnects, so a proxy that counts open requests can't bound the work. Large bodies
+    count from when they arrive, because reading them takes memory too. Requests over a limit are refused rather than
+    queued, because a queue would hold the bodies just the same.
+    """
+
+    def __init__(self, app: ASGIApp, path: str = "/mcp") -> None:
+        self.app = app
+        self.path = path.rstrip("/")
+        self.read_body = RequestBodyLimitMiddleware(self.admit, MAX_REQUEST_BODY_BYTES)
+        self.active = 0
+        self.active_large = 0
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"].rstrip("/") != self.path or scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        large = _may_be_large(scope)
+        if large and self.active_large >= MAX_LARGE_BODIES:
+            await _read_and_drop(receive)
+            await _busy()(scope, receive, send)
+            return
+        self.active_large += large
+        try:
+            await self.read_body(scope, receive, send)
+        finally:
+            self.active_large -= large
+
+    async def admit(self, scope: Scope, receive: Receive, send: Send) -> None:
+        message = await receive()
+        if message["type"] != "http.request" or message.get("more_body"):
+            return  # The client left before the body ended.
+
+        body = message.get("body", b"")
+        if _too_complex(body):
+            refusal = _error(400, INVALID_REQUEST, "The request has too many values or is nested too deeply.")
+            await refusal(scope, receive, send)
+            return
+        if self.active >= MAX_REQUESTS:
+            await _busy()(scope, receive, send)
+            return
+
+        pending = [message]
+
+        async def replay() -> Message:
+            return pending.pop() if pending else await receive()
+
+        self.active += 1
+        try:
+            refusal = _refusal_on_reading(body)
+            if refusal:
+                await refusal(scope, receive, send)
+            else:
+                await self.app(scope, replay, send)
+        finally:
+            self.active -= 1
+
+
+class ArgumentLimitedServer(MCPServer):
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        """Refuse a call with too many argument values before the SDK validates them.
+
+        Validation reports every bad item of a list, and the SDK puts all of that into the error it returns and logs.
+        """
+        tool = self._tool_manager.get_tool(name)
+        # The SDK parses a string given for a field that isn't a plain string, so count what it would see.
+        parsed = tool.fn_metadata.pre_parse_json(arguments) if tool else arguments
+        count, pending = 0, list(parsed.values())
+        while pending:
+            value = pending.pop()
+            count += 1
+            if count > MAX_ARGUMENT_VALUES:
+                raise invalid_argument(f"A tool call can't have more than {MAX_ARGUMENT_VALUES} argument values.")
+            if isinstance(value, dict):
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        return await super().call_tool(name, arguments, context)
+
+
 def create_server() -> MCPServer:
-    server = MCPServer(
+    server = ArgumentLimitedServer(
         name="meshive",
         title="Meshive GPU Cloud",
         version=__version__,
@@ -183,6 +349,7 @@ def create_http_app(server: MCPServer | None = None) -> Starlette:
         transport_security=security,
     )
     app.add_middleware(RefuseStreams)
-    # Last added runs outermost, so this also covers the 405 from RefuseStreams.
+    app.add_middleware(AdmitRequests)
+    # Last added runs outermost, so this also covers every refusal above.
     app.add_middleware(OmitContentLength)
     return app
