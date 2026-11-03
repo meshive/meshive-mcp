@@ -1,18 +1,21 @@
 """HTTP transport: /healthz, Bearer header passthrough, GET /mcp rejection."""
 import json
 import logging
+import socket
 import sys
+import threading
+import time
 
 import anyio
 import httpx
 import pytest
+import uvicorn
 from mcp.server.mcpserver import server as sdk_server
 from starlette.responses import PlainTextResponse
-from uvicorn.importer import import_from_string
 
 pytestmark = pytest.mark.anyio
 
-from meshive_mcp.__main__ import BoundedLines, configure_logging, main
+from meshive_mcp.__main__ import BoundedHeadProtocol, BoundedLines, configure_logging, main
 from meshive_mcp.server import (AdmitRequests, OmitContentLength, RefuseStreams, _may_be_large, _read_and_drop,
                                 _too_complex, create_http_app, create_server)
 
@@ -428,11 +431,58 @@ def test_log_lines_are_bounded_on_the_handler_the_server_ends_up_with(monkeypatc
     finally:
         root.handlers[:] = handlers
         logger.setLevel(level)
-    assert runs[0]["http"] == "httptools"
+    assert runs[0]["http"] is BoundedHeadProtocol
 
 
-def test_the_server_can_load_its_http_parser():
-    import_from_string("uvicorn.protocols.http.httptools_impl:HttpToolsProtocol")
+@pytest.fixture
+def server_port():
+    """A real uvicorn server with the protocol main() uses, on a free port."""
+    async def app(scope, receive, send):
+        await PlainTextResponse("ok")(scope, receive, send)
+
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, http=BoundedHeadProtocol, lifespan="off",
+                                           log_level="error"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(500):
+        if server.started:
+            break
+        time.sleep(0.01)
+    yield server.servers[0].sockets[0].getsockname()[1]
+    server.should_exit = True
+    thread.join(10)
+
+
+def _status(port, path="/", fields=0):
+    head = f"GET {path} HTTP/1.1\r\nHost: t\r\n" + "x-aaaa: 1\r\n" * fields + "Connection: close\r\n\r\n"
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(head.encode())
+        return s.recv(64).split(b" ")[1]
+
+
+@pytest.mark.parametrize("path, fields, status", [
+    ("/", 1400, b"200"),  # 11 bytes counted for each field.
+    ("/", 1600, b"400"),
+    ("/" + "a" * 15000, 0, b"200"),
+    ("/" + "a" * 17000, 0, b"400"),
+])
+def test_request_heads_are_limited_as_h11_did(server_port, path, fields, status):
+    """Every header field becomes a Python object, so a head of many fields costs far more memory than its size."""
+    assert _status(server_port, path, fields) == status
+    assert _status(server_port) == b"200"
+
+
+def test_the_head_limit_is_per_request_on_a_kept_alive_connection(server_port):
+    head = ("GET / HTTP/1.1\r\nHost: t\r\n" + "x-aaaa: 1\r\n" * 1400 + "\r\n").encode()
+    with socket.create_connection(("127.0.0.1", server_port), timeout=10) as s:
+        for _ in range(2):
+            s.sendall(head)
+            answer = b""
+            while not answer.endswith(b"ok"):
+                chunk = s.recv(4096)
+                assert chunk, answer
+                answer += chunk
+            assert answer.split(b" ")[1] == b"200"
 
 
 async def _modern_post(http, method, **params):

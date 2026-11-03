@@ -8,10 +8,41 @@ from __future__ import annotations
 import argparse
 import logging
 
+import httptools
+from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+
 from .settings import settings
 
 
 MAX_LOG_LINE = 8192
+# The limit h11 sets by default.
+MAX_HEAD_BYTES = 16 * 1024
+
+
+class BoundedHeadProtocol(HttpToolsProtocol):
+    """httptools, with a limit on a request's head: it has none of its own, and keeps every header field in memory.
+
+    httptools rather than h11 because the pure-Python parser spends the event loop on a body sent in very small chunks.
+    """
+
+    head_bytes = 0
+
+    def _count(self, size: int) -> None:
+        self.head_bytes += size
+        if self.head_bytes > MAX_HEAD_BYTES:
+            raise httptools.HttpParserError("Request head too large")  # Answered with 400.
+
+    def on_message_begin(self) -> None:
+        self.head_bytes = 0
+        super().on_message_begin()
+
+    def on_url(self, url: bytes) -> None:
+        self._count(len(url))
+        super().on_url(url)
+
+    def on_header(self, name: bytes, value: bytes) -> None:
+        self._count(len(name) + len(value) + 4)
+        super().on_header(name, value)
 
 
 class BoundedLines(logging.Formatter):
@@ -51,9 +82,8 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
-    # Named so that a missing parser fails here. The pure-Python one spends the event loop on a body in very small chunks.
     uvicorn.run(create_http_app(create_server()), host=args.host, port=args.port, log_level=args.log_level.lower(),
-                http="httptools")
+                http=BoundedHeadProtocol)
 
 
 if __name__ == "__main__":

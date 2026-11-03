@@ -51,7 +51,7 @@ connect. Built on the `meshive` Python SDK 1.6. Tool names and existing argument
   503 with `Retry-After`.
 - At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
   two ends.
-- The HTTP server now runs with the `httptools` parser.
+- The HTTP server now runs with the `httptools` parser. A request's head is limited to 16 KiB, as it was before.
 
 ### Fixed
 
