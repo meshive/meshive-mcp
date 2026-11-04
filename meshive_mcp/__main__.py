@@ -55,6 +55,29 @@ class BoundedLines(logging.Formatter):
         return f"{line[:MAX_LOG_LINE // 2]} ... {line[-MAX_LOG_LINE // 2:]}"
 
 
+def raise_open_file_limit() -> None:
+    """Raise the soft limit on open files to the hard one.
+
+    At the usual soft limit of 1024, a server holding that many connections stops accepting new ones, health checks
+    included, long before memory runs out. The hard limit stays the operator's to set.
+    """
+    try:
+        import resource
+    except ImportError:  # Windows
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft == resource.RLIM_INFINITY:
+        return
+    # An unlimited hard limit (macOS) can't be the soft one there: the most it takes is OPEN_MAX.
+    target = 10240 if hard == resource.RLIM_INFINITY else hard
+    if soft >= target:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        logging.getLogger(__name__).warning("Couldn't raise the open file limit from %d.", soft)
+
+
 def configure_logging(level: str) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(BoundedLines("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -82,6 +105,7 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
+    raise_open_file_limit()
     uvicorn.run(create_http_app(create_server()), host=args.host, port=args.port, log_level=args.log_level.lower(),
                 http=BoundedHeadProtocol)
 

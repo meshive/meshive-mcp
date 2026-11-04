@@ -238,6 +238,225 @@ async def test_gpus_without_key_uses_public_catalog(mcp_client, fake, monkeypatc
                               "availability": "unknown"}]
 
 
+def _price_list_api(monkeypatch, handler):
+    import httpx
+    from meshive_mcp.tools import gpus as gpus_module
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(gpus_module.httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    return gpus_module
+
+
+def _prices(demand):
+    import httpx
+    return httpx.Response(200, json={"gpu_pod_prices": [{"model": "RTX 5090", "vram": 32, "demand_price": demand}]})
+
+
+def _demand(body):
+    return body["items"][0]["price_per_hour"]
+
+
+async def test_keyless_gpus_callers_share_one_price_list_request(monkeypatch):
+    import asyncio
+    requests = []
+    answer = asyncio.Event()
+
+    async def handler(request):
+        requests.append(request)
+        await answer.wait()
+        return _prices("0.6")
+
+    gpus_module = _price_list_api(monkeypatch, handler)
+    callers = [asyncio.create_task(gpus_module._public_catalog("demand", None)) for _ in range(5)]
+    await asyncio.sleep(0.05)
+    answer.set()
+    assert [_demand(b) for b in await asyncio.gather(*callers)] == ["0.6"] * 5
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+    await asyncio.sleep(0.05)
+    assert len(requests) == 1 and gpus_module._refresh is None
+
+
+async def test_keyless_gpus_answers_from_the_old_copy_while_it_is_refreshed(monkeypatch):
+    import asyncio
+    answers = ["0.6", "0.7"]
+    answer = asyncio.Event()
+    answer.set()
+
+    async def handler(request):
+        await answer.wait()
+        return _prices(answers.pop(0))
+
+    gpus_module = _price_list_api(monkeypatch, handler)
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+    fetched_at, body = gpus_module._catalog
+    gpus_module._catalog = (fetched_at - gpus_module.CATALOG_TTL, body)
+    answer.clear()
+    # Expired: the old copy comes back at once while one refresh is out.
+    for _ in range(2):
+        assert _demand(await asyncio.wait_for(gpus_module._public_catalog("demand", None), 5)) == "0.6"
+    answer.set()
+    await gpus_module._refresh
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.7"
+    assert answers == []
+
+
+def _scripted(answers, requests):
+    def handler(request):
+        requests.append(request)
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    return handler
+
+
+def _age(gpus_module, seconds):
+    fetched_at, body = gpus_module._catalog
+    gpus_module._catalog = (fetched_at - seconds, body)
+
+
+async def _refreshed(gpus_module):
+    """Wait for the refresh that's out, if any, and for its done callback."""
+    import asyncio
+    if gpus_module._refresh is not None:
+        await asyncio.wait([gpus_module._refresh])
+    await asyncio.sleep(0)
+
+
+async def test_keyless_gpus_keeps_the_old_copy_when_a_refresh_fails_and_waits_to_retry(monkeypatch, caplog):
+    import asyncio
+    import gc
+    import logging
+    import httpx
+    requests = []
+    answers = [_prices("0.6"), httpx.ConnectError("down"), _prices("0.7")]
+    loop = asyncio.get_running_loop()
+    unhandled = []
+    monkeypatch.setattr(loop, "call_exception_handler", unhandled.append)
+    gpus_module = _price_list_api(monkeypatch, _scripted(answers, requests))
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+    _age(gpus_module, gpus_module.CATALOG_TTL)
+    with caplog.at_level(logging.WARNING):
+        assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+        await _refreshed(gpus_module)
+    assert len(requests) == 2 and gpus_module._refresh is None
+    assert caplog.text.count("Couldn't refresh the public GPU price list: ConnectError") == 1
+    # Within RETRY_DELAY of the failure the copy answers and nothing is sent.
+    for _ in range(3):
+        assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+    assert gpus_module._refresh is None and len(requests) == 2
+    gpus_module._failed_at -= gpus_module.RETRY_DELAY
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+    await _refreshed(gpus_module)
+    gc.collect()  # A failed task nobody read is reported when it's collected.
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.7"
+    assert len(requests) == 3 and unhandled == []
+
+
+async def test_keyless_gpus_waits_for_a_fresh_list_when_its_copy_is_too_old(monkeypatch):
+    import asyncio
+    requests = []
+    gpus_module = _price_list_api(monkeypatch, _scripted([_prices("0.6"), _prices("0.7")], requests))
+    await gpus_module._public_catalog("demand", None)
+    _age(gpus_module, gpus_module.CATALOG_MAX_AGE)
+    assert _demand(await asyncio.wait_for(gpus_module._public_catalog("demand", None), 5)) == "0.7"
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("failure", ["connect", "status"])
+async def test_keyless_gpus_without_a_copy_reports_the_api_unavailable(mcp_client, fake, monkeypatch, failure):
+    import httpx
+    requests = []
+    answer = httpx.ConnectError("down") if failure == "connect" else httpx.Response(503, text="busy")
+    gpus_module = _price_list_api(monkeypatch, _scripted([answer, _prices("0.6")], requests))
+    for _ in range(2):  # The second call comes within RETRY_DELAY and sends nothing.
+        result = await mcp_client.call_tool("gpus", {})
+        assert result.is_error and _payload(result)["code"] == "temporarily_unavailable"
+    assert len(requests) == 1
+    gpus_module._failed_at -= gpus_module.RETRY_DELAY
+    assert _payload(await mcp_client.call_tool("gpus", {}))["items"][0]["price_per_hour"] == "0.6"
+
+
+@pytest.mark.parametrize("eager", [False, True])
+async def test_keyless_gpus_refresh_that_fails_before_its_first_await_is_not_kept(monkeypatch, eager):
+    import asyncio
+    from meshive.exceptions import ConfigurationError
+    from mcp.server.mcpserver.exceptions import ToolError
+    if eager and not hasattr(asyncio, "eager_task_factory"):
+        pytest.skip("eager tasks are Python 3.12+")
+    requests = []
+    gpus_module = _price_list_api(monkeypatch, _scripted([_prices("0.6")], requests))
+    resolve = gpus_module.resolve_base_url
+
+    def bad_url(url):
+        raise ConfigurationError("bad base URL")
+
+    monkeypatch.setattr(gpus_module, "resolve_base_url", bad_url)
+    loop = asyncio.get_running_loop()
+    factory = loop.get_task_factory()
+    # An eager task that fails without suspending is done before create_task returns.
+    loop.set_task_factory(asyncio.eager_task_factory if eager else None)
+    try:
+        with pytest.raises(ToolError, match="temporarily_unavailable"):
+            await gpus_module._public_catalog("demand", None)
+    finally:
+        loop.set_task_factory(factory)
+    await _refreshed(gpus_module)
+    assert gpus_module._refresh is None
+    monkeypatch.setattr(gpus_module, "resolve_base_url", resolve)
+    gpus_module._failed_at -= gpus_module.RETRY_DELAY
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+
+
+async def test_keyless_gpus_caller_that_leaves_does_not_cancel_the_shared_request(monkeypatch):
+    import asyncio
+    answer = asyncio.Event()
+
+    async def handler(request):
+        await answer.wait()
+        return _prices("0.6")
+
+    gpus_module = _price_list_api(monkeypatch, handler)
+    leaving = asyncio.create_task(gpus_module._public_catalog("demand", None))
+    staying = asyncio.create_task(gpus_module._public_catalog("demand", None))
+    await asyncio.sleep(0.05)
+    leaving.cancel()
+    answer.set()
+    assert _demand(await staying) == "0.6"
+    assert leaving.cancelled()
+
+
+async def test_keyless_gpus_refresh_that_never_finishes_ends_at_the_request_timeout(monkeypatch, caplog):
+    import asyncio
+    import logging
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    async def handler(request):
+        await asyncio.sleep(3600)  # Like a response that comes a byte at a time: no single read runs out.
+
+    gpus_module = _price_list_api(monkeypatch, handler)
+    monkeypatch.setattr(gpus_module.settings, "request_timeout", 0.05)
+    with caplog.at_level(logging.WARNING), pytest.raises(ToolError, match="temporarily_unavailable"):
+        await asyncio.wait_for(gpus_module._public_catalog("demand", None), 5)
+    await _refreshed(gpus_module)
+    assert gpus_module._refresh is None
+    assert "Couldn't refresh the public GPU price list: TimeoutError" in caplog.text
+
+
+async def test_keyless_gpus_does_not_keep_a_price_list_that_is_not_an_object(monkeypatch):
+    import httpx
+    from mcp.server.mcpserver.exceptions import ToolError
+    requests = []
+    gpus_module = _price_list_api(monkeypatch, _scripted([httpx.Response(200, json=[]), _prices("0.6")], requests))
+    with pytest.raises(ToolError, match="temporarily_unavailable"):
+        await gpus_module._public_catalog("demand", None)
+    await _refreshed(gpus_module)
+    assert gpus_module._catalog is None
+    gpus_module._failed_at -= gpus_module.RETRY_DELAY
+    assert _demand(await gpus_module._public_catalog("demand", None)) == "0.6"
+
+
 def _two_ws(inst):
     from conftest import _ws
     inst.workspaces = [_ws("aaaaaaaaaaaaaaaa", "research"), _ws("bbbbbbbbbbbbbbbb", "prod")]

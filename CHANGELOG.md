@@ -52,6 +52,13 @@ connect. Built on the `meshive` Python SDK 1.6. Tool names and existing argument
 - At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
   two ends.
 - The HTTP server now runs with the `httptools` parser. A request's head is limited to 16 KiB, as it was before.
+- The HTTP server raises its open file limit to the hard limit when it starts. At the common default of 1024, open
+  connections could stop it from accepting new ones, health checks included.
+- `gpus` without an API key answers from one copy of the public price list shared by all callers, instead of asking
+  the API on every call. A call refreshes a copy over a minute old, and a copy up to ten minutes old is used while the
+  refresh is out or if it failed. Without such a copy, the call waits for the refresh, and gets
+  `temporarily_unavailable` if it fails or if one failed in the last few seconds. A refresh that takes longer than
+  the request timeout as a whole counts as failed.
 
 ### Fixed
 

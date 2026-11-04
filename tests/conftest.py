@@ -504,6 +504,15 @@ def fake(monkeypatch) -> FakeMeshive:
     return holder  # type: ignore[return-value]
 
 
+@pytest.fixture(autouse=True)
+def no_price_list_copy(monkeypatch):
+    """The keyless price list is kept per process. Each test starts without one."""
+    from meshive_mcp.tools import gpus
+    monkeypatch.setattr(gpus, "_catalog", None)
+    monkeypatch.setattr(gpus, "_refresh", None)
+    monkeypatch.setattr(gpus, "_failed_at", float("-inf"))
+
+
 @pytest.fixture
 def server():
     return create_server()

@@ -15,7 +15,7 @@ from starlette.responses import PlainTextResponse
 
 pytestmark = pytest.mark.anyio
 
-from meshive_mcp.__main__ import BoundedHeadProtocol, BoundedLines, configure_logging, main
+from meshive_mcp.__main__ import BoundedHeadProtocol, BoundedLines, configure_logging, main, raise_open_file_limit
 from meshive_mcp.server import (AdmitRequests, OmitContentLength, RefuseStreams, _may_be_large, _read_and_drop,
                                 _too_complex, create_http_app, create_server)
 
@@ -421,6 +421,7 @@ def test_log_lines_are_bounded_on_the_handler_the_server_ends_up_with(monkeypatc
     """The SDK sets up logging too, and logging.basicConfig does nothing once a handler exists."""
     runs = []
     monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: runs.append(kwargs))
+    monkeypatch.setattr("meshive_mcp.__main__.raise_open_file_limit", lambda: None)
     root = logging.getLogger()
     logger = logging.getLogger(sdk_server.__name__)
     handlers, level = root.handlers[:], logger.level
@@ -432,6 +433,57 @@ def test_log_lines_are_bounded_on_the_handler_the_server_ends_up_with(monkeypatc
         root.handlers[:] = handlers
         logger.setLevel(level)
     assert runs[0]["http"] is BoundedHeadProtocol
+
+
+@pytest.fixture
+def sdk_log_level():
+    """main() quiets the SDK's logger for the rest of the process."""
+    logger = logging.getLogger(sdk_server.__name__)
+    level = logger.level
+    yield
+    logger.setLevel(level)
+
+
+def test_http_server_raises_its_open_file_limit_to_the_hard_one(monkeypatch, sdk_log_level):
+    resource = pytest.importorskip("resource")
+    order = []
+    monkeypatch.setattr(resource, "getrlimit", lambda which: (1024, 524288))
+    monkeypatch.setattr(resource, "setrlimit", lambda which, limits: order.append(("setrlimit", which, limits)))
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: order.append(("run",)))
+    main([])
+    assert order == [("setrlimit", resource.RLIMIT_NOFILE, (524288, 524288)), ("run",)]
+
+
+def test_http_server_starts_when_the_open_file_limit_cant_be_raised(monkeypatch, caplog, sdk_log_level):
+    resource = pytest.importorskip("resource")
+    runs = []
+
+    def refuse(which, limits):
+        raise ValueError("not allowed")
+
+    monkeypatch.setattr(resource, "getrlimit", lambda which: (256, 524288))
+    monkeypatch.setattr(resource, "setrlimit", refuse)
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: runs.append(kwargs))
+    with caplog.at_level(logging.WARNING):
+        main([])
+    assert runs and "Couldn't raise the open file limit from 256." in caplog.text
+
+
+def test_open_file_limit_with_an_unlimited_hard_one_is_raised_to_open_max(monkeypatch):
+    resource = pytest.importorskip("resource")
+    calls = []
+    monkeypatch.setattr(resource, "getrlimit", lambda which: (256, resource.RLIM_INFINITY))
+    monkeypatch.setattr(resource, "setrlimit", lambda which, limits: calls.append(limits))
+    raise_open_file_limit()
+    assert calls == [(10240, resource.RLIM_INFINITY)]
+
+
+def test_open_file_limit_already_as_high_is_left_alone(monkeypatch):
+    resource = pytest.importorskip("resource")
+    monkeypatch.setattr(resource, "setrlimit", lambda which, limits: pytest.fail("setrlimit called"))
+    for limits in ((4096, 4096), (resource.RLIM_INFINITY, resource.RLIM_INFINITY), (20000, resource.RLIM_INFINITY)):
+        monkeypatch.setattr(resource, "getrlimit", lambda which, limits=limits: limits)
+        raise_open_file_limit()
 
 
 @pytest.fixture

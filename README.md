@@ -192,7 +192,8 @@ HTTPS scanning in Norton (and in Avast, by user reports) breaks MCP responses th
 slow uploads reach the server as they arrive, so limit concurrent requests per client at the proxy. The server limits
 what happens after that: a body must be UTF-8 JSON of up to 1 MiB, 8192 JSON values and 32 levels; 32 requests are
 handled at once, and 3 can be open with a body over 64 KiB or of unstated size (others get 503 with `Retry-After`); and a
-tool call can have up to 4096 argument values. Set the container's memory limit from your own load tests.
+tool call can have up to 4096 argument values. It raises its open file limit to the hard limit, so the container's
+hard `nofile` limit caps how many connections it can hold. Set the container's memory limit from your own load tests.
 
 ## Contributing
 
