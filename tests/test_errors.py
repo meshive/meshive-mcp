@@ -163,6 +163,7 @@ def test_edit_and_model_set_titles_map_to_codes(title, code, hint):
     ("Resource values need confirmation", "resource_values_need_confirmation", "`ram_gb`"),
     ("Operation in progress", "operation_in_progress", "Wait until"),
     ("Price Exceeds Cap", "price_exceeds_cap", "cap"),
+    ("Price Changed", "price_changed", "without their explicit consent"),
     ("Name Taken", "name_taken", "another name"),
 ])
 def test_edit_conflicts_map_to_codes(title, code, hint):

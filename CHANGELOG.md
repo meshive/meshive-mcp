@@ -38,6 +38,9 @@ arguments are unchanged.
   API key (expired, revoked or made up) with a bare `Error executing tool <name>` and no code, and the server logged a
   traceback for each call. Those lookups now report errors like the rest of the call: `invalid_api_key`, and likewise
   `rate_limited`, `temporarily_unavailable` or `unknown_workspace`.
+- CPU tasks can now take `max_price_per_hour` (the API quotes them). When the price rises above the cap between the
+  estimate and placement, `submit_task` now returns `price_changed` with the new `pricePerHourUsd`, and the agent is
+  told not to raise the cap without the user's consent. Before, this came back as a generic `conflict`.
 
 ### Self-hosting
 

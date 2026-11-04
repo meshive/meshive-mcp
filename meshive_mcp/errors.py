@@ -118,6 +118,11 @@ _CONFLICT_CODES = {
                                  "deleted, even though the list no longer shows it; this doesn't affect a rename."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
+    # submit_task (CPU): between the estimate and placement the cheapest machine went away or got pricier, and what is
+    # left is above the cap. The server's message says "submit again" (the console shows the new price first).
+    "price changed": ("price_changed", "Nothing was created: the price went above the user's cap before placement. Show "
+                                       "`pricePerHourUsd` and ask whether to raise the cap or choose other hardware. "
+                                       "Do not raise or remove the cap without their explicit consent."),
     "storage in use": ("storage_in_use", "The storage is mounted by the pods in `linkedPods`. Stop/delete or detach them "
                                          "first (ask the user)."),
     "workspace not empty": ("workspace_not_empty", NEXT_STEP_WORKSPACE_NOT_EMPTY),
