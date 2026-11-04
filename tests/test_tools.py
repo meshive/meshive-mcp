@@ -8,12 +8,26 @@ from meshive.exceptions import AuthenticationError, RateLimitError
 
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "cpus", "templates", "servings", "tasks",
               "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task",
-              "download_links", "models", "detect_model", "source_credentials", "watched_folders", "model_sets"}
+              "download_links", "models", "detect_model", "source_credentials", "watched_folders", "model_sets",
+              "machine_history", "host_messages", "activity"}
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
                "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
                "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
-               "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace"}
-DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace"}
+               "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace",
+               "schedule_maintenance", "maintenance_window", "set_machine_listing", "retry_machine_setup",
+               "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
+               "host_install_command"}
+DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine"}
+# Repeating one of these does more than the first call: it creates another resource or sends another message, or it
+# reveals a login or issues an install command again and emails the account owner again.
+NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task", "register_model", "import_asset",
+                  "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
+                  "host_install_command"}
+# Claude Code keeps at most this many characters of a tool description.
+DESCRIPTION_LIMIT = 4096
+HOST_TOOLS = {"machines", "billing_history", "machine_history", "host_messages", "schedule_maintenance",
+              "maintenance_window", "set_machine_listing", "retry_machine_setup", "delete_machine", "send_host_message",
+              "mark_host_messages_read", "machine_credentials", "host_install_command"}
 
 
 def _payload(result):
@@ -24,12 +38,15 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 47
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 59
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
         assert t.annotations.destructive_hint is (t.name in DESTRUCTIVE), t.name
+        assert t.annotations.idempotent_hint is (t.name not in NOT_IDEMPOTENT), t.name
         assert t.description and len(t.description.split(".")) >= 3, t.name
+        if t.name in HOST_TOOLS:
+            assert len(t.description) < DESCRIPTION_LIMIT, (t.name, len(t.description))
         assert t.title and t.annotations.title == t.title, t.name
     assert len({t.title for t in tools}) == len(tools)
 
@@ -711,15 +728,105 @@ async def test_no_workspace_error_offers_create_workspace(mcp_client, fake, with
 async def test_server_instructions_cover_creating_a_workspace():
     from meshive_mcp.server import INSTRUCTIONS
 
-    assert "create_workspace, deploy_serving" in INSTRUCTIONS         # in the list of tools that take `confirm`
+    assert "every tool with a `confirm` argument needs it" in INSTRUCTIONS     # create_workspace takes `confirm`
     assert "`no_workspace`" in INSTRUCTIONS and "can get one from create_workspace" in INSTRUCTIONS
     assert "`creating` until it is `running`" in INSTRUCTIONS and "setup failed" in INSTRUCTIONS
     assert "taking longer than usual and don't create another" in INSTRUCTIONS
 
 
-async def test_server_instructions_list_the_workspace_writes_among_the_tools_that_take_confirm():
+# Tools whose `confirm` applies only to some calls; the server instructions name each exception.
+CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders"}
+# Writes without `confirm`, as in the console.
+NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
+                     "retry_machine_setup", "mark_host_messages_read"}
+
+
+async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):
+    """The instructions say that every tool with a `confirm` argument needs it, so they don't go stale as tools are
+    added; the tools that take `confirm` only for some calls are named there."""
     from meshive_mcp.server import INSTRUCTIONS
 
     section = next(s for s in INSTRUCTIONS.split("\n\n") if s.startswith("Spending, changing and deleting:"))
-    listed = section.split("take `confirm`")[0]
-    assert "update_workspace" in listed and "delete_workspace" in listed
+    assert "every tool with a `confirm` argument needs it" in section
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    takes_confirm = {name for name, t in tools.items() if "confirm" in t.input_schema.get("properties", {})}
+    assert takes_confirm == WRITE_TOOLS - NO_CONFIRM_WRITES
+    assert {"update_workspace", "delete_workspace", "create_workspace", "delete_machine", "send_host_message",
+            "machine_credentials", "host_install_command"} <= takes_confirm
+    for name in CONFIRM_EXCEPTIONS:
+        assert name in takes_confirm and name in section, name
+
+
+# --- Operation records -----------------------------------------------------------------------------------------------
+
+# Writes whose SDK call keeps no operation record on the server: a repeated call runs again.
+UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command"}
+
+
+def _sdk_calls_per_tool() -> dict[str, set[str]]:
+    """Each tool registered with @meshive_tool -> the SDK client methods its body names (`client.<method>`)."""
+    import ast
+    from pathlib import Path
+
+    from meshive_mcp import tools as tools_package
+
+    found: dict[str, set[str]] = {}
+    for path in Path(tools_package.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call) and getattr(decorator.func, "id", "") == "meshive_tool":
+                    found[decorator.args[1].value] = {
+                        n.attr for n in ast.walk(node)
+                        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "client"}
+    return found
+
+
+def test_the_write_lists_match_the_sdk():
+    """_WRITES get the operation_id as Idempotency-Key, so each must take one; _UNRECORDED must exist under that name.
+    A renamed SDK method would otherwise drop out of both lists without a test noticing (the fake client has its own
+    names)."""
+    import inspect
+
+    from meshive import AsyncMeshive
+
+    from meshive_mcp.tools._common import _UNRECORDED, _WRITES
+
+    for name in _WRITES:
+        assert "idempotency_key" in inspect.signature(getattr(AsyncMeshive, name)).parameters, name
+    for name in _UNRECORDED:
+        assert callable(getattr(AsyncMeshive, name, None)), name
+    assert not _WRITES & _UNRECORDED
+    for old in ("list_machine", "unlist_machine", "get_machine_credentials", "get_install_command"):
+        assert not hasattr(AsyncMeshive, old) and old not in _WRITES | _UNRECORDED, old
+
+
+def test_the_fake_client_only_has_methods_the_sdk_has():
+    import inspect
+
+    from conftest import FakeMeshive
+    from meshive import AsyncMeshive
+
+    names = [n for n, v in vars(FakeMeshive).items() if inspect.iscoroutinefunction(v) and not n.startswith("_")]
+    assert [n for n in names if not callable(getattr(AsyncMeshive, n, None))] == []
+
+
+async def test_only_writes_without_an_operation_record_say_a_repeated_call_runs_again(mcp_client):
+    from meshive_mcp.tools._common import _UNRECORDED, _WRITES
+
+    calls = _sdk_calls_per_tool()
+    assert {name for name, c in calls.items() if c & _UNRECORDED and not c & _WRITES} == UNRECORDED_TOOLS
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in WRITE_TOOLS:
+        desc = tools[name].description
+        if name in UNRECORDED_TOOLS:
+            assert "check operation_status" not in desc and "keeps no operation record" in desc, name
+            assert "runs again" in desc and "Every write requires operation_id" not in desc, name
+        else:
+            assert "check operation_status" in desc and "Every write requires operation_id" in desc, name
+    # ssh_access has no `confirm`: every call runs.
+    assert "a repeated call runs again" in tools["ssh_access"].description
+    assert "repeated confirmed call runs again" in tools["machine_credentials"].description
+    # retry_machine_setup sends a recorded write (setup) and an unrecorded one (ports); its description says which.
+    assert "A port check keeps no operation record" in tools["retry_machine_setup"].description

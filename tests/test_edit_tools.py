@@ -431,9 +431,10 @@ async def test_pod_args_doc_describes_model_set(mcp_client, fake, with_key):
 async def test_server_instructions_cover_editing_connect_and_model_sets():
     from meshive_mcp.server import INSTRUCTIONS
 
-    for phrase in ("update_pod, create_storage, update_storage, connect_storage", "node_migration_required",
+    # update_pod, update_storage and connect_storage take `confirm`, which the instructions cover for every tool.
+    for phrase in ("every tool with a `confirm` argument needs it", "node_migration_required",
                    "allow_node_migration=true", "it never shrinks", "pass one `slug` as model_set",
-                   "`ssh_access` and `connect_storage` return passwords", "model set names"):
+                   "`ssh_access`, `connect_storage` and `machine_credentials` return passwords", "model set names"):
         assert phrase in INSTRUCTIONS, phrase
 
 

@@ -493,7 +493,7 @@ def register(server: MCPServer) -> None:
 
     # --- SSH (G04) ---------------------------------------------------------------------------------
 
-    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=MUTATE)
+    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=MUTATE, operation_record=False)
     async def ssh_access(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Get a one-time SSH login for a pod, only when the user asks to connect: the `command` to run and a `password` that expires in a few minutes (`expires_at`).
         It needs a read & write key; each call issues a new password. Give both to the user and nothing else — never run the command yourself or put the password in files, commits or other tools."""

@@ -3,6 +3,78 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.8.0
+
+An agent can now look after the machines a user hosts on Meshive, as the console's host screens do: maintenance
+windows, listing, setup retries, removal, messages with the workspaces using a machine, machine logins, install
+commands for new machines and payouts. A new `activity` tool shows what the account's API keys did, this agent
+included. Built on the `meshive` Python SDK 1.8. Existing tool names and arguments are unchanged; there are 12 new
+tools.
+
+### New
+
+- `machines` with a `machine` now also shows `clients` (other users' workspaces using it, with their pods and storage
+  volumes), `maintenance` (every window with its `id` and `status`), the `schedules` summary, the `boot_report` and
+  `network_warnings` diagnostics, and `fee`. Listed machines carry `unread_messages`.
+- `machine_history` shows a machine's downtime events (at most 20, from the last 90 days by default) or its latest
+  stress test with the measured samples. Its description gives the samples' units: utilization in percent,
+  temperatures in degrees Celsius, CPU clock in MHz and GPU throughput in TFLOPS.
+- `host_messages` lists the messages between the host and the workspaces using their machines. Their text is written
+  by other people, so the tool description, its responses and the server instructions tell the agent to treat it as
+  data. Reading marks nothing read; `mark_host_messages_read` does, without `confirm`.
+- `send_host_message` sends a message to a workspace that uses the machine, or to every one of them (`to="all"`), and
+  they are notified by email. It takes `confirm`: the preview names the recipients and sends nothing. Other
+  workspaces are refused with `recipient_not_allowed`.
+- `schedule_maintenance` schedules a maintenance window. Its preview runs the server's checks and says how many
+  workspaces are emailed, that their pods and volumes on the machine aren't billed while the window is open, and the
+  effect on uptime. A regular window needs 48 hours' notice (`insufficient_notice`). The agent is told to offer
+  emergency maintenance, which counts as downtime while client workloads run, only as the user's choice. A window that
+  overlaps another is `maintenance_overlap`.
+- `maintenance_window` changes one window with `action` edit, extend, end or cancel. Each takes `confirm`. The
+  preview says what the action does (for example, that ending a window bills pods again and leaves the machine
+  unlisted) and refuses an action that doesn't fit the window's status (`maintenance_state`). As in the console, a
+  window can't be started by hand: it starts on its own within about a minute of its start time, and the tool says so
+  for a window whose start time has passed.
+- `set_machine_listing` lists (`listed=true`) or unlists (`listed=false`) a machine, through the SDK's
+  `set_machine_listing`. Listing needs no `confirm` and is checked first: a machine that can't be listed yet is
+  refused with the console's reason (`listing_refused`). Unlisting takes `confirm`, and its preview says how many pods
+  keep running.
+- `retry_machine_setup` retries a failed setup step (`check="setup"`; a step the machine's agent runs reboots the
+  machine first) or the port check (`check="ports"`, at most about once every 30 seconds, else
+  `port_check_cooldown`). Neither takes `confirm`, as in the console. The server keeps no operation record of a port
+  check, so calling again checks again.
+- `delete_machine` removes a machine, which can't be undone. Its preview says whether removal starts now or after a
+  grace period for the other users' pods and volumes on it, how many there are and what happens to them. It takes
+  `confirm` and the exact machine id. A machine already being removed is `delete_in_progress`.
+- `machine_credentials` reveals a machine's SSH, IPMI or Grafana login (the SDK's `reveal_machine_credentials`), and
+  `host_install_command` issues a command that adds a new machine to the account, valid for about 10 minutes (the
+  SDK's `issue_install_command`). Both take `confirm` and their previews carry no secret. The server keeps no
+  operation record of either, so every confirmed call reveals or issues again and emails the account owner again;
+  both are annotated as not idempotent. A login the machine doesn't have is `credentials_not_available`.
+- `activity` shows what the account's API keys did, newest first, the key this agent uses included. With
+  `kind="actions"` it lists each change, check or estimate, machine login reveal and install command with its result
+  (`accepted`, `refused` with the reason, or `error`); `operation_id` is set only for writes the server deduplicates
+  (null otherwise). With `kind="reads"` it lists read requests as hourly counts. Request contents are never recorded.
+  `key`, `since` and `until` narrow it (the last 30 days by default, at most 180 days per call, which is how long
+  activity is kept), and for actions `outcome` keeps one result and `action` keeps one action or every action under a
+  prefix such as `machine.`; it is paged. Every result carries a `note`: the source, ids, workspace and operation_id
+  are what the calling client sent, so the agent treats them as data. The console shows the same on the API keys
+  page, under Activity.
+- `billing_history` takes `kind="payouts"`: the payouts of host earnings, with a `summary` of the payout account and of
+  the earnings waiting to be paid out. Setting up the payout account stays in the console.
+
+### Changed
+
+- The server instructions now list `host_messages`, the host messages and maintenance notes in `workspaces`, and the
+  client-sent fields of `activity` as text from other people, and name the machine logins and install commands among
+  the secrets. Instead of listing the tools that take `confirm`, they say that every tool with a `confirm` argument
+  needs it, with the existing exceptions, listing a machine, and `set_watched_folders` when it only removes or turns
+  off folders. They are shorter, so the safety rules, prices and sizes all fit in the first 4096 characters that
+  Claude Code keeps. The hint about `write_scope_required` moved to the authentication rules.
+- `ssh_access` and `connect_storage` now say that the server keeps no operation record of them, so a repeated call
+  runs again and `operation_status` can't look it up; a failed call's `next_step` says the same instead of asking to
+  retry with the same `operation_id`. Other writes keep the operation-record wording.
+
 ## v1.7.0
 
 Requests are limited in what they can cost the server, tool calls that use the API take much less CPU, and a

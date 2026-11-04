@@ -14,8 +14,8 @@ agent.
 
 ## Quick start
 
-**1. Get an API key.** In the [console](https://console.meshive.ai), open your workspace's
-**Settings → API keys**. A **Read only** key lets the agent look around; pick **Read & write** if it should also
+**1. Get an API key.** In the [console](https://console.meshive.ai), open
+**Account → API keys**. A **Read only** key lets the agent look around; pick **Read & write** if it should also
 create, change or delete things.
 
 **2. Add the server to your agent.** For Claude Code:
@@ -111,6 +111,8 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 - *"Which model sets can I start a ComfyUI pod with?"*
 - *"How much credit do I have left, and what did my workspace spend this week?"*
 - *"Give me download links for the outputs of my last task."*
+- *"Schedule maintenance on my GPU machine for Saturday night, and tell me who gets notified."*
+- *"What did my API keys change this week, and was anything refused?"*
 
 ## You stay in control
 
@@ -118,9 +120,15 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
   agent sets `confirm`, and the agent is told to show it to you and wait for your go-ahead. That step is an instruction
   to the agent: the server can't tell whether you agreed, so give a Read & write key only to an agent you trust.
 - **A Read only key stays read-only.** With one, the agent can look at everything but change nothing.
-- **Logs are treated as data.** Text printed inside your pods is never followed as instructions.
+- **You can see what was done.** Every change, check, estimate, login reveal and install command made with your API
+  keys is recorded with its result, and reads are counted by the hour; request contents are never recorded. See it on the console's
+  **API keys** page under **Activity**, where you can also revoke a key, or ask the agent (`activity`). It is kept
+  for 180 days.
+- **Logs are treated as data.** Text printed inside your pods, and messages from the people renting your machines,
+  are never followed as instructions.
 - **Passwords go only to you.** Pod logins and SSH passwords for pods and storage stay hidden unless you ask for
-  them.
+  them. Revealing a hosted machine's login or getting an install command for a new machine also needs your go-ahead,
+  and the account owner is emailed each time.
 - **Your key isn't stored.** The server keeps no state: your key travels with each request and is passed on to the
   Meshive API.
 
@@ -128,7 +136,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 
 | Area | Tools |
 | --- | --- |
-| Account and billing | `account`, `billing_history` |
+| Account and billing | `account`, `activity` (what your API keys did), `billing_history` (credit, host earnings and payouts) |
 | Workspaces | `workspaces`, `create_workspace`, `update_workspace`, `delete_workspace` |
 | GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
 | Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
@@ -136,7 +144,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task` |
 | Files (Asset Hub) | `assets`, `import_asset`, `download_links`, `source_credentials` |
-| Hosting | `machines` |
+| Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
 
 What each tool does, and how confirmation and recovery work:
@@ -150,7 +158,7 @@ common ones:
 | The agent reports | What to do |
 | --- | --- |
 | `no_api_key` | The `Authorization` header isn't reaching the server. Check the header in your agent's MCP settings and restart the agent. |
-| `invalid_api_key` | The key is wrong, revoked or expired. Create a new one under **Settings → API keys** and replace it (in Claude Code, `claude mcp remove meshive`, then `add` again). |
+| `invalid_api_key` | The key is wrong, revoked or expired. Create a new one under **Account → API keys** and replace it (in Claude Code, `claude mcp remove meshive`, then `add` again). |
 | `write_scope_required` | The key is **Read only**. Use a **Read & write** key to create, change or delete. |
 | `unknown_workspace` | The workspace ID or name doesn't match one of yours. The agent can list them with `workspaces`. |
 | `workspace_not_empty` | A key can only delete an empty workspace. The agent tells you what is left. Clear it, or delete the workspace yourself in the console, which removes what's in it for good. |

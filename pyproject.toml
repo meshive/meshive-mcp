@@ -21,9 +21,11 @@ dependencies = [
     # update_pod(enable_folder_saving) and moving a template output folder on creation; 1.5 adds
     # estimate_task/submit_task(output_include) and Task.output_include; 1.6 adds estimate_workspace and
     # create_workspace; 1.7 makes a client cheap to create (it no longer loads the CA bundle each time), and this
-    # server creates one per call.
+    # server creates one per call; 1.8 adds the host methods the hosting tools use: a machine's clients and
+    # diagnostics, maintenance windows, listing, setup retries, removal, machine history, host messages, machine
+    # logins, install commands and payouts, and list_activity, which the activity tool uses.
     # Building the real image only passes when PyPI has a release satisfying this pin (ci.yml pre-check) — the SDK tag and PyPI release come first.
-    "meshive>=1.7,<2",
+    "meshive>=1.8,<2",
     # httpx 1.0 changes the API (its development releases drop names the SDK uses), so stay below it.
     "httpx>=0.27,<1",
     # The HTTP parser uvicorn runs with here.

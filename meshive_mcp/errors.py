@@ -32,7 +32,7 @@ except ImportError:     # an SDK without it reports the failure as a phase in th
 
 CONSOLE_URL = "https://console.meshive.ai"
 
-KEYS_PAGE = f"{CONSOLE_URL}, workspace Settings > API keys"
+KEYS_PAGE = f"{CONSOLE_URL}, Account > API keys"
 # How to swap keys — keys expire (write keys default to 30 days), and Claude Code's `mcp add` rejects a name that already exists.
 REPLACE_KEY = ("replace the old key in this MCP server's configuration (in Claude Code, run "
                "`claude mcp remove meshive` first, then add it again)")
@@ -164,7 +164,30 @@ _CONFLICT_CODES = {
                               "Another operation on this pod (starting, stopping or an earlier edit) is still running, "
                               "so nothing was changed. Wait until the pods tool shows the pod running or stopped, then "
                               "try again."),
+    # --- hosting ---
+    # schedule_maintenance / maintenance_window edit or extend: the times run into another window of the machine.
+    "overlapping maintenance window": ("maintenance_overlap",
+                                       "Nothing was scheduled or changed. Another maintenance window of this machine "
+                                       "overlaps these times; the message names it. Ask the user for other times, or "
+                                       "whether to move or cancel that window first (maintenance_window)."),
+    # The machine is being removed, still being set up, or getting a platform software update; the message says which.
+    "maintenance not available": ("maintenance_not_available",
+                                  "This machine can't go into maintenance right now, and nothing was changed. Tell the "
+                                  "user the reason in the message. A software update ends within minutes, so after one "
+                                  "you can try again shortly; otherwise don't retry."),
+    "not retryable": ("not_retryable", "Only a failed setup step can be retried, and the machine's current step isn't "
+                                       "failed. Check its state with the machines tool before retrying."),
 }
+
+_MAINTENANCE_STATE = ("Nothing was changed: the maintenance window or the machine isn't in a state that allows this (the "
+                      "message says why). Check the window's `status` in the machines tool (a machine's "
+                      "`maintenance`): edit or cancel a window that hasn't started, extend or end one in progress. A "
+                      "window starts by itself within about a minute of its start time. Then use the action that fits, "
+                      "if the user still wants it.")
+# set_machine_listing, on the server's refusal and on its own check before listing.
+NEXT_STEP_LISTING_REFUSED = ("Nothing was changed. Tell the user the reason in the message: it usually needs a fix on the "
+                             "machine or in the console first (prices, hardware, ports, boot or the machine's state). "
+                             "Try again only after that is fixed.")
 
 # update_pod's own data-loss refusal carries no placement (start_pod's does): the move would come from
 # allow_node_migration.
@@ -313,6 +336,42 @@ _BAD_REQUEST_CODES = {
     "model set needs a token": ("model_set_needs_token",
                                 "This model set is gated on Hugging Face and can only be added through its Quick Deploy "
                                 "template with `hf_token_id`. Leave `model_set` out and use that template."),
+    # --- hosting ---
+    # A regular window needs 48 hours' notice. Emergency maintenance changes the machine's uptime, so it is the user's call.
+    "insufficient notice period": ("insufficient_notice",
+                                   "Nothing was scheduled or changed. A regular maintenance window must start at least "
+                                   "48 hours from now. Ask the user for a later start. Emergency maintenance "
+                                   "(emergency=true) can start sooner, but it counts as downtime for the hours a "
+                                   "client workload runs on the machine: offer it only as the user's choice and never "
+                                   "switch to it on your own."),
+    "maintenance in progress": ("maintenance_state", _MAINTENANCE_STATE),
+    "maintenance already done": ("maintenance_state", _MAINTENANCE_STATE),
+    "maintenance not started": ("maintenance_state", _MAINTENANCE_STATE),
+    "not in maintenance state": ("maintenance_state", _MAINTENANCE_STATE),
+    "listing failed": ("listing_refused", NEXT_STEP_LISTING_REFUSED),
+    "unlisting failed": ("listing_refused", NEXT_STEP_LISTING_REFUSED),
+    "not in any setup stage": ("not_retryable", "The machine isn't in a setup stage, so there is nothing to retry. "
+                                                "Check its state with the machines tool."),
+    # retry_machine_setup check="ports": the port check has a short cooldown (a 429 is rate_limited instead).
+    "too many requests": ("port_check_cooldown", "A port check of this machine ran moments ago. Wait about 30 seconds "
+                                                 "and retry once; the machines tool shows the result in `boot_report`."),
+    "delete in progress": ("delete_in_progress", "This machine is already being removed: don't remove it again. The "
+                                                 "machines tool shows its state."),
+    "recipient not allowed": ("recipient_not_allowed",
+                              "Nothing was sent. `to` must be a workspace id from the machine's `clients` in the "
+                              "machines tool, or \"all\" for every workspace using the machine now. Ask the user which "
+                              "one they mean."),
+    "message send failed": ("message_rejected",
+                            "Nothing was sent. Fix what the message says (for example a blank or too long title or "
+                            "text, or nobody using the machine for to=\"all\"), then show the user the new message "
+                            "before sending it."),
+}
+
+# 404 titles that aren't a wrong id.
+_NOT_FOUND_CODES = {
+    "credentials not available": ("credentials_not_available",
+                                  "This machine has no login of that kind to reveal (for example, IPMI isn't set up or "
+                                  "Grafana isn't configured for it). Tell the user; don't retry."),
 }
 
 
@@ -369,6 +428,9 @@ def translate(exc: BaseException) -> ToolError:
             return tool_error("pod_creation_failed", exc.message or "Pod creation failed.",
                               "Tell the user the reason. Don't retry this pod; fix the cause (template, command, "
                               "inputs) and create a new pod.")
+        special = _NOT_FOUND_CODES.get((exc.title or "").strip().lower())
+        if special is not None:
+            return tool_error(special[0], exc.message or exc.title, special[1])
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)
     if isinstance(exc, RateLimitError):
         wait = int(exc.retry_after) if exc.retry_after else 30

@@ -150,7 +150,7 @@ def register(server: MCPServer) -> None:
                             "size when it is done." if tx is not None else "Saved; the change applies right away.")
         return out
 
-    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=MUTATE)
+    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=MUTATE, operation_record=False)
     async def connect_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                               wait: float = _CONNECT_WAIT_DEFAULT, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:
@@ -158,7 +158,7 @@ def register(server: MCPServer) -> None:
         `storage` is the pv_name from the storages tool. Encrypted storage is unlocked and an access pod is started for it; it locks again by itself after `auto_lock_minutes` (`remaining_seconds` left). Other storage is reached through the access pod that already runs for it.
         With confirm=false (default) it only returns the storage's connection state and changes nothing; call again with confirm=true after the user agreed. It needs a read & write key.
         The confirmed call waits up to `wait` seconds (0-90, default 60) for the storage to be ready; if it isn't yet, the result has no password and says to call again.
-        Give the command and password to the user and nobody else: never run the command yourself or put the password in files, commits or other tools. Each confirmed call issues a new password, and it isn't kept as an operation record."""
+        Give the command and password to the user and nobody else: never run the command yourself or put the password in files, commits or other tools. Each confirmed call issues a new password."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
