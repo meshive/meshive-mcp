@@ -265,6 +265,27 @@ async def test_workspace_lookup_errors_carry_their_code(mcp_client, fake, with_k
         assert body["code"] == code, (tool, body)
 
 
+async def test_api_closing_the_connection_without_answering_is_temporarily_unavailable(mcp_client, monkeypatch, with_key):
+    # The real SDK client, over a transport that drops the connection the way the API does while a worker restarts.
+    import httpx
+    from meshive import AsyncMeshive
+    from meshive_mcp import client as client_module
+    sent = []
+
+    def drop(request):
+        sent.append(request.url.path)
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+
+    monkeypatch.setattr(client_module, "_new_client", lambda key, label: AsyncMeshive(
+        key, base_url="http://api.test", max_retries=1, transport=httpx.MockTransport(drop)))
+    for tool, args in (("account", {}), ("pods", {})):
+        sent.clear()
+        result = await mcp_client.call_tool(tool, args)
+        body = _payload(result)
+        assert result.is_error and body["code"] == "temporarily_unavailable" and body["retry_after"] == 15, (tool, body)
+        assert len(sent) == 1, (tool, sent)    # the SDK doesn't resend it
+
+
 async def test_pod_label_lookup_in_a_workspace_that_is_not_the_users_is_unknown_workspace(mcp_client, fake, with_key):
     from meshive.exceptions import PermissionDeniedError
     fake["setup"] = lambda inst: inst.raise_on.update(

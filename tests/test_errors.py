@@ -41,6 +41,14 @@ def test_not_found_and_network():
     assert _body(httpx.ConnectError("boom"))["code"] == "temporarily_unavailable"
 
 
+def test_a_connection_the_api_closed_without_answering_is_temporarily_unavailable():
+    b = _body(httpx.RemoteProtocolError("Server disconnected without sending a response."))
+    assert b["code"] == "temporarily_unavailable" and b["retry_after"] == 15 and "operation_status" in b["next_step"]
+    # A request this side couldn't form is a bug, not the API being away.
+    with pytest.raises(httpx.LocalProtocolError):
+        translate(httpx.LocalProtocolError("bad header"))
+
+
 def test_unknown_exception_is_reraised():
     with pytest.raises(KeyError):
         translate(KeyError("bug"))

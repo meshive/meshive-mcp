@@ -399,7 +399,9 @@ def translate(exc: BaseException) -> ToolError:
                               retry_after=15)
         return tool_error("api_error", msg, "Tell the user what the server said. Do not retry blindly.",
                           status=status)
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
+    # RemoteProtocolError: the API closed the connection without answering, as when one of its workers restarts while
+    # the request is in flight. Like a read timeout, a write may or may not have been applied.
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError)):
         return tool_error("temporarily_unavailable", f"Could not reach the Meshive API: {exc.__class__.__name__}",
                           NEXT_STEP_UNAVAILABLE.format(retry_after=15), retry_after=15)
     if StorageConnectionError is not None and isinstance(exc, StorageConnectionError):

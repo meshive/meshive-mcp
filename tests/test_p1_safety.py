@@ -44,6 +44,19 @@ async def test_unknown_write_error_retains_original_key(mcp_client, fake, with_k
     assert writes(fake, 'submit_task')[0][2]['idempotency_key'] == 'task-timeout-0001'
 
 
+async def test_write_cut_off_by_the_api_retains_original_key(mcp_client, fake, with_key):
+    # The API closes the connection without an answer when its worker restarts mid-request; the write may have landed.
+    def setup(client):
+        client.raise_on['submit_task'] = httpx.RemoteProtocolError('Server disconnected without sending a response.')
+    fake['setup'] = setup
+    result = payload(await mcp_client.call_tool('submit_task', {
+        'name': 't', 'script': 'pass', 'image': 'image', 'cpu_preset': 'micro-2c8g',
+        'confirm': True, 'operation_id': 'task-cutoff-0001'}))
+    assert result['code'] == 'temporarily_unavailable' and result['operation_id'] == 'task-cutoff-0001'
+    assert 'MUST reuse' in result['next_step'] and 'new operation' in result['next_step']
+    assert writes(fake, 'submit_task')[0][2]['idempotency_key'] == 'task-cutoff-0001'
+
+
 @pytest.mark.parametrize('placement', ['any_node', 'wait_any_node'])
 async def test_moving_placements_require_separate_data_loss_consent(mcp_client, fake, with_key, placement):
     # wait_any_node may also land on another machine, so it needs the same consent as any_node.
