@@ -512,11 +512,11 @@ async def test_model_registration_tools(mcp_client, fake, with_key):
 
     # No cost, so it registers without confirm, but operation_id still goes as the idempotency key per the write convention.
     done = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
-                                                                   "framework": "sglang",
+                                                                   "framework": "vllm",
                                                                    "operation_id": "test-operation-0002"}))
     assert done["registration_id"] == 12 and "deploy_serving" in done["next_step"]
     (_, args, kw), = _calls(fake, "register_model")
-    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "sglang" and kw["idempotency_key"] == "test-operation-0002"
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "vllm" and kw["idempotency_key"] == "test-operation-0002"
 
     prev = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12}))
     assert prev["confirmed"] is False and prev["model"]["name"] == "qwen-small" and not _calls(fake, "delete_model")
@@ -525,6 +525,19 @@ async def test_model_registration_tools(mcp_client, fake, with_key):
     gone = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12, "confirm": True,
                                                                  "operation_id": prev["operation_id"]}))
     assert gone["action"] == "delete" and _calls(fake, "delete_model")[0][1][0] == "12"
+
+
+async def test_register_model_passes_on_why_sglang_is_refused(mcp_client, fake, with_key):
+    """Text models run on vLLM. The server refuses sglang with a 400 that says so, and the agent gets that reason."""
+    message = "SGLang is no longer offered for text models. Text models are served with vLLM — omit framework or set framework='vllm'."
+    fake["setup"] = lambda inst: inst.raise_on.update(register_model=MeshiveAPIError(
+        400, message, title="SGLang Not Offered", raw={"detail": {"title": "SGLang Not Offered", "message": message}}))
+    body = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
+                                                                   "framework": "sglang",
+                                                                   "operation_id": "test-operation-0003"}))
+    assert body["code"] == "invalid_request" and "vLLM" in body["message"]
+    (_, _, kw), = _calls(fake, "register_model")
+    assert kw["framework"] == "sglang"
 
 
 async def test_import_asset_is_a_write_without_confirm(mcp_client, fake, with_key):

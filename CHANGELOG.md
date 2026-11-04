@@ -74,6 +74,8 @@ tools.
 - `ssh_access` and `connect_storage` now say that the server keeps no operation record of them, so a repeated call
   runs again and `operation_status` can't look it up; a failed call's `next_step` says the same instead of asking to
   retry with the same `operation_id`. Other writes keep the operation-record wording.
+- `register_model` no longer offers `framework="sglang"`. Text models run on vLLM, and the server refuses sglang with
+  `invalid_request` and a message that says so. Leave `framework` out.
 
 ### Fixed
 

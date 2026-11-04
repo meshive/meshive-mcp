@@ -290,7 +290,7 @@ class FakeMeshive:
         return ModelDetection.from_dict({"status": "ok", "output": "text", "framework": "vllm", "contextLength": 40960})
 
     async def register_model(self, repo, **kw):
-        self.calls.append(("register_model", (repo,), kw))
+        self._rec("register_model", repo, **kw)
         return ResourceAction.from_dict({"resource": "model", "id": "12", "workspace": kw["workspace"], "action": "register",
                                          "result": {"title": "Success", "registrationId": 12, "apiModelId": "qwen-small-ab12"}})
 
