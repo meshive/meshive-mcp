@@ -1,6 +1,8 @@
 """Build an SDK client per request.
 
-The server is stateless, so connection pools aren't shared across requests (keys differ, so they must not be).
+Each request gets its own client and connections. SDK 1.7 can share one transport between clients, keeping each
+client's key to itself, but it isn't used here: with many calls in flight, one shared pool costs more CPU than separate
+clients.
 `AsyncMeshive(api_key=None)` falls back to environment variables and the credentials file, so without a key
 no client is built and no_api_key is returned right away — this rules out a shared server handling
 someone else's request with the operator's key.

@@ -3,11 +3,51 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.7.0
+
+Requests are limited in what they can cost the server, tool calls that use the API take much less CPU, and a
+rejected API key gets its error code from every tool. Built on the `meshive` Python SDK 1.7. Tool names and
+arguments are unchanged.
+
+### Changed
+
+- Requests over 1 MiB are refused with 413 (before: 4 MiB). A 256 KiB task script still fits.
+- A body that isn't UTF-8 JSON is refused with 400, and so is a request with more than 8192 JSON values or nested more
+  than 32 levels deep.
+- A request with `inputResponses` is refused with 400: no tool asks for input.
+- A tool call with more than 4096 argument values, counting a list sent as a JSON string, is refused with
+  `invalid_argument`.
+- 32 requests are handled at once, and 3 requests can be open with a body over 64 KiB or of unstated size. Others get
+  503 with `Retry-After`.
+- At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
+  two ends.
+- The HTTP server now runs with the `httptools` parser. A request's head is limited to 16 KiB, as it was before.
+- The HTTP server raises its open file limit to the hard limit when it starts. At the common default of 1024, open
+  connections could stop it from accepting new ones, health checks included.
+- `gpus` without an API key answers from one copy of the public price list shared by all callers, instead of asking
+  the API on every call. A call refreshes a copy over a minute old, and a copy up to ten minutes old is used while the
+  refresh is out or if it failed. Without such a copy, the call waits for the refresh, and gets
+  `temporarily_unavailable` if it fails or if one failed in the last few seconds. A refresh that takes longer than
+  the request timeout as a whole counts as failed.
+- Tool calls that use the API take much less CPU. The `meshive` SDK 1.7 no longer loads the CA bundle for each
+  client, and `sniffio` is now a dependency: without it, the HTTP library looks for it on every request.
+
+### Fixed
+
+- When the workspace was omitted, given by label or `all`, or a pod was given by name, most tools answered a rejected
+  API key (expired, revoked or made up) with a bare `Error executing tool <name>` and no code, and the server logged a
+  traceback for each call. Those lookups now report errors like the rest of the call: `invalid_api_key`, and likewise
+  `rate_limited`, `temporarily_unavailable` or `unknown_workspace`.
+
+### Self-hosting
+
+- Without request buffering, slow uploads reach the server as they arrive, so limit concurrent requests per client at
+  the proxy.
+
 ## v1.6.0
 
 An agent can now create a workspace for a user who has none or who wants another, rename one, and delete an empty one.
-Connecting no longer takes 25 seconds, and AI agents on Windows PCs running Norton with HTTPS scanning on can now
-connect. Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
+Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unchanged.
 
 ### New
 
@@ -41,24 +81,11 @@ connect. Built on the `meshive` Python SDK 1.6. Tool names and existing argument
   say to wait for `running` and try again.
 - Clients that cut long server instructions, such as Claude Code at 4096 characters, now keep the safety rules:
   untrusted content, secrets, confirmation and data-loss consent come first.
-- Requests over 1 MiB are refused with 413 (before: 4 MiB). A 256 KiB task script still fits.
-- A body that isn't UTF-8 JSON is refused with 400, and so is a request with more than 8192 JSON values or nested more
-  than 32 levels deep.
-- A request with `inputResponses` is refused with 400: no tool asks for input.
-- A tool call with more than 4096 argument values, counting a list sent as a JSON string, is refused with
-  `invalid_argument`.
-- 32 requests are handled at once, and 3 requests can be open with a body over 64 KiB or of unstated size. Others get
-  503 with `Retry-After`.
-- At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
-  two ends.
-- The HTTP server now runs with the `httptools` parser. A request's head is limited to 16 KiB, as it was before.
-- The HTTP server raises its open file limit to the hard limit when it starts. At the common default of 1024, open
-  connections could stop it from accepting new ones, health checks included.
-- `gpus` without an API key answers from one copy of the public price list shared by all callers, instead of asking
-  the API on every call. A call refreshes a copy over a minute old, and a copy up to ten minutes old is used while the
-  refresh is out or if it failed. Without such a copy, the call waits for the refresh, and gets
-  `temporarily_unavailable` if it fails or if one failed in the last few seconds. A refresh that takes longer than
-  the request timeout as a whole counts as failed.
+
+## v1.5.1
+
+Connecting no longer takes 25 seconds, and AI agents on Windows PCs running Norton with HTTPS scanning on can now
+connect. Tool names and arguments are unchanged.
 
 ### Fixed
 
@@ -67,16 +94,10 @@ connect. Built on the `meshive` Python SDK 1.6. Tool names and existing argument
 - Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
   `Invalid character in chunk size`. Norton's HTTPS scanning (and Avast's, by user reports) breaks MCP responses that
   aren't chunked, so responses are now sent chunked.
-- When the workspace was omitted, given by label or `all`, or a pod was given by name, most tools answered a rejected
-  API key (expired, revoked or made up) with a bare `Error executing tool <name>` and no code, and the server logged a
-  traceback for each call. Those lookups now report errors like the rest of the call: `invalid_api_key`, and likewise
-  `rate_limited`, `temporarily_unavailable` or `unknown_workspace`.
 
 ### Self-hosting
 
 - Behind a reverse proxy, keep response buffering off: it can add a `Content-Length` back to short responses.
-- Without request buffering, slow uploads reach the server as they arrive, so limit concurrent requests per client at
-  the proxy.
 
 ## v1.5.0
 
