@@ -178,6 +178,113 @@ async def test_sdk_error_translated(mcp_client, fake, with_key):
     assert body["code"] == "rate_limited" and body["retry_after"] == 7
 
 
+class RefusingMeshive:
+    """An SDK client that refuses every call, as the API does for an expired or made-up key. Calls named in `allow`
+    answer as FakeMeshive does. A name the SDK doesn't have raises AttributeError, as on the real client."""
+
+    def __init__(self, key: str, label: str, allow: tuple[str, ...] = ()) -> None:
+        from conftest import FakeMeshive
+        self._fake = FakeMeshive(key, label)
+        self._allow = {*allow, "close"}
+        self.refused: list[str] = []
+
+    def __getattr__(self, name: str):
+        from meshive import AsyncMeshive
+        if not callable(getattr(AsyncMeshive, name, None)):
+            raise AttributeError(name)
+        if name in self._allow:
+            return getattr(self._fake, name)
+
+        async def refused(*args, **kwargs):
+            self.refused.append(name)
+            raise AuthenticationError(401, "Invalid API key.")
+        return refused
+
+
+def _placeholder(schema: dict, defs: dict):
+    """A value of the schema's type, for a required argument the test doesn't care about."""
+    if "$ref" in schema:
+        return _placeholder(defs[schema["$ref"].split("/")[-1]], defs)
+    for key in ("anyOf", "oneOf"):
+        if key in schema:
+            return _placeholder(next(s for s in schema[key] if s.get("type") != "null"), defs)
+    if "enum" in schema:
+        return schema["enum"][0]
+    return {"string": "label-x", "integer": max(1, schema.get("minimum", 1)), "number": 1, "boolean": False,
+            "array": [], "object": {}}[schema["type"]]
+
+
+@pytest.mark.parametrize("variant", ["omitted", "label", "pod_label"])
+async def test_every_tool_answers_a_rejected_key_with_its_code(mcp_client, monkeypatch, with_key, variant):
+    # The workspace and pod lookups called the SDK outside `call`, so a rejected key there came back as a bare
+    # "Error executing tool ..." with no code, and the server logged a traceback for it.
+    from meshive_mcp import client as client_module
+    allow = ("list_workspaces",) if variant == "pod_label" else ()
+    made: list[RefusingMeshive] = []
+
+    def factory(key, label):
+        made.append(RefusingMeshive(key, label, allow))
+        return made[-1]
+    monkeypatch.setattr(client_module, "_new_client", factory)
+    wrong, reached = [], 0
+    for tool in (await mcp_client.list_tools()).tools:
+        schema = tool.input_schema
+        props, defs = schema.get("properties", {}), schema.get("$defs", {})
+        args = {name: _placeholder(props[name], defs) for name in schema.get("required", [])}
+        if "operation_id" in props:
+            args["operation_id"] = f"op-{tool.name}-0001"
+        if variant == "label" and "workspace" in props:
+            args["workspace"] = "label-x"
+        if variant == "pod_label" and "pod" in props:
+            args["pod"] = "label-x"
+        made.clear()
+        result = await mcp_client.call_tool(tool.name, args)
+        text = result.content[0].text if result.content else ""
+        try:
+            code = json.loads(text).get("code")
+        except ValueError:
+            code = None
+        refused = [name for c in made for name in c.refused]
+        reached += bool(refused)
+        if (result.is_error and code is None) or (refused and (not result.is_error or code != "invalid_api_key")):
+            wrong.append((tool.name, refused, text[:80]))
+    assert not wrong
+    assert reached >= 30    # the placeholders get most tools as far as the API
+
+
+@pytest.mark.parametrize("code", ["rate_limited", "temporarily_unavailable", "server_error"])
+async def test_workspace_lookup_errors_carry_their_code(mcp_client, fake, with_key, code):
+    import httpx
+    from meshive.exceptions import MeshiveAPIError
+    error = {"rate_limited": RateLimitError(429, "Too many", retry_after=7.0),
+             "temporarily_unavailable": httpx.ConnectError("down"), "server_error": MeshiveAPIError(500, "boom")}[code]
+    fake["setup"] = lambda inst: inst.raise_on.update(list_workspaces=error)
+    for tool, args in (("pods", {}), ("storages", {"workspace": "research"}), ("transactions", {"workspace": "all"}),
+                       ("stop_pod", {"pod": "pod-1", "operation_id": "op-stop-0001"})):
+        body = _payload(await mcp_client.call_tool(tool, args))
+        assert body["code"] == code, (tool, body)
+
+
+async def test_pod_label_lookup_in_a_workspace_that_is_not_the_users_is_unknown_workspace(mcp_client, fake, with_key):
+    from meshive.exceptions import PermissionDeniedError
+    fake["setup"] = lambda inst: inst.raise_on.update(
+        list_pods=PermissionDeniedError(403, "You are not a member of workspace"))
+    body = _payload(await mcp_client.call_tool("logs", {"workspace": "cccccccccccccccc", "pod": "comfy"}))
+    assert body["code"] == "unknown_workspace"
+
+
+async def test_unexpected_error_in_a_workspace_lookup_still_raises():
+    # translate doesn't know it, so it stays a server bug with a traceback rather than a made-up code.
+    from conftest import FakeMeshive
+    from meshive_mcp.workspace import resolve, resolve_pod
+    client = FakeMeshive("k", "l")
+    client.raise_on.update(list_workspaces=RuntimeError("bug"), list_pods=RuntimeError("bug"))
+    with pytest.raises(RuntimeError):
+        await resolve(client, None)
+    with pytest.raises(RuntimeError):
+        await resolve_pod(client, "0123456789abcdef", "comfy")
+
+
 async def test_gpus_with_key_normalizes_fields(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("gpus", {"rental_type": "spot"}))
     assert body["authenticated"] is True

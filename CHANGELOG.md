@@ -67,6 +67,10 @@ connect. Built on the `meshive` Python SDK 1.6. Tool names and existing argument
 - Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
   `Invalid character in chunk size`. Norton's HTTPS scanning (and Avast's, by user reports) breaks MCP responses that
   aren't chunked, so responses are now sent chunked.
+- When the workspace was omitted, given by label or `all`, or a pod was given by name, most tools answered a rejected
+  API key (expired, revoked or made up) with a bare `Error executing tool <name>` and no code, and the server logged a
+  traceback for each call. Those lookups now report errors like the rest of the call: `invalid_api_key`, and likewise
+  `rate_limited`, `temporarily_unavailable` or `unknown_workspace`.
 
 ### Self-hosting
 

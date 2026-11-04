@@ -10,18 +10,30 @@ The server stores no default (stateless). The model remembers it within the conv
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 from meshive import AsyncMeshive
 from meshive.models import Workspace
 
-from .errors import invalid_argument, tool_error
+from .errors import invalid_argument, tool_error, translate
+
+T = TypeVar("T")
 
 NEEDS_WORKSPACE = "workspace"
 ALL = "all"
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _NO_WORKSPACE_STEP = ("Offer to create one with the create_workspace tool (it costs nothing by itself), or the user can "
                       "add one in the console. A new workspace is usable once the workspaces tool shows it `running`.")
+
+
+async def _read(fn: Callable[..., Awaitable[T]], *args: Any) -> T:
+    """One SDK read for a lookup. Tools call these helpers outside their own `call`, so the SDK's errors (a rejected key,
+    a rate limit, an unreachable API) are turned into the same coded ToolError here. Anything translate doesn't know
+    still raises, so a bug keeps its traceback."""
+    try:
+        return await fn(*args)
+    except Exception as exc:  # noqa: BLE001 — translate re-raises what it doesn't know
+        raise translate(exc) from exc
 
 
 def _summary(workspaces: list[Workspace]) -> list[dict[str, str]]:
@@ -55,10 +67,10 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
         if workspace.lower() == ALL:
             raise tool_error("invalid_argument", "This tool does not accept workspace='all'.",
                              "Pass a single workspace id, or omit it.")
-        return _by_label(await client.list_workspaces(), workspace)
+        return _by_label(await _read(client.list_workspaces), workspace)
     if not required:
         return None
-    workspaces = await client.list_workspaces()
+    workspaces = await _read(client.list_workspaces)
     if len(workspaces) == 1:
         return workspaces[0].namespace_name
     if not workspaces:
@@ -74,7 +86,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
 async def resolve_many(client: AsyncMeshive, workspace: str | None) -> list[str] | dict[str, Any]:
     """For list tools: every id for "all", otherwise the single resolve result as a list."""
     if workspace is not None and workspace.strip().lower() == ALL:
-        workspaces = await client.list_workspaces()
+        workspaces = await _read(client.list_workspaces)
         if not workspaces:
             raise tool_error("no_workspace", "The user has no workspace.", _NO_WORKSPACE_STEP)
         return [w.namespace_name for w in workspaces]
@@ -97,7 +109,7 @@ async def resolve_target(client: AsyncMeshive, workspace: str, *, confirm: bool)
         raise tool_error("invalid_argument", f"confirm=true needs the workspace id, not the label '{workspace}'.",
                          "Nothing was sent. Use the id in the preview's `workspace` field in place of the label (call "
                          "without confirm to get it), and keep that id for every retry.")
-    return _by_label(await client.list_workspaces(), workspace)
+    return _by_label(await _read(client.list_workspaces), workspace)
 
 
 def needs_input(value: Any) -> bool:
@@ -122,7 +134,7 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
         raise invalid_argument("`pod` is required — pass a pod_name or the pod's display name.")
     if _POD_NAME_RE.match(pod):
         return pod
-    pods = await client.list_pods(workspace)
+    pods = await _read(client.list_pods, workspace)
     # Downloaders are left out of label matching too — they were already left out of the candidate list, only matching was off.
     hits = [p for p in pods if not _is_downloader(p) and (p.user_alias or "").lower() == pod.lower()]
     if len(hits) == 1:
