@@ -303,6 +303,29 @@ async def test_api_closing_the_connection_without_answering_is_temporarily_unava
         assert len(sent) == 1, (tool, sent)    # the SDK doesn't resend it
 
 
+@pytest.mark.parametrize("failure, attempts", [("RemoteProtocolError", 1), ("ReadError", 1), ("ReadTimeout", 2)])
+async def test_a_write_cut_off_mid_request_says_where_to_look_it_up(mcp_client, monkeypatch, with_key, failure, attempts):
+    # The real SDK client, over a transport that cuts the write off. Whether it was cut off or timed out, the error
+    # gives operation_status the method and path along with the operation_id, so the model doesn't have to guess them.
+    import httpx
+    from meshive import AsyncMeshive
+    from meshive_mcp import client as client_module
+    sent = []
+
+    def cut_off(request):
+        sent.append((request.method, request.url.path, request.headers["Idempotency-Key"]))
+        raise getattr(httpx, failure)("Server disconnected without sending a response.", request=request)
+
+    monkeypatch.setattr(client_module, "_new_client", lambda key, label: AsyncMeshive(
+        key, base_url="http://api.test", max_retries=1, transport=httpx.MockTransport(cut_off)))
+    result = await mcp_client.call_tool("stop_task", {"task": "task_abc", "operation_id": "stop-cutoff-0001"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "temporarily_unavailable" and body["operation_id"] == "stop-cutoff-0001"
+    assert body["operation_lookup"] == {"method": "POST", "path": "/tasks/task_abc/stop"}, body
+    # Only a timeout is resent, with the same key; a cut-off write may have landed, so it isn't.
+    assert sent == [("POST", "/v1/sdk/tasks/task_abc/stop", "stop-cutoff-0001")] * attempts
+
+
 async def test_pod_label_lookup_in_a_workspace_that_is_not_the_users_is_unknown_workspace(mcp_client, fake, with_key):
     from meshive.exceptions import PermissionDeniedError
     fake["setup"] = lambda inst: inst.raise_on.update(

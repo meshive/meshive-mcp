@@ -75,6 +75,13 @@ tools.
   runs again and `operation_status` can't look it up; a failed call's `next_step` says the same instead of asking to
   retry with the same `operation_id`. Other writes keep the operation-record wording.
 
+### Fixed
+
+- A write cut off by the API closing the connection without answering, or by the connection breaking (`ReadError`,
+  `WriteError` and the like), now comes with `operation_lookup`, the method and path to pass to `operation_status`
+  with its `operation_id`, as a timed-out write already did. Before, the agent had to guess them. The `meshive` SDK
+  1.8 attaches them to these errors.
+
 ## v1.7.0
 
 Requests are limited in what they can cost the server, tool calls that use the API take much less CPU, and a
