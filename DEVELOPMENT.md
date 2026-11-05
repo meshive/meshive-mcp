@@ -55,6 +55,9 @@ client, so they need no network and no API key.
   replayable copy of the response; `ssh_access` and `connect_storage` never return the browser-terminal URL, which
   carries the password, and previews never carry a secret.
 - Responses are capped at 1 MiB and lists are paged.
+- **Descriptions fit the client's cut.** Claude Code keeps the first 4096 characters of a tool description, so every
+  description, with the notes `meshive_tool` appends, stays under that (`tests/test_tools.py` checks it). Put an
+  argument's format in its own description (`Annotated[..., Field(description=...)]`), which goes in the input schema.
 - When adding or removing a tool, update the tool sets in `tests/test_tools.py`, the tool table in `README.md` and
   `CHANGELOG.md`.
 

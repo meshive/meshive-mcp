@@ -8,31 +8,94 @@ whether the user agreed.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import Field
 
 from .. import money
 from ..client import meshive_client
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod
-from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview, price_change
+from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview, price_change
 
-_POD_ARGS_DOC = """`workspace` takes the id from the workspaces tool (a label also works). `template_id` comes from the templates tool.
+# What estimate_pod and create_pod say about all their arguments together. The format of each argument is in that
+# argument's own description below (the tool's input schema), which keeps the tool descriptions short enough for
+# clients that cut long ones.
+_POD_ARGS_DOC = """Each argument's format is in its own description. `workspace` and `template_id` come from the workspaces and templates tools.
 GPU pod: pass `gpu_model` (from the gpus tool) and optionally `gpu_count`/`gpu_vram_gb`; vCPU/RAM default to the GPU's recommended sizes.
-CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (a `cpu_line` value from the cpus tool; CPU pods only, default the cheapest line that fits) and vCPU/RAM default to 8 cores / 32 GiB like the console (or the nearest sizes that line offers).
-`vcpu` and `ram_gb` are totals for the pod and must be sizes the console offers; a rejected size comes back with the `allowed` values. The system disk is sized by the server (shown as `resources.disk_gb` in the estimate).
-`volumes` attaches EXISTING network (nfs) storage from the storages tool: [{"storage": pv_name, "mount_path": "/data"}]. Existing local storage can't be attached to a new pod.
-`local_volumes` creates NEW local storage on the pod's machine together with the pod: [{"name": "scratch", "mount_path": "/scratch", "size_gb": 50}] with optional "encrypted", "usage_warning" and "usage_warning_threshold" (0-1). Each needs at least 10 GiB and spot pods can't have one. It is billed hourly by size until it is deleted, also while the pod is stopped and after the pod is deleted unless delete_pod lists it; the estimate includes it as `breakdown.local_storage`.
-`ports` opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]; don't repeat ports or port names the template already has.
-`template_ports` changes the ports the template opens, like the console's deploy screen: [{"port": 8188, "name": "ui", "new_port": 8189, "external": false}], where `port` is the template's port and "name" (rename), "new_port" (renumber) and "external" (true = exposed over HTTPS, false = internal only) are optional. Template ports can't be removed; use `ports` to open new ones.
-`env` is a dict and `secret_keys` names the secret ones; template variables the template leaves blank need a value. `command` overrides the start command (at most 4096 characters).
-`max_price_per_hour` is checked against the estimate (compute plus new local_volumes) before creating and caps the final COMPUTE hourly rate at placement; an over-cap placement fails asynchronously.
-Existing storage you attach and Asset Hub retention are billed separately and excluded from this cap. `region` is accepted for compatibility and ignored.
-`input_assets` places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": role, "paths": ["sub/folder/"], "strip_prefix": ""}] (default place /inputs/<asset name> or the template's path for that role); "paths" picks some files or folders, copied from the asset's file list exactly as written there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only these keys are accepted. They add an input volume billed by size.
-`watched_folders` uploads new files in those folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], "include_existing": false, "enabled": true}] (the template's own output folders are watched already). It works on templates without an output folder too (for example NIM or vLLM), as long as the pod has storage the folders sit in (`volumes` or `local_volumes`). `watched_template_folders` changes those template folders from the start, like the console's create screen: {"/outputs": {"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files, and {"/workspace/output": {"path": "/workspace/results"}} moves an output folder (its $MESHIVE_OUTPUT_DIR and storage follow; output folders only). `harvest_destination` {"mode": "user_s3", "credential_id": n} sends them to the user's bucket instead of managed storage.
-`model_set` adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already added are reused next time.
-`hf_token_id` is for Quick Deploy templates whose model set is gated on Hugging Face (the model_sets tool shows `hf_token_required` and `gated_sources`): the id of a workspace token from the source_credentials tool whose Hugging Face account accepted the model's license. The set's files download with that token, so the user must first accept the license on the page in `gated_sources` with the same Hugging Face account. Without it the server refuses with hf_token_required; hf_license_not_accepted / hf_access_not_approved mean that account hasn't accepted the license or isn't approved yet, and hf_token_rejected means the token is invalid. Like `model_set`, a confirmed create with it returns only after the files were linked, which can take minutes."""
+CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (from the cpus tool; default the cheapest line that fits) and vCPU/RAM default to 8 cores / 32 GiB like the console (or the nearest sizes that line offers).
+`vcpu` and `ram_gb` are totals for the pod and must be sizes the console offers. The system disk is sized by the server (shown as `resources.disk_gb` in the estimate).
+`volumes` attaches existing network storage. `local_volumes` creates new local storage on the pod's machine, billed hourly by size until it is deleted, also while the pod is stopped and after the pod is deleted unless delete_pod lists it.
+`max_price_per_hour` caps the compute hourly rate; existing storage you attach and Asset Hub retention are billed separately.
+`input_assets` places Asset Hub assets in the pod. New files in the template's output folders and in `watched_folders` are uploaded as assets; `watched_template_folders` changes the template's folders and `harvest_destination` where the files go.
+`model_set` adds one model set to the pod, and `hf_token_id` is the token a set gated on Hugging Face needs; the set's files are added before the pod is created, often several minutes."""
+
+_Workspace = Annotated[str | None, Field(description="Workspace id from the workspaces tool (a label also works).")]
+_TemplateId = Annotated[int, Field(description="Template id from the templates tool.")]
+_GpuModel = Annotated[str | None, Field(description="GPU model from the gpus tool. Omit it for a CPU pod.")]
+_CpuLine = Annotated[str | None, Field(description=(
+    "CPU pods only: a `cpu_line` value from the cpus tool. Default: the cheapest line that fits."))]
+_Vcpu = Annotated[int | None, Field(description="vCPUs for the whole pod, one of the sizes the console offers.")]
+_RamGb = Annotated[int | None, Field(description="RAM for the whole pod in GiB, one of the sizes the console offers.")]
+_Volumes = Annotated[list[dict[str, str]] | None, Field(description=(
+    'Attaches EXISTING network (nfs) storage from the storages tool: [{"storage": pv_name, "mount_path": "/data"}]. '
+    "Existing local storage can't be attached to a new pod."))]
+_LocalVolumes = Annotated[list[dict[str, Any]] | None, Field(description=(
+    'Creates NEW local storage on the pod\'s machine together with the pod: [{"name": "scratch", "mount_path": '
+    '"/scratch", "size_gb": 50}] with optional "encrypted", "usage_warning" and "usage_warning_threshold" (0-1). Each '
+    "needs at least 10 GiB and spot pods can't have one. It is billed hourly by size until it is deleted, also while "
+    "the pod is stopped and after the pod is deleted unless delete_pod lists it; the estimate includes it as "
+    "`breakdown.local_storage`."))]
+_Env = Annotated[dict[str, str] | None, Field(description=(
+    "Environment variables; template variables the template leaves blank need a value. `secret_keys` names the "
+    "secret ones."))]
+_SecretKeys = Annotated[list[str] | None, Field(description="Names of the `env` variables that are secret.")]
+_Ports = Annotated[list[Any] | None, Field(description=(
+    'Opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]. Don\'t repeat ports or '
+    "port names the template already has."))]
+_TemplatePorts = Annotated[list[dict[str, Any]] | None, Field(description=(
+    'Changes the ports the template opens, like the console\'s deploy screen: [{"port": 8188, "name": "ui", '
+    '"new_port": 8189, "external": false}], where `port` is the template\'s port and "name" (rename), "new_port" '
+    '(renumber) and "external" (true = exposed over HTTPS, false = internal only) are optional. Template ports can\'t '
+    "be removed; use `ports` to open new ones."))]
+_Command = Annotated[str | None, Field(description="Overrides the start command (at most 4096 characters).")]
+_Region = Annotated[str | None, Field(description="Accepted for compatibility and ignored.")]
+_MaxPricePerHour = Annotated[float | None, Field(description=(
+    "Checked against the estimate (compute plus new local_volumes) before creating, and caps the final COMPUTE "
+    "hourly rate at placement; an over-cap placement fails asynchronously. Existing storage you attach and Asset Hub "
+    "retention are billed separately and excluded from this cap."))]
+_InputAssets = Annotated[list[Any] | None, Field(description=(
+    'Places Asset Hub assets in the pod: ["asset_id" or {"asset": id, "target_dir": "/workspace/models", "role": '
+    'role, "paths": ["sub/folder/"], "strip_prefix": ""}] (default place /inputs/<asset name> or the template\'s '
+    'path for that role); "paths" picks some files or folders, copied from the asset\'s file list exactly as written '
+    'there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only '
+    "these keys are accepted. They add an input volume billed by size."))]
+_WatchedFolders = Annotated[list[Any] | None, Field(description=(
+    'Uploads new files in these folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], '
+    '"include_existing": false, "enabled": true}] (the template\'s own output folders are watched already). It works '
+    "on templates without an output folder too (for example NIM or vLLM), as long as the pod has storage the folders "
+    "sit in (`volumes` or `local_volumes`)."))]
+_WatchedTemplateFolders = Annotated[dict[str, dict[str, Any]] | None, Field(description=(
+    'Changes the template\'s output folders from the start, like the console\'s create screen: {"/outputs": '
+    '{"enabled": false}} turns one off, {"/outputs": {"include": ["*.png"]}} uploads only matching files, and '
+    '{"/workspace/output": {"path": "/workspace/results"}} moves an output folder (its $MESHIVE_OUTPUT_DIR and '
+    "storage follow; output folders only)."))]
+_HarvestDestination = Annotated[dict[str, Any] | None, Field(description=(
+    '{"mode": "user_s3", "credential_id": n} sends the uploaded files to the user\'s bucket instead of managed '
+    "storage."))]
+_ModelSet = Annotated[str | None, Field(description=(
+    "Adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list "
+    "is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating "
+    "takes longer, often several minutes. The estimate shows the set as `model_set` with its file count, size and "
+    "minimum GPU memory. If a file can't be added, no pod is created (model_set_unavailable) and the files already "
+    "added are reused next time."))]
+_HfTokenId = Annotated[int | None, Field(description=(
+    "For Quick Deploy templates whose model set is gated on Hugging Face (the model_sets tool shows "
+    "`hf_token_required` and `gated_sources`): the id of a workspace token from the source_credentials tool whose "
+    "Hugging Face account accepted the model's license. The set's files download with that token, so the user must "
+    "first accept the license on the page in `gated_sources` with the same Hugging Face account. Like `model_set`, a "
+    "confirmed create with it returns only after the files were linked, which can take minutes."))]
 
 
 def _pod_kwargs(**kw: Any) -> dict[str, Any]:
@@ -126,20 +189,20 @@ def _same_node_note(placement: str, reason: str | None) -> str:
 
 
 def register(server: MCPServer) -> None:
-    async def estimate_pod(ctx: Context[Any, Any], name: str, template_id: int, workspace: str | None = None,
-                           gpu_model: str | None = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
-                           rental_type: str = "demand", vcpu: int | None = None, ram_gb: int | None = None,
-                           cpu_line: str | None = None, volumes: list[dict[str, str]] | None = None,
-                           local_volumes: list[dict[str, Any]] | None = None,
-                           env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
-                           ports: list[Any] | None = None, command: str | None = None,
+    async def estimate_pod(ctx: Context[Any, Any], name: str, template_id: _TemplateId, workspace: _Workspace = None,
+                           gpu_model: _GpuModel = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
+                           rental_type: str = "demand", vcpu: _Vcpu = None, ram_gb: _RamGb = None,
+                           cpu_line: _CpuLine = None, volumes: _Volumes = None,
+                           local_volumes: _LocalVolumes = None,
+                           env: _Env = None, secret_keys: _SecretKeys = None,
+                           ports: _Ports = None, command: _Command = None,
                            internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
-                           region: str | None = None, max_price_per_hour: float | None = None,
-                           input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
-                           watched_template_folders: dict[str, dict[str, Any]] | None = None,
-                           harvest_destination: dict[str, Any] | None = None,
-                           template_ports: list[dict[str, Any]] | None = None,
-                           model_set: str | None = None, hf_token_id: int | None = None) -> dict[str, Any]:
+                           region: _Region = None, max_price_per_hour: _MaxPricePerHour = None,
+                           input_assets: _InputAssets = None, watched_folders: _WatchedFolders = None,
+                           watched_template_folders: _WatchedTemplateFolders = None,
+                           harvest_destination: _HarvestDestination = None,
+                           template_ports: _TemplatePorts = None,
+                           model_set: _ModelSet = None, hf_token_id: _HfTokenId = None) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
         Call this first, show the user the price and hardware, then call create_pod with the same arguments.
         """
@@ -169,20 +232,20 @@ def register(server: MCPServer) -> None:
     estimate_pod.__doc__ = (estimate_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
     meshive_tool(server, "estimate_pod", title="Estimate Pod Price", annotations=READ_ONLY)(estimate_pod)
 
-    async def create_pod(ctx: Context[Any, Any], name: str, template_id: int, workspace: str | None = None,
-                         gpu_model: str | None = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
-                         rental_type: str = "demand", vcpu: int | None = None, ram_gb: int | None = None,
-                         cpu_line: str | None = None, volumes: list[dict[str, str]] | None = None,
-                         local_volumes: list[dict[str, Any]] | None = None,
-                         env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
-                         ports: list[Any] | None = None, command: str | None = None,
+    async def create_pod(ctx: Context[Any, Any], name: str, template_id: _TemplateId, workspace: _Workspace = None,
+                         gpu_model: _GpuModel = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
+                         rental_type: str = "demand", vcpu: _Vcpu = None, ram_gb: _RamGb = None,
+                         cpu_line: _CpuLine = None, volumes: _Volumes = None,
+                         local_volumes: _LocalVolumes = None,
+                         env: _Env = None, secret_keys: _SecretKeys = None,
+                         ports: _Ports = None, command: _Command = None,
                          internet_premium: bool = False, uptime_premium: bool = False, cpu_premium: bool = False,
-                         region: str | None = None, max_price_per_hour: float | None = None,
-                         input_assets: list[Any] | None = None, watched_folders: list[Any] | None = None,
-                         watched_template_folders: dict[str, dict[str, Any]] | None = None,
-                         harvest_destination: dict[str, Any] | None = None,
-                         template_ports: list[dict[str, Any]] | None = None,
-                         model_set: str | None = None, hf_token_id: int | None = None,
+                         region: _Region = None, max_price_per_hour: _MaxPricePerHour = None,
+                         input_assets: _InputAssets = None, watched_folders: _WatchedFolders = None,
+                         watched_template_folders: _WatchedTemplateFolders = None,
+                         harvest_destination: _HarvestDestination = None,
+                         template_ports: _TemplatePorts = None,
+                         model_set: _ModelSet = None, hf_token_id: _HfTokenId = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
@@ -493,7 +556,7 @@ def register(server: MCPServer) -> None:
 
     # --- SSH (G04) ---------------------------------------------------------------------------------
 
-    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=MUTATE, operation_record=False)
+    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=REVEAL, operation_record=False)
     async def ssh_access(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Get a one-time SSH login for a pod, only when the user asks to connect: the `command` to run and a `password` that expires in a few minutes (`expires_at`).
         It needs a read & write key; each call issues a new password. Give both to the user and nothing else — never run the command yourself or put the password in files, commits or other tools."""

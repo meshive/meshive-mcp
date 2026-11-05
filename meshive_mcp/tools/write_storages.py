@@ -13,7 +13,7 @@ from ..client import meshive_client
 from ..errors import invalid_argument
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve
-from ._common import CREATE, DESTRUCTIVE, MUTATE, call, meshive_tool, preview, price_change
+from ._common import CREATE, DESTRUCTIVE, MUTATE, REVEAL, call, meshive_tool, preview, price_change
 
 # How long connect_storage waits for the storage to be ready. Hosted MCP requests sit behind a proxy that ends calls
 # after about 100 seconds, so a call never waits longer than this and tells the agent to call again instead.
@@ -150,7 +150,7 @@ def register(server: MCPServer) -> None:
                             "size when it is done." if tx is not None else "Saved; the change applies right away.")
         return out
 
-    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=MUTATE, operation_record=False)
+    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=REVEAL, operation_record=False)
     async def connect_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                               wait: float = _CONNECT_WAIT_DEFAULT, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:

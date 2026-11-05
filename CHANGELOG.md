@@ -84,6 +84,19 @@ tools.
   retry with the same `operation_id`. Other writes keep the operation-record wording.
 - `register_model` no longer offers `framework="sglang"`. Text models run on vLLM, and the server refuses sglang with
   `invalid_request` and a message that says so. Leave `framework` out.
+- A write whose `operation_id` the server has already answered now says so. The server returns the first request's
+  answer and does nothing new; the result used to look like a fresh success. It now carries `"replayed": true`, and
+  its `next_step` starts by saying that the server had already done this write for this operation_id (an earlier
+  call, or an automatic retry of this one) and that only a new action needs a new operation_id. Other results are
+  unchanged. It needs a `meshive` SDK whose write results carry `replayed`; with an older SDK the result looks as
+  before.
+- `estimate_pod` and `create_pod` describe the format of each argument in that argument's own description (the
+  input schema) instead of the tool description. The tool descriptions were longer than the 4096 characters Claude
+  Code keeps, so the end of them, including the `operation_id` rules of `create_pod`, was cut off. Every tool
+  description now fits. The arguments, their types and their defaults are unchanged.
+- `ssh_access` and `connect_storage` are annotated as not idempotent, like `machine_credentials` and
+  `host_install_command`: every call (for `connect_storage`, every confirmed call) issues a new one-time SSH
+  password.
 
 ### Fixed
 

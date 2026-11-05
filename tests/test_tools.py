@@ -19,15 +19,17 @@ WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod
                "host_install_command"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
-# reveals a login or issues an install command again and emails the account owner again.
+# reveals a login again or issues a new one-time password or install command (machine logins and install commands
+# also email the account owner every time).
 NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task", "register_model", "import_asset",
                   "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
-                  "host_install_command"}
-# Claude Code keeps at most this many characters of a tool description.
+                  "host_install_command", "ssh_access", "connect_storage"}
+# Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
-HOST_TOOLS = {"machines", "billing_history", "machine_history", "host_messages", "schedule_maintenance",
-              "maintenance_window", "set_machine_listing", "retry_machine_setup", "delete_machine", "send_host_message",
-              "mark_host_messages_read", "machine_credentials", "host_install_command"}
+
+
+def _utf16_len(text):
+    return len(text.encode("utf-16-le")) // 2
 
 
 def _payload(result):
@@ -45,8 +47,8 @@ async def test_tool_list_and_annotations(mcp_client):
         assert t.annotations.destructive_hint is (t.name in DESTRUCTIVE), t.name
         assert t.annotations.idempotent_hint is (t.name not in NOT_IDEMPOTENT), t.name
         assert t.description and len(t.description.split(".")) >= 3, t.name
-        if t.name in HOST_TOOLS:
-            assert len(t.description) < DESCRIPTION_LIMIT, (t.name, len(t.description))
+        # The whole description, the notes appended to it included, has to survive the client's cut.
+        assert _utf16_len(t.description) < DESCRIPTION_LIMIT, (t.name, _utf16_len(t.description))
         assert t.title and t.annotations.title == t.title, t.name
     assert len({t.title for t in tools}) == len(tools)
 
@@ -324,6 +326,43 @@ async def test_a_write_cut_off_mid_request_says_where_to_look_it_up(mcp_client, 
     assert body["operation_lookup"] == {"method": "POST", "path": "/tasks/task_abc/stop"}, body
     # Only a timeout is resent, with the same key; a cut-off write may have landed, so it isn't.
     assert sent == [("POST", "/v1/sdk/tasks/task_abc/stop", "stop-cutoff-0001")] * attempts
+
+
+async def test_a_replayed_write_says_the_server_did_nothing_new(mcp_client, monkeypatch, with_key):
+    # The real SDK client: the server marks the stored answer to an operation_id it has seen before. Only then does
+    # the result say so; a write the server ran comes back exactly as before.
+    import httpx
+    from meshive import AsyncMeshive
+    from meshive_mcp import client as client_module
+    replay = {"on": False}
+
+    def answer(request):
+        headers = {"Idempotent-Replayed": "true"} if replay["on"] else {}
+        return httpx.Response(202, json={"id": "task_abc", "action": "stop"}, headers=headers)
+
+    monkeypatch.setattr(client_module, "_new_client", lambda key, label: AsyncMeshive(
+        key, base_url="http://api.test", max_retries=1, transport=httpx.MockTransport(answer)))
+    args = {"task": "task_abc", "operation_id": "stop-replay-0001"}
+    fresh = await mcp_client.call_tool("stop_task", args)
+    replay["on"] = True
+    replayed = await mcp_client.call_tool("stop_task", args)
+    assert not fresh.is_error and not replayed.is_error
+    fresh, replayed = _payload(fresh), _payload(replayed)
+    assert "replayed" not in fresh and "already done this write" not in fresh["next_step"]
+    assert replayed == {**fresh, "replayed": True,
+                        "next_step": "The server had already done this write for this operation_id (an earlier "
+                                     "call, or an automatic retry of this one) and returned that answer; nothing was "
+                                     "done again. Use a new operation_id only for a new action. "
+                                     + fresh["next_step"]}
+
+
+async def test_write_results_carry_replayed_only_when_true():
+    from meshive.models import ResourceAction, WatchedFolders
+    from meshive_mcp.serialize import to_dict
+
+    assert "replayed" not in to_dict(ResourceAction.from_dict({"id": "p-0", "action": "stop"}))
+    assert "replayed" not in to_dict(WatchedFolders.from_dict({"version": "1:ab", "editable": True}))   # a read
+    assert to_dict(ResourceAction.from_dict({"id": "p-0", "action": "stop", "replayed": True}))["replayed"] is True
 
 
 async def test_pod_label_lookup_in_a_workspace_that_is_not_the_users_is_unknown_workspace(mcp_client, fake, with_key):

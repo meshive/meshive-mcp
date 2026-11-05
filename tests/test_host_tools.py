@@ -569,10 +569,10 @@ UNRECORDED_RETRY = "a retry runs it again"
 
 
 async def test_a_reveal_is_not_idempotent_and_keeps_no_operation_record(mcp_client, fake, with_key):
-    """Every confirmed call reveals the login again and emails the owner again, so neither the annotation nor the retry
-    advice may suggest that repeating it is safe or looked up by operation_id."""
+    """Every confirmed call reveals the login again or issues a new one-time password or install command, so neither
+    the annotation nor the retry advice may suggest that repeating it is safe or looked up by operation_id."""
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
-    for name in ("machine_credentials", "host_install_command"):
+    for name in ("machine_credentials", "host_install_command", "ssh_access", "connect_storage"):
         assert tools[name].annotations.idempotent_hint is False and tools[name].annotations.read_only_hint is False
     prev = _payload(await mcp_client.call_tool("machine_credentials", {"machine": MACHINE_ID}))
     assert prev["next_step"].endswith("Reuse this operation_id for the confirmation.")

@@ -423,9 +423,10 @@ async def test_model_set_not_for_template_lists_the_available_ones(mcp_client, f
 async def test_pod_args_doc_describes_model_set(mcp_client, fake, with_key):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("estimate_pod", "create_pod"):
-        assert "model_set" in tools[name].input_schema["properties"], name
-        desc = tools[name].description
-        assert "`model_set` adds one model set" in desc and "model_set_unavailable" in desc, name
+        props = tools[name].input_schema["properties"]
+        assert "model_set" in props, name
+        assert "`model_set` adds one model set" in tools[name].description, name
+        assert "model_set_unavailable" in props["model_set"]["description"], name
 
 
 async def test_server_instructions_cover_editing_connect_and_model_sets():

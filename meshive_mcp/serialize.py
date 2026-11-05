@@ -30,6 +30,9 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        "IpmiCredentials": {"password"},
                                        "GrafanaCredentials": {"password"},
                                        "InstallCommand": {"command"}}
+# A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
+# with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
+_KEEP_REPLAYED_FALSE = {"ActivityEvent"}
 
 # Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
 # current_price_per_hour is the rate before an edit (pod and storage update estimates).
@@ -87,6 +90,8 @@ def to_dict(obj: Any) -> Any:
             if f.name in _DROP or f.name in drop:
                 continue
             value = getattr(obj, f.name)
+            if f.name == "replayed" and value is not True and cls not in _KEEP_REPLAYED_FALSE:
+                continue
             out[f.name] = to_dict(value)
             if f.name in hourly_fields:
                 out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)

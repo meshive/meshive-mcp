@@ -72,7 +72,9 @@ CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHi
 # Stop/start/restart/scale/pause: repeating converges to the same state.
 MUTATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
-# Reveal a login or issue an install command: every call reveals or issues again and emails the account owner again.
+# Reveal a secret or issue something anew: every call reveals a login again or issues a new one-time password or
+# install command, so repeating it does more than the first call (machine logins and install commands also email the
+# account owner every time).
 REVEAL = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
 
 CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only then call this tool again with the same "
@@ -103,6 +105,11 @@ _RECORDED_RETRY = (" Check the resource/operation state first. Any retry MUST re
                    "arguments; never submit a new operation for an unknown outcome.")
 _UNRECORDED_RETRY = (" The server keeps no operation record of this call, so a retry runs it again: retry only if the "
                      "user still wants it.")
+# Prepended to next_step when the server answered a write with its stored answer to an earlier request with the same
+# operation_id: the write was not done again.
+_REPLAYED_STEP = ("The server had already done this write for this operation_id (an earlier call, or an automatic "
+                  "retry of this one) and returned that answer; nothing was done again. Use a new operation_id only "
+                  "for a new action.")
 
 
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
@@ -153,6 +160,9 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                 result["operation_id"] = op
                 if "lookup" in operation:
                     result["operation_lookup"] = operation["lookup"]
+                if operation.get("replayed"):
+                    result["replayed"] = True
+                    result["next_step"] = " ".join(filter(None, (_REPLAYED_STEP, result.get("next_step"))))
                 if result.get("confirmed") is False:
                     result["next_step"] += (" Reuse this operation_id for confirmation and every retry."
                                             if operation_record else " Reuse this operation_id for the confirmation.")
@@ -193,6 +203,8 @@ async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         operation = _operation.get()
         if is_write and operation is not None and raw.get("operationMethod"):
             operation["lookup"] = {"method": raw["operationMethod"], "path": raw["operationPath"]}
+        if is_write and operation is not None and getattr(result, "replayed", False) is True:
+            operation["replayed"] = True
         return result
     except Exception as exc:  # noqa: BLE001 — exceptions translate doesn't know are re-raised
         operation = _operation.get()
