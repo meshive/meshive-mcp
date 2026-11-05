@@ -658,6 +658,173 @@ async def test_workspace_all_rejected_where_unsupported(mcp_client, fake, with_k
     assert result.is_error and _payload(result)["code"] == "invalid_argument"
 
 
+def _task(tid, status, upload=None, completed=0, declared=0, outputs=None):
+    d = {"externalId": tid, "name": tid, "namespaceName": "0123456789abcdef", "status": status, "podName": "p",
+         "image": "img", "cpuCores": 2, "ramGb": 8, "pricePerHour": "0.03", "costSoFar": "0", "totalCost": "0",
+         "outputUploadState": upload, "outputFilesCompleted": completed, "outputFilesDeclared": declared}
+    if outputs is not None:
+        d["outputs"] = outputs
+    return d
+
+
+def _outputs(phase, **fields):
+    """The server's `outputs` object, as the backend sends it (every field, camelCase)."""
+    d = {"phase": phase, "assetExternalId": None, "assetName": None, "assetDeleted": False, "filesSaved": None,
+         "filesNotSaved": 0, "filesSoFar": None, "filesTotal": None, "filesOverLimit": 0, "bytesSaved": None,
+         "bytesSoFar": None, "bytesTotal": None, "expectedInAssetsAt": None, "uploadStartedAt": None,
+         "uploadDeadlineAt": None, "nextAttemptAt": None, "attempts": 0, "filesLimit": 2000, "lastError": None,
+         "savedAt": None}
+    d.update(fields)
+    return d
+
+
+_GIB = 1024 ** 3
+
+
+@pytest.mark.parametrize("status,outputs,expected", [
+    ("running", _outputs("running"), ["hasn't finished"]),
+    ("succeeded", _outputs("preparing"), ["Getting ready to save"]),
+    # Progress is files_so_far of files_total minus the files over the limit; bytes_total counts only uploaded files.
+    ("succeeded", _outputs("uploading", filesSoFar=12, filesTotal=45, filesOverLimit=5, bytesSoFar=_GIB,
+                           bytesTotal=3 * _GIB),
+     ["Saving the output files: 12 of 40 files, 1.0 GiB of 3.0 GiB.",
+      "5 files were over the 2,000-file limit and not saved."]),
+    # Some runs can't know their total in advance.
+    ("succeeded", _outputs("uploading", filesSoFar=7, bytesSoFar=2048, filesLimit=200),
+     ["7 files so far (total not known yet), 2.0 KiB"]),
+    ("succeeded", _outputs("retrying", filesSoFar=3, filesTotal=10, bytesSoFar=0, bytesTotal=100, attempts=1,
+                           nextAttemptAt="2026-11-05T09:00:00Z", lastError="timeout"),
+     ["An upload attempt failed (see last_error) and is retried automatically at 2026-11-05T09:00:00Z; "
+      "uploaded so far: 3 of 10 files"]),
+    ("succeeded", _outputs("retrying", filesSoFar=1, filesTotal=1, attempts=1),
+     ["An upload attempt failed and is retried automatically; uploaded so far: 1 of 1 file."]),
+    ("succeeded", _outputs("registering", filesSoFar=10, filesTotal=10, bytesSoFar=100, bytesTotal=100,
+                           expectedInAssetsAt="2026-11-05T09:02:00.737030Z"),
+     ["The uploaded files are being added to Assets, expected around 2026-11-05T09:02:00Z: 10 of 10 files"]),
+    # A failed upload that got some files up is registered too: its progress stays below 100% and the rest is lost.
+    ("succeeded", _outputs("registering", filesSoFar=4, filesTotal=10, bytesSoFar=40, bytesTotal=100,
+                           expectedInAssetsAt="2026-11-05T09:02:00Z", lastError="denied"),
+     ["The upload ended before every file was saved (see last_error); the 4 of 10 files that were uploaded are "
+      "being added to Assets, expected around 2026-11-05T09:02:00Z."]),
+    ("succeeded", _outputs("saved", assetExternalId="asset_x", assetName="out-1", filesSaved=3,
+                           bytesSaved=3 * 512 * 1024),
+     ["Saved in Assets as out-1 (asset_x): 3 files, 1.5 MiB."]),
+    ("succeeded", _outputs("saved", assetDeleted=True, filesSaved=3, bytesSaved=10),
+     ["saved as an asset that has since been deleted"]),
+    ("succeeded", _outputs("partially_saved", assetExternalId="asset_x", assetName="out-1", filesSaved=2000,
+                           filesNotSaved=431, filesOverLimit=431, bytesSaved=10),
+     ["Partly saved in Assets as out-1 (asset_x): 2,000 files saved, 431 not saved (431 over the 2,000-file limit)."]),
+    ("succeeded", _outputs("partially_saved", assetDeleted=True, filesSaved=5, filesNotSaved=3, bytesSaved=10),
+     ["Partly saved as an asset that has since been deleted: 5 files saved, 3 not saved (they didn't upload)."]),
+    ("succeeded", _outputs("partially_saved", assetExternalId="asset_x", assetName="out-1", filesSaved=5,
+                           filesNotSaved=12, filesOverLimit=2, bytesSaved=10),
+     ["5 files saved, 12 not saved (2 over the 2,000-file limit, the rest didn't upload)."]),
+    ("succeeded", _outputs("partially_saved", assetExternalId="asset_x", assetName="out-1", filesSaved=5,
+                           filesNotSaved=3, bytesSaved=10),
+     ["5 files saved, 3 not saved (they didn't upload)."]),
+    ("succeeded", _outputs("not_saved", lastError="denied"), ["were not saved (see last_error)."]),
+    ("succeeded", _outputs("discarded", assetExternalId="asset_x", assetName="out-1"),
+     ["discarded on request", "Files uploaded before that are in Assets as out-1 (asset_x)."]),
+    # Discarded, and the files uploaded before that aren't in Assets yet.
+    ("succeeded", _outputs("discarded", filesSaved=4, bytesSaved=10),
+     ["discarded on request. The 4 files uploaded before that are being added to Assets."]),
+    ("succeeded", _outputs("discarded", filesSaved=0, savedAt="2026-11-05T09:00:00Z"),
+     ["Saving the output files was discarded on request."]),
+    ("succeeded", _outputs("empty"), ["There were no output files to save."]),
+])
+async def test_task_outputs_status_is_shown_with_a_summary(mcp_client, fake, with_key, status, outputs, expected):
+    """With the server's `outputs`, the raw upload fields (which read "skipped, 0 files" for saved files) are left out
+    and `outputs` carries the SDK's field names, the upload total and a one-line summary."""
+    fake["setup"] = lambda inst: inst.tasks.append(_task("task_a", status, "skipped", outputs=outputs))
+    task = _payload(await mcp_client.call_tool("tasks", {"task": "task_a"}))["task"]
+    out = task["outputs"]
+    for line in expected:
+        assert line in out["summary"], (line, out["summary"])
+    # Nothing about where it runs or what isn't billed: outputs can keep billing as storage while they're saved.
+    assert not any(word in out["summary"].lower() for word in ("vast", "provider", "external", "bill", "free"))
+    assert out["phase"] == outputs["phase"] and out["saving"] is (outputs["phase"] in (
+        "preparing", "uploading", "retrying", "registering"))
+    assert out["asset_id"] == outputs["assetExternalId"] and out["files_limit"] == outputs["filesLimit"]
+    for raw in ("output_upload_state", "output_files_declared", "output_files_completed", "output_bytes_declared",
+                "output_bytes_completed", "output_upload_last_error", "outputs_purged_at"):
+        assert raw not in task
+    assert "outputs_note" not in _payload(await mcp_client.call_tool("tasks", {"task": "task_a"}))
+
+
+async def test_task_outputs_upload_total_leaves_out_files_over_the_limit(mcp_client, fake, with_key):
+    fake["setup"] = lambda inst: inst.tasks.append(_task("task_a", "succeeded", "uploading", outputs=_outputs(
+        "uploading", filesSoFar=1, filesTotal=2431, filesOverLimit=431, bytesSoFar=1, bytesTotal=9)))
+    out = _payload(await mcp_client.call_tool("tasks", {"task": "task_a"}))["task"]["outputs"]
+    assert out["files_total"] == 2431 and out["files_over_limit"] == 431 and out["files_to_upload"] == 2000
+    assert out["bytes_total"] == 9
+
+
+async def test_task_list_shows_outputs_and_keeps_the_old_note_only_without_them(mcp_client, fake, with_key):
+    def setup(inst):
+        inst.tasks += [_task("task_a", "succeeded", "skipped", outputs=_outputs("registering", filesSoFar=2)),
+                       _task("task_b", "running", outputs=_outputs("running"))]
+    fake["setup"] = setup
+    body = _payload(await mcp_client.call_tool("tasks", {}))
+    assert [t["outputs"]["phase"] for t in body["items"]] == ["registering", "running"]
+    assert "2 files so far (total not known yet)" in body["items"][0]["outputs"]["summary"]
+    assert "outputs_note" not in body
+
+    # A server that predates `outputs`: the raw fields stay and the note explains "skipped, 0 files".
+    fake["setup"] = lambda inst: inst.tasks.append(_task("task_c", "succeeded", "skipped"))
+    body = _payload(await mcp_client.call_tool("tasks", {}))
+    assert "outputs" not in body["items"][0] and body["items"][0]["output_upload_state"] == "skipped"
+    assert "download_links" in body["outputs_note"]
+
+
+@pytest.mark.parametrize("status,upload,noted", [
+    ("succeeded", "skipped", True), ("succeeded", None, True), ("failed", "skipped", True),
+    ("timed_out", None, True), ("stopped", "skipped", True),
+    ("succeeded", "completed", False), ("succeeded", "uploading", False), ("succeeded", "pending", False),
+    ("succeeded", "failed", False), ("succeeded", "discarded", False), ("running", None, False),
+    ("scheduling", None, False),
+])
+async def test_task_detail_explains_an_untracked_output_upload(mcp_client, fake, with_key, status, upload, noted):
+    """A finished task that saved its files without a separate upload step reports "skipped" (or null) and 0 files.
+    Agents read that as "nothing was saved", so the detail points them at the task's output list instead."""
+    fake["setup"] = lambda inst: inst.tasks.append(_task("task_a", status, upload))
+    body = _payload(await mcp_client.call_tool("tasks", {"task": "task_a"}))
+    assert body["task"]["output_upload_state"] == upload and body["task"]["output_files_completed"] == 0
+    if noted:
+        assert "download_links" in body["outputs_note"] and "30 minutes" in body["outputs_note"]
+        assert "even when files were saved" in body["outputs_note"]
+        # Deleting a task's output asset also empties its output list, so an empty list isn't "nothing was saved".
+        assert "or they were deleted since" in body["outputs_note"]
+    else:
+        assert "outputs_note" not in body
+
+
+async def test_task_list_explains_an_untracked_output_upload_once(mcp_client, fake, with_key):
+    def setup(inst):
+        inst.tasks += [_task("task_a", "succeeded", "skipped"), _task("task_b", "succeeded", None),
+                       _task("task_c", "succeeded", "completed", 2, 2), _task("task_d", "running")]
+    fake["setup"] = setup
+    body = _payload(await mcp_client.call_tool("tasks", {}))
+    assert [t["task_id"] for t in body["items"]] == ["task_a", "task_b", "task_c", "task_d"]
+    assert body["outputs_note"].startswith("A finished task whose `output_upload_state` is \"skipped\" or null")
+    assert all("outputs_note" not in t for t in body["items"])
+
+    fake["setup"] = lambda inst: inst.tasks.extend([_task("task_c", "succeeded", "completed", 2, 2),
+                                                     _task("task_d", "running")])
+    assert "outputs_note" not in _payload(await mcp_client.call_tool("tasks", {}))
+
+
+async def test_tasks_description_lists_every_status_and_the_upload_caveat(mcp_client):
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["tasks"]
+    for status in ("queued", "scheduling", "pulling", "fetching", "running", "succeeded", "failed", "timed_out",
+                   "stopped"):
+        assert status in desc, status
+    for phase in ("preparing", "uploading", "retrying", "registering", "saved", "partially_saved", "not_saved",
+                  "discarded", "empty"):
+        assert phase in desc, phase
+    assert "`files_so_far` of `files_to_upload`" in desc and "`summary`" in desc
+    assert "download_links(task=...)" in desc
+
+
 async def test_not_a_member_403_becomes_unknown_workspace(mcp_client, fake, with_key):
     from meshive.exceptions import PermissionDeniedError
     fake["setup"] = lambda inst: inst.raise_on.update(

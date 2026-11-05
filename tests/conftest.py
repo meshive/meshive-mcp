@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from mcp.client import Client
 from meshive.models import (AssetDownload, AssetImported, CpuLine, Credit, GpuAvailability, HfToken, Logs, ModelDetection, ServingModel, SshAccess, Pod, PodCreated, PodEstimate, ResourceAction, Serving,
-                            Storage, StorageCreated, StorageEstimate, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WatchedFolders, WhoAmI,
+                            Storage, StorageCreated, StorageEstimate, Task, TaskEstimate, TaskOutputs, TaskSubmitted, Transaction, WatchedFolders, WhoAmI,
                             Workspace, WorkspaceCreated, WorkspaceDeleteCheck, WorkspaceEstimate, WorkspaceUpdated,
                             WorkspaceUpdateEstimate)
 
@@ -227,6 +227,7 @@ class FakeMeshive:
         self.connect_phase = "ready"        # connect_storage / get_storage_connection
         self.model_sets_selectable = True
         self.workspace_blockers: dict[str, int] = {}    # check_workspace_delete
+        self.tasks: list[dict] = []                     # get_task / list_tasks, as the API sends them
         # Hosting
         self.machine_clients = {"pods": [_pod_use("aaaaaaaaaaaaaaaa", "running"),
                                          _pod_use("bbbbbbbbbbbbbbbb", "stopped"),
@@ -553,6 +554,14 @@ class FakeMeshive:
                                                 "totalCost": "0", "outputInclude": kw.get("output_include")},
                                        "estimate": {"pricePerHourUsd": "0.068423", "maxCostUsd": "0.068423",
                                                     "maxDurationS": 3600, "resources": {}}})
+
+    async def get_task(self, tid):
+        self._rec("get_task", tid)
+        return Task.from_dict(next(t for t in self.tasks if t["externalId"] == tid))
+
+    async def list_tasks(self, workspace, **kw):
+        self._rec("list_tasks", workspace, **kw)
+        return [Task.from_dict(t) for t in self.tasks]
 
     async def stop_task(self, tid, **kw): return await self._action("stop_task", "task", tid, **kw)
 

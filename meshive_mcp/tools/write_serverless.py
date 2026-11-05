@@ -217,8 +217,8 @@ null, the server ignores the filter and uploads every file."""
                                f"Submit task '{name}' ({cost} for at most {max_duration}s)?")
             submitted = await call(client.submit_task, name, script, workspace=ws, **kwargs)
         out = to_dict(submitted)
-        out["next_step"] = (f"Task {submitted.task.task_id} is queued. Poll the tasks tool for status (queued → running → "
-                            "succeeded/failed) and use logs with task=... for its output.")
+        out["next_step"] = (f"Task {submitted.task.task_id} is queued. Poll the tasks tool for status (queued → scheduling → "
+                            "running → succeeded/failed) and use logs with task=... for its output.")
         return out
 
     submit_task.__doc__ = (submit_task.__doc__ or "") + "\n" + _TASK_DOC

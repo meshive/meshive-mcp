@@ -276,7 +276,12 @@ def test_a_workspace_that_is_not_empty_does_not_say_system_pods_or_kept_volumes_
 def test_a_workspace_that_is_not_empty_says_how_long_each_wait_is_and_when_to_stop():
     step = _not_empty_step()
     assert "usually clears within minutes, at most about 30 minutes" in step
-    assert "about 30 minutes after the task ended or when its upload finishes" in step
+    # The same timings the docs give: most outputs are in Assets seconds after the upload, 30 minutes is the rare case.
+    assert ("usually within seconds after the upload finishes, for some runs about 2 minutes after the last file, "
+            "and in rare cases up to about 30 minutes after the task ended") in step
+    assert "a few minutes after the task's outputs show as saved, empty or discarded" in step
+    # A server without `outputs` gives no phase to wait for, so there's a time to stop at too.
+    assert "where the tasks tool shows no `outputs`, about 30 minutes after the task ended" in step
     assert "stop checking and tell the user" in step and "look at the task in the console or contact support" in step
     # Payouts follow a daily job, so they get their own sentence, outside the "check again shortly" one.
     assert "`pending_payouts` clears once the earnings are paid out, usually within a day" in step

@@ -338,6 +338,7 @@ async def test_task_tools(mcp_client, fake, with_key):
     done = _payload(await mcp_client.call_tool("submit_task", {"name": "t", "script": "print(1)", "image": "img",
                                                                "gpu_model": "RTX 3060", "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["task"]["task_id"] == "task_1" and "logs with task=" in done["next_step"]
+    assert "queued → scheduling → running" in done["next_step"]
     body = _payload(await mcp_client.call_tool("stop_task", {"operation_id": "test-operation-0001", "task": "task_1"}))
     assert body["resource"] == "task"
 

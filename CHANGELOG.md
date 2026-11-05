@@ -62,6 +62,14 @@ tools.
   page, under Activity.
 - `billing_history` takes `kind="payouts"`: the payouts of host earnings, with a `summary` of the payout account and of
   the earnings waiting to be paid out. Setting up the payout account stays in the console.
+- `tasks` shows each task's `outputs`: where saving its `/outputs` files stands, as the console shows it, with a
+  one-line `summary` for the user. It has the `phase` (`running`, then `preparing`, `uploading`, `retrying` or
+  `registering` while saving, then `saved`, `partially_saved`, `not_saved`, `discarded` or `empty`), the progress
+  (`files_so_far` of `files_to_upload`, bytes), the asset it was saved as, the files over the file limit and when it is
+  expected in Assets. With `outputs`, the raw `output_upload_state`, the upload counters and `outputs_purged_at` are
+  left out: on a task without a tracked upload step the counters read "skipped, 0 files" for files that were saved,
+  and `outputs_purged_at` (when the task's log was deleted) read as if the outputs were gone. A server without
+  `outputs` still gets the raw fields.
 
 ### Changed
 
@@ -83,6 +91,18 @@ tools.
   `WriteError` and the like), now comes with `operation_lookup`, the method and path to pass to `operation_status`
   with its `operation_id`, as a timed-out write already did. Before, the agent had to guess them. The `meshive` SDK
   1.8 attaches them to these errors.
+- From a server without `outputs`, a finished task whose files are saved without a separate upload step after the
+  run reports `output_upload_state` `"skipped"` (null on older tasks) with 0 upload files, even when it saved files,
+  and agents told users nothing was saved. `tasks` now adds an `outputs_note` to such a task's detail, and once to a
+  list that has one: check the saved files with `download_links(task=...)` (an empty list means none are kept: none
+  were saved, or they were deleted since), and expect the asset in Assets about 30 minutes after the task ends.
+- `delete_workspace`'s `task_outputs` blocker gives the current timings: outputs are usually in Assets within
+  seconds after the upload finishes, for some runs about 2 minutes after the last file, and in rare cases up to about
+  30 minutes after the task ended. Before, it gave 30 minutes as the usual wait. The agent now stops checking a few
+  minutes after the task's outputs show as saved, empty or discarded, or, where `tasks` shows no `outputs`, about 30
+  minutes after the task ended.
+- The `tasks` description lists every status (`scheduling`, `pulling`, `fetching`, `timed_out` and `stopped` were
+  missing) and the usual order, and `submit_task`'s next step now reads queued → scheduling → running.
 
 ## v1.7.0
 
