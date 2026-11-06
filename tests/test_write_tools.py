@@ -92,7 +92,7 @@ POD_ARG_DESCRIPTIONS = {
     "workspace": "workspaces tool", "template_id": "templates tool", "gpu_model": "gpus tool",
     "cpu_line": "CPU pods only", "vcpu": "sizes the console offers", "ram_gb": "in GiB", "volumes": '"mount_path"',
     "local_volumes": '"size_gb"', "env": "leaves blank need a value", "secret_keys": "secret", "ports": '"external"',
-    "template_ports": '"new_port"', "command": "4096 characters", "region": "ignored",
+    "template_ports": '"new_port"', "command": "32,000 characters", "region": "ignored",
     "max_price_per_hour": "caps the final COMPUTE hourly rate", "input_assets": '"strip_prefix": ""',
     "watched_folders": '"include_existing"', "watched_template_folders": "moves an output folder",
     "harvest_destination": '{"mode": "user_s3", "credential_id": n}', "model_set": "`selectable`",

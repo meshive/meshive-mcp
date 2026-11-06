@@ -59,7 +59,7 @@ _TemplatePorts = Annotated[list[dict[str, Any]] | None, Field(description=(
     '"new_port": 8189, "external": false}], where `port` is the template\'s port and "name" (rename), "new_port" '
     '(renumber) and "external" (true = exposed over HTTPS, false = internal only) are optional. Template ports can\'t '
     "be removed; use `ports` to open new ones."))]
-_Command = Annotated[str | None, Field(description="Overrides the start command (at most 4096 characters).")]
+_Command = Annotated[str | None, Field(description="Overrides the start command (at most 32,000 characters).")]
 _Region = Annotated[str | None, Field(description="Accepted for compatibility and ignored.")]
 _MaxPricePerHour = Annotated[float | None, Field(description=(
     "Checked against the estimate (compute plus new local_volumes) before creating, and caps the final COMPUTE "
