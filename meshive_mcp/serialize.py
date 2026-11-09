@@ -21,10 +21,18 @@ _DROP = {"raw"}
 # the server sends paid = balance, bonus = 0, and the SDK keeps the fields only for backward compatibility. Sending them makes the model explain a split that no longer exists.
 #
 # One-time SSH logins never go out through to_dict: ssh_access and connect_storage put the command and password into their
-# own response, once, and the browser-terminal URL (which carries the password) is never sent.
+# own response, once, and the browser-terminal URL (which carries the password) is never sent. Machine logins and
+# install commands likewise go out only in the confirmed answer of machine_credentials and host_install_command.
 _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"},
                                        "SshAccess": {"password", "web_url"},
-                                       "StorageConnection": {"ssh"}}
+                                       "StorageConnection": {"ssh"},
+                                       "SshCredentials": {"password"},
+                                       "IpmiCredentials": {"password"},
+                                       "GrafanaCredentials": {"password"},
+                                       "InstallCommand": {"command"}}
+# A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
+# with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
+_KEEP_REPLAYED_FALSE = {"ActivityEvent"}
 
 # Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
 # current_price_per_hour is the rate before an edit (pod and storage update estimates).
@@ -36,11 +44,14 @@ _HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "r
 # → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {
     "Machine": {"earning_hourly"},                    # the console's host screen shows earnings /hr with 2 decimals too
+    "MachineDetail": {"earning_hourly"},
     "WorkspaceDetail": {"weekly_avg_daily_cost"},
     "DailyCost": {"pod", "storage", "serverless", "task", "asset"},
     "Credit": {"balance", "auto_recharge_threshold", "auto_recharge_amount"},
     "CreditHistoryEntry": {"amount"},
     "Earnings": {"current_hourly", "daily", "accumulated_until_payout"},
+    "Payout": {"amount"},
+    "PayoutAccount": {"pending_amount", "minimum_payout"},
     "Task": {"cost_so_far", "total_cost"},
     "AssetStorage": {"price_per_gb_month", "estimated_monthly_cost"},
     "StorageEstimate": {"price_per_gb_month"},
@@ -79,6 +90,8 @@ def to_dict(obj: Any) -> Any:
             if f.name in _DROP or f.name in drop:
                 continue
             value = getattr(obj, f.name)
+            if f.name == "replayed" and value is not True and cls not in _KEEP_REPLAYED_FALSE:
+                continue
             out[f.name] = to_dict(value)
             if f.name in hourly_fields:
                 out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)

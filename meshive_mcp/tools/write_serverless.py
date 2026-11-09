@@ -52,7 +52,8 @@ def register(server: MCPServer) -> None:
                              context_length: int | None = None, operation_id: str | None = None) -> dict[str, Any]:
         """Register a Hugging Face model for serving and return its `registration_id` for deploy_serving. It costs nothing:
         the model downloads only when deployed. Run detect_model first; registering the same repo again returns the
-        existing registration. `framework` is vllm (default) or sglang; `hf_token_id` (from source_credentials) is for private repos."""
+        existing registration. Leave `framework` out: text models run on vllm, and sglang is refused. `hf_token_id`
+        (from source_credentials) is for private repos."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -216,8 +217,8 @@ null, the server ignores the filter and uploads every file."""
                                f"Submit task '{name}' ({cost} for at most {max_duration}s)?")
             submitted = await call(client.submit_task, name, script, workspace=ws, **kwargs)
         out = to_dict(submitted)
-        out["next_step"] = (f"Task {submitted.task.task_id} is queued. Poll the tasks tool for status (queued → running → "
-                            "succeeded/failed) and use logs with task=... for its output.")
+        out["next_step"] = (f"Task {submitted.task.task_id} is queued. Poll the tasks tool for status (queued → scheduling → "
+                            "running → succeeded/failed) and use logs with task=... for its output.")
         return out
 
     submit_task.__doc__ = (submit_task.__doc__ or "") + "\n" + _TASK_DOC

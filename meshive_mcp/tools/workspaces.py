@@ -89,7 +89,7 @@ def register(server: MCPServer) -> None:
         if not name:
             raise invalid_argument("`name` is required — pass the workspace's new name.")
         async with meshive_client(ctx) as client:
-            ws = await call(resolve_target, client, workspace, confirm=confirm)
+            ws = await resolve_target(client, workspace, confirm=confirm)
             if not confirm:
                 est = await call(client.estimate_workspace_update, ws, name=name)
                 return _preview_by_id("update_workspace", ws, to_dict(est),
@@ -114,7 +114,7 @@ def register(server: MCPServer) -> None:
         after the user agreed (a label is refused there). Deletion runs in the background: the workspace leaves the list
         within a moment, and its name stays taken for a while."""
         async with meshive_client(ctx) as client:
-            ws = await call(resolve_target, client, workspace, confirm=confirm)
+            ws = await resolve_target(client, workspace, confirm=confirm)
             if not confirm:
                 check = await call(client.check_workspace_delete, ws)
                 if not check.deletable:

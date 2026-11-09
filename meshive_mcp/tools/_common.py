@@ -23,17 +23,32 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # called again with the placement it names and allow_data_loss=true once the user agrees, an edit refused for a
 # move, local storage or watched folders is called again with the argument the user agreed to, a taken name is
 # checked against the list or changed, and a refused workspace delete is checked again without confirm or left alone.
+# Host refusals are fixed and asked about again (new times, a recipient from the machine's clients, the reason the
+# machine can't be listed, the window's state), waited out (a port check), or not retried (a removal in progress, a
+# login the machine doesn't have).
 _OWN_RETRY_ADVICE_CODES = {"name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
                            "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
-                           "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable"}
+                           "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable",
+                           "insufficient_notice", "maintenance_overlap", "maintenance_state", "recipient_not_allowed",
+                           "message_rejected", "listing_refused", "port_check_cooldown", "delete_in_progress",
+                           "credentials_not_available"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
-# SDK methods that take an Idempotency-Key. connect_storage and ssh_access are left out on purpose: their responses carry
-# a one-time password, which the server must not keep as a replayable operation record.
+# SDK methods that take an Idempotency-Key: the server keeps an operation record for them, so a retry with the same
+# operation_id gets the first answer back and operation_status can look the operation up.
 _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
            "update_storage", "delete_storage", "deploy_serving", "scale_serving", "pause_serving", "delete_serving",
            "submit_task", "stop_task", "register_model", "delete_model", "import_asset", "set_watched_folders",
-           "create_workspace", "update_workspace", "delete_workspace"}
+           "create_workspace", "update_workspace", "delete_workspace",
+           "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
+           "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
+           "send_host_message", "mark_host_messages_read"}
+# SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
+# a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
+# left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
+# keep as a replayable record. retry_port_check has no operation record either; its cooldown keeps it from repeating.
+_UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "issue_install_command",
+               "retry_port_check"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -57,6 +72,10 @@ CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHi
 # Stop/start/restart/scale/pause: repeating converges to the same state.
 MUTATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
+# Reveal a secret or issue something anew: every call reveals a login again or issues a new one-time password or
+# install command, so repeating it does more than the first call (machine logins and install commands also email the
+# account owner every time).
+REVEAL = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
 
 CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only then call this tool again with the same "
                 "arguments and confirm=true. Never set confirm=true on your own.")
@@ -77,11 +96,32 @@ def price_change(est: Any) -> str:
             f" Its price goes from {before}/hour to {after}/hour.")
 
 
-def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations):
+_RECORDED_NOTE = ("\nEvery write requires operation_id. Reuse the ID returned by the preview, or generate a UUID "
+                  "before the first call. Keep it for confirmation and all retries; a new ID means a new operation. "
+                  "After a timeout, check operation_status and resource state before retrying.")
+_UNRECORDED_NOTE = ("\nThe server keeps no operation record of this call, so operation_status can't look it up and a "
+                    "repeated {}call runs again.")
+_RECORDED_RETRY = (" Check the resource/operation state first. Any retry MUST reuse this operation_id and the same "
+                   "arguments; never submit a new operation for an unknown outcome.")
+_UNRECORDED_RETRY = (" The server keeps no operation record of this call, so a retry runs it again: retry only if the "
+                     "user still wants it.")
+# Prepended to next_step when the server answered a write with its stored answer to an earlier request with the same
+# operation_id: the write was not done again.
+_REPLAYED_STEP = ("The server had already done this write for this operation_id (an earlier call, or an automatic "
+                  "retry of this one) and returned that answer; nothing was done again. Use a new operation_id only "
+                  "for a new action.")
+
+
+def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
+                 operation_record: bool = True):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
     (2) a ToolError raised by the tool as an `isError` result whose body is **pure JSON with no prefix**. The SDK's default prepends "Error executing tool <name>: ...",
     but the error body must be the `{code, message, next_step}` JSON itself — the model has to parse it
     and follow `next_step`, so there can't be a prefix.
+
+    operation_record=False marks a write whose SDK call is in `_UNRECORDED`: its description and retry advice say
+    that a repeated call runs again instead of pointing at operation_status. A tool that sends a recorded write too
+    keeps the default; its failed unrecorded call still gets the unrecorded retry advice.
     """
     def decorator(fn: Callable[..., Awaitable[dict[str, Any]]]):
         @functools.wraps(fn)
@@ -109,8 +149,9 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                     if "lookup" in operation:
                         result["operation_lookup"] = operation["lookup"]
                     if result.get("code") not in _OWN_RETRY_ADVICE_CODES:
+                        unrecorded = not operation_record or operation.get("unrecorded")
                         result["next_step"] = (result.get("next_step", "") +
-                            " Check the resource/operation state first. Any retry MUST reuse this operation_id and the same arguments; never submit a new operation for an unknown outcome.")
+                                               (_UNRECORDED_RETRY if unrecorded else _RECORDED_RETRY))
                 return _bounded_result(result, is_error=True)
             finally:
                 if token is not None:
@@ -119,15 +160,21 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                 result["operation_id"] = op
                 if "lookup" in operation:
                     result["operation_lookup"] = operation["lookup"]
+                if operation.get("replayed"):
+                    result["replayed"] = True
+                    result["next_step"] = " ".join(filter(None, (_REPLAYED_STEP, result.get("next_step"))))
                 if result.get("confirmed") is False:
-                    result["next_step"] += " Reuse this operation_id for confirmation and every retry."
+                    result["next_step"] += (" Reuse this operation_id for confirmation and every retry."
+                                            if operation_record else " Reuse this operation_id for the confirmation.")
             return _bounded_result(result)
 
         if not annotations.read_only_hint:
-            wrapper.__doc__ = (wrapper.__doc__ or "") + (
-                "\nEvery write requires operation_id. Reuse the ID returned by the preview, or generate a UUID before "
-                "the first call. Keep it for confirmation and all retries; a new ID means a new operation. "
-                "After a timeout, check operation_status and resource state before retrying.")
+            if operation_record:
+                note = _RECORDED_NOTE
+            else:
+                takes_confirm = "confirm" in inspect.signature(fn).parameters
+                note = _UNRECORDED_NOTE.format("confirmed " if takes_confirm else "")
+            wrapper.__doc__ = (wrapper.__doc__ or "") + note
         # Several tools share the common annotation constants, so the title goes only on the copy.
         server.tool(name=name, title=title, annotations=annotations.model_copy(update={"title": title}))(wrapper)
         return fn
@@ -137,7 +184,13 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
 
 async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
     """Wrap one SDK call and turn exceptions into a ToolError for the model."""
-    is_write = getattr(fn, "__name__", "") in _WRITES
+    name = getattr(fn, "__name__", "")
+    is_write = name in _WRITES
+    if name in _UNRECORDED:
+        # A failure of this call gets the "a retry runs it again" advice, also in a tool whose other call is recorded.
+        operation = _operation.get()
+        if operation is not None:
+            operation["unrecorded"] = True
     try:
         if is_write:
             operation = _operation.get()
@@ -150,6 +203,8 @@ async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         operation = _operation.get()
         if is_write and operation is not None and raw.get("operationMethod"):
             operation["lookup"] = {"method": raw["operationMethod"], "path": raw["operationPath"]}
+        if is_write and operation is not None and getattr(result, "replayed", False) is True:
+            operation["replayed"] = True
         return result
     except Exception as exc:  # noqa: BLE001 — exceptions translate doesn't know are re-raised
         operation = _operation.get()

@@ -3,6 +3,167 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.8.0
+
+An agent can now look after the machines a user hosts on Meshive, as the console's host screens do: maintenance
+windows, listing, setup retries, removal, messages with the workspaces using a machine, machine logins, install
+commands for new machines and payouts. A new `activity` tool shows what the account's API keys did, this agent
+included. Built on the `meshive` Python SDK 1.8. Existing tool names and arguments are unchanged; there are 12 new
+tools.
+
+### New
+
+- `machines` with a `machine` now also shows `clients` (other users' workspaces using it, with their pods and storage
+  volumes), `maintenance` (every window with its `id` and `status`), the `schedules` summary, the `boot_report` and
+  `network_warnings` diagnostics, and `fee`. Listed machines carry `unread_messages`.
+- `machine_history` shows a machine's downtime events (at most 20, from the last 90 days by default) or its latest
+  stress test with the measured samples. Its description gives the samples' units: utilization in percent,
+  temperatures in degrees Celsius, CPU clock in MHz and GPU throughput in TFLOPS.
+- `host_messages` lists the messages between the host and the workspaces using their machines. Their text is written
+  by other people, so the tool description, its responses and the server instructions tell the agent to treat it as
+  data. Reading marks nothing read; `mark_host_messages_read` does, without `confirm`.
+- `send_host_message` sends a message to a workspace that uses the machine, or to every one of them (`to="all"`), and
+  they are notified by email. It takes `confirm`: the preview names the recipients and sends nothing. Other
+  workspaces are refused with `recipient_not_allowed`.
+- `schedule_maintenance` schedules a maintenance window. Its preview runs the server's checks and says how many
+  workspaces are emailed, that their pods and volumes on the machine aren't billed while the window is open, and the
+  effect on uptime. A regular window needs 48 hours' notice (`insufficient_notice`). The agent is told to offer
+  emergency maintenance, which counts as downtime while client workloads run, only as the user's choice. A window that
+  overlaps another is `maintenance_overlap`.
+- `maintenance_window` changes one window with `action` edit, extend, end or cancel. Each takes `confirm`. The
+  preview says what the action does (for example, that ending a window bills pods again and leaves the machine
+  unlisted) and refuses an action that doesn't fit the window's status (`maintenance_state`). As in the console, a
+  window can't be started by hand: it starts on its own within about a minute of its start time, and the tool says so
+  for a window whose start time has passed.
+- `set_machine_listing` lists (`listed=true`) or unlists (`listed=false`) a machine, through the SDK's
+  `set_machine_listing`. Listing needs no `confirm` and is checked first: a machine that can't be listed yet is
+  refused with the console's reason (`listing_refused`). Unlisting takes `confirm`, and its preview says how many pods
+  keep running.
+- `retry_machine_setup` retries a failed setup step (`check="setup"`; a step the machine's agent runs reboots the
+  machine first) or the port check (`check="ports"`, at most about once every 30 seconds, else
+  `port_check_cooldown`). Neither takes `confirm`, as in the console. The server keeps no operation record of a port
+  check, so calling again checks again.
+- `delete_machine` removes a machine, which can't be undone. Its preview says whether removal starts now or after a
+  grace period for the other users' pods and volumes on it, how many there are and what happens to them. It takes
+  `confirm` and the exact machine id. A machine already being removed is `delete_in_progress`.
+- `machine_credentials` reveals a machine's SSH, IPMI or Grafana login (the SDK's `reveal_machine_credentials`), and
+  `host_install_command` issues a command that adds a new machine to the account, valid for about 10 minutes (the
+  SDK's `issue_install_command`). Both take `confirm` and their previews carry no secret. The server keeps no
+  operation record of either, so every confirmed call reveals or issues again and emails the account owner again;
+  both are annotated as not idempotent. A login the machine doesn't have is `credentials_not_available`.
+- `activity` shows what the account's API keys did, newest first, the key this agent uses included. With
+  `kind="actions"` it lists each change, check or estimate, machine login reveal and install command with its result
+  (`accepted`, `refused` with the reason, or `error`); `operation_id` is set only for writes the server deduplicates
+  (null otherwise). With `kind="reads"` it lists read requests as hourly counts. Request contents are never recorded.
+  `key`, `since` and `until` narrow it (the last 30 days by default, at most 180 days per call, which is how long
+  activity is kept), and for actions `outcome` keeps one result and `action` keeps one action or every action under a
+  prefix such as `machine.`; it is paged. Every result carries a `note`: the source, ids, workspace and operation_id
+  are what the calling client sent, so the agent treats them as data. The console shows the same on the API keys
+  page, under Activity.
+- `billing_history` takes `kind="payouts"`: the payouts of host earnings, with a `summary` of the payout account and of
+  the earnings waiting to be paid out. Setting up the payout account stays in the console.
+- `tasks` shows each task's `outputs`: where saving its `/outputs` files stands, as the console shows it, with a
+  one-line `summary` for the user. It has the `phase` (`running`, then `preparing`, `uploading`, `retrying` or
+  `registering` while saving, then `saved`, `partially_saved`, `not_saved`, `discarded` or `empty`), the progress
+  (`files_so_far` of `files_to_upload`, bytes), the asset it was saved as, the files over the file limit and when it is
+  expected in Assets. With `outputs`, the raw `output_upload_state`, the upload counters and `outputs_purged_at` are
+  left out: on a task without a tracked upload step the counters read "skipped, 0 files" for files that were saved,
+  and `outputs_purged_at` (when the task's log was deleted) read as if the outputs were gone. A server without
+  `outputs` still gets the raw fields.
+
+### Changed
+
+- The server instructions now list `host_messages`, the host messages and maintenance notes in `workspaces`, and the
+  client-sent fields of `activity` as text from other people, and name the machine logins and install commands among
+  the secrets. Instead of listing the tools that take `confirm`, they say that every tool with a `confirm` argument
+  needs it, with the existing exceptions, listing a machine, and `set_watched_folders` when it only removes or turns
+  off folders. They are shorter, so the safety rules, prices and sizes all fit in the first 4096 characters that
+  Claude Code keeps. The hint about `write_scope_required` moved to the authentication rules.
+- `ssh_access` and `connect_storage` now say that the server keeps no operation record of them, so a repeated call
+  runs again and `operation_status` can't look it up; a failed call's `next_step` says the same instead of asking to
+  retry with the same `operation_id`. Other writes keep the operation-record wording.
+- `register_model` no longer offers `framework="sglang"`. Text models run on vLLM, and the server refuses sglang with
+  `invalid_request` and a message that says so. Leave `framework` out.
+- A write whose `operation_id` the server has already answered now says so. The server returns the first request's
+  answer and does nothing new; the result used to look like a fresh success. It now carries `"replayed": true`, and
+  its `next_step` starts by saying that the server had already done this write for this operation_id (an earlier
+  call, or an automatic retry of this one) and that only a new action needs a new operation_id. Other results are
+  unchanged. It needs a `meshive` SDK whose write results carry `replayed`; with an older SDK the result looks as
+  before.
+- `estimate_pod` and `create_pod` describe the format of each argument in that argument's own description (the
+  input schema) instead of the tool description. The tool descriptions were longer than the 4096 characters Claude
+  Code keeps, so the end of them, including the `operation_id` rules of `create_pod`, was cut off. Every tool
+  description now fits. The arguments, their types and their defaults are unchanged.
+- `ssh_access` and `connect_storage` are annotated as not idempotent, like `machine_credentials` and
+  `host_install_command`: every call (for `connect_storage`, every confirmed call) issues a new one-time SSH
+  password.
+
+### Fixed
+
+- A write cut off by the API closing the connection without answering, or by the connection breaking (`ReadError`,
+  `WriteError` and the like), now comes with `operation_lookup`, the method and path to pass to `operation_status`
+  with its `operation_id`, as a timed-out write already did. Before, the agent had to guess them. The `meshive` SDK
+  1.8 attaches them to these errors.
+- From a server without `outputs`, a finished task whose files are saved without a separate upload step after the
+  run reports `output_upload_state` `"skipped"` (null on older tasks) with 0 upload files, even when it saved files,
+  and agents told users nothing was saved. `tasks` now adds an `outputs_note` to such a task's detail, and once to a
+  list that has one: check the saved files with `download_links(task=...)` (an empty list means none are kept: none
+  were saved, or they were deleted since), and expect the asset in Assets about 30 minutes after the task ends.
+- `delete_workspace`'s `task_outputs` blocker gives the current timings: outputs are usually in Assets within
+  seconds after the upload finishes, for some runs about 2 minutes after the last file, and in rare cases up to about
+  30 minutes after the task ended. Before, it gave 30 minutes as the usual wait. The agent now stops checking a few
+  minutes after the task's outputs show as saved, empty or discarded, or, where `tasks` shows no `outputs`, about 30
+  minutes after the task ended.
+- The `tasks` description lists every status (`scheduling`, `pulling`, `fetching`, `timed_out` and `stopped` were
+  missing) and the usual order, and `submit_task`'s next step now reads queued → scheduling → running.
+
+## v1.7.0
+
+Requests are limited in what they can cost the server, tool calls that use the API take much less CPU, and a
+rejected API key gets its error code from every tool. Built on the `meshive` Python SDK 1.7. Tool names and
+arguments are unchanged.
+
+### Changed
+
+- Requests over 1 MiB are refused with 413 (before: 4 MiB). A 256 KiB task script still fits.
+- A body that isn't UTF-8 JSON is refused with 400, and so is a request with more than 8192 JSON values or nested more
+  than 32 levels deep.
+- A request with `inputResponses` is refused with 400: no tool asks for input.
+- A tool call with more than 4096 argument values, counting a list sent as a JSON string, is refused with
+  `invalid_argument`.
+- 32 requests are handled at once, and 3 requests can be open with a body over 64 KiB or of unstated size. Others get
+  503 with `Retry-After`.
+- At the default log level, refused tool calls are no longer logged, and the server's own log lines are cut to their
+  two ends.
+- The HTTP server now runs with the `httptools` parser. A request's head is limited to 16 KiB, as it was before.
+- The HTTP server raises its open file limit to the hard limit when it starts. At the common default of 1024, open
+  connections could stop it from accepting new ones, health checks included.
+- `gpus` without an API key answers from one copy of the public price list shared by all callers, instead of asking
+  the API on every call. A call refreshes a copy over a minute old, and a copy up to ten minutes old is used while the
+  refresh is out or if it failed. Without such a copy, the call waits for the refresh, and gets
+  `temporarily_unavailable` if it fails or if one failed in the last few seconds. A refresh that takes longer than
+  the request timeout as a whole counts as failed.
+- Tool calls that use the API take much less CPU. The `meshive` SDK 1.7 no longer loads the CA bundle for each
+  client, and `sniffio` is now a dependency: without it, the HTTP library looks for it on every request.
+
+### Fixed
+
+- When the workspace was omitted, given by label or `all`, or a pod was given by name, most tools answered a rejected
+  API key (expired, revoked or made up) with a bare `Error executing tool <name>` and no code, and the server logged a
+  traceback for each call. Those lookups now report errors like the rest of the call: `invalid_api_key`, and likewise
+  `rate_limited`, `temporarily_unavailable` or `unknown_workspace`.
+- A call cut off by the API closing the connection without answering, as happens while one of its workers restarts,
+  came back as a bare `Error executing tool <name>` with a logged traceback. It now gets `temporarily_unavailable`;
+  as after a timeout, a write may have been applied, so the next step says to check it before retrying.
+- CPU tasks can now take `max_price_per_hour` (the API quotes them). When the price rises above the cap between the
+  estimate and placement, `submit_task` now returns `price_changed` with the new `pricePerHourUsd`, and the agent is
+  told not to raise the cap without the user's consent. Before, this came back as a generic `conflict`.
+
+### Self-hosting
+
+- Without request buffering, slow uploads reach the server as they arrive, so limit concurrent requests per client at
+  the proxy.
+
 ## v1.6.0
 
 An agent can now create a workspace for a user who has none or who wants another, rename one, and delete an empty one.
@@ -43,20 +204,20 @@ Built on the `meshive` Python SDK 1.6. Tool names and existing arguments are unc
 
 ## v1.5.1
 
-Connecting no longer takes 25 seconds, and the server now works on Windows PCs running Avast or Norton with HTTPS
-scanning on. Tool names and arguments are unchanged.
+Connecting no longer takes 25 seconds, and AI agents on Windows PCs running Norton with HTTPS scanning on can now
+connect. Tool names and arguments are unchanged.
 
 ### Fixed
 
 - Claude Code took about 25 seconds to connect. The server no longer offers `subscriptions/listen`: its tools don't
-  change while it runs, so `server/discover` now reports `listChanged: false` and clients go straight to `tools/list`.
+  change while it runs, so `server/discover` now reports `listChanged: false` and clients don't wait on that stream.
 - Clients could not connect, or lost short tool calls, with errors such as `InvalidHTTPResponse` or
-  `Invalid character in chunk size`. Avast and Norton rewrite MCP responses that carry a `Content-Length`, so responses
-  are now sent chunked.
+  `Invalid character in chunk size`. Norton's HTTPS scanning (and Avast's, by user reports) breaks MCP responses that
+  aren't chunked, so responses are now sent chunked.
 
 ### Self-hosting
 
-- Behind a reverse proxy, keep response buffering off: it adds the `Content-Length` back to short responses.
+- Behind a reverse proxy, keep response buffering off: it can add a `Content-Length` back to short responses.
 
 ## v1.5.0
 

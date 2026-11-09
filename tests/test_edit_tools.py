@@ -423,17 +423,19 @@ async def test_model_set_not_for_template_lists_the_available_ones(mcp_client, f
 async def test_pod_args_doc_describes_model_set(mcp_client, fake, with_key):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("estimate_pod", "create_pod"):
-        assert "model_set" in tools[name].input_schema["properties"], name
-        desc = tools[name].description
-        assert "`model_set` adds one model set" in desc and "model_set_unavailable" in desc, name
+        props = tools[name].input_schema["properties"]
+        assert "model_set" in props, name
+        assert "`model_set` adds one model set" in tools[name].description, name
+        assert "model_set_unavailable" in props["model_set"]["description"], name
 
 
 async def test_server_instructions_cover_editing_connect_and_model_sets():
     from meshive_mcp.server import INSTRUCTIONS
 
-    for phrase in ("update_pod, create_storage, update_storage, connect_storage", "node_migration_required",
+    # update_pod, update_storage and connect_storage take `confirm`, which the instructions cover for every tool.
+    for phrase in ("every tool with a `confirm` argument needs it", "node_migration_required",
                    "allow_node_migration=true", "it never shrinks", "pass one `slug` as model_set",
-                   "`ssh_access` and `connect_storage` return passwords", "model set names"):
+                   "`ssh_access`, `connect_storage` and `machine_credentials` return passwords", "model set names"):
         assert phrase in INSTRUCTIONS, phrase
 
 

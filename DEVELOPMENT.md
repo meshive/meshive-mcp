@@ -41,15 +41,23 @@ client, so they need no network and no API key.
   the agent shows it to the user and calls again with `confirm=true`.
 - **Stable operation IDs.** Every write takes `operation_id`. A preview returns one, and the confirmed call and
   every retry reuse it; it becomes the SDK's `Idempotency-Key`. A write is only sent when the call supplies an
-  `operation_id`. `operation_status` reads an operation's acceptance record without resubmitting it.
+  `operation_id`. `operation_status` reads an operation's acceptance record without resubmitting it. The SDK methods
+  that get it are listed in `_WRITES` (`meshive_mcp/tools/_common.py`); the writes the server keeps no record of are
+  in `_UNRECORDED`. A tool whose only write is unrecorded is registered with `operation_record=False`, so its
+  description and retry advice say that a repeated call runs again; one that reveals a secret or issues a command
+  anew on every call uses the `REVEAL` annotation (not idempotent).
 - **Untrusted text stays data.** Logs, labels, scripts and error text can come from a user's container or from other
   people. Return them as data, and keep the warning in the tool description, in the response and in the server
   instructions.
 - **Secrets stay hidden.** Connect passwords are hidden in every response unless the user asks for one pod with
-  `show_secrets=true`. Tools that return a one-time SSH password (`ssh_access`, `connect_storage`) send no
-  `Idempotency-Key`, so the API never keeps a replayable copy of the response, and they never return the
-  browser-terminal URL, which carries the password.
+  `show_secrets=true`. Tools that return a password or an install command (`ssh_access`, `connect_storage`,
+  `machine_credentials`, `host_install_command`) send no `Idempotency-Key` of their own, so the API never keeps a
+  replayable copy of the response; `ssh_access` and `connect_storage` never return the browser-terminal URL, which
+  carries the password, and previews never carry a secret.
 - Responses are capped at 1 MiB and lists are paged.
+- **Descriptions fit the client's cut.** Claude Code keeps the first 4096 characters of a tool description, so every
+  description, with the notes `meshive_tool` appends, stays under that (`tests/test_tools.py` checks it). Put an
+  argument's format in its own description (`Annotated[..., Field(description=...)]`), which goes in the input schema.
 - When adding or removing a tool, update the tool sets in `tests/test_tools.py`, the tool table in `README.md` and
   `CHANGELOG.md`.
 

@@ -41,6 +41,14 @@ def test_not_found_and_network():
     assert _body(httpx.ConnectError("boom"))["code"] == "temporarily_unavailable"
 
 
+def test_a_connection_the_api_closed_without_answering_is_temporarily_unavailable():
+    b = _body(httpx.RemoteProtocolError("Server disconnected without sending a response."))
+    assert b["code"] == "temporarily_unavailable" and b["retry_after"] == 15 and "operation_status" in b["next_step"]
+    # A request this side couldn't form is a bug, not the API being away.
+    with pytest.raises(httpx.LocalProtocolError):
+        translate(httpx.LocalProtocolError("bad header"))
+
+
 def test_unknown_exception_is_reraised():
     with pytest.raises(KeyError):
         translate(KeyError("bug"))
@@ -163,6 +171,7 @@ def test_edit_and_model_set_titles_map_to_codes(title, code, hint):
     ("Resource values need confirmation", "resource_values_need_confirmation", "`ram_gb`"),
     ("Operation in progress", "operation_in_progress", "Wait until"),
     ("Price Exceeds Cap", "price_exceeds_cap", "cap"),
+    ("Price Changed", "price_changed", "without their explicit consent"),
     ("Name Taken", "name_taken", "another name"),
 ])
 def test_edit_conflicts_map_to_codes(title, code, hint):
@@ -267,7 +276,12 @@ def test_a_workspace_that_is_not_empty_does_not_say_system_pods_or_kept_volumes_
 def test_a_workspace_that_is_not_empty_says_how_long_each_wait_is_and_when_to_stop():
     step = _not_empty_step()
     assert "usually clears within minutes, at most about 30 minutes" in step
-    assert "about 30 minutes after the task ended or when its upload finishes" in step
+    # The same timings the docs give: most outputs are in Assets seconds after the upload, 30 minutes is the rare case.
+    assert ("usually within seconds after the upload finishes, for some runs about 2 minutes after the last file, "
+            "and in rare cases up to about 30 minutes after the task ended") in step
+    assert "a few minutes after the task's outputs show as saved, empty or discarded" in step
+    # A server without `outputs` gives no phase to wait for, so there's a time to stop at too.
+    assert "where the tasks tool shows no `outputs`, about 30 minutes after the task ended" in step
     assert "stop checking and tell the user" in step and "look at the task in the console or contact support" in step
     # Payouts follow a daily job, so they get their own sentence, outside the "check again shortly" one.
     assert "`pending_payouts` clears once the earnings are paid out, usually within a day" in step
@@ -291,3 +305,51 @@ def test_a_taken_name_covers_renaming_a_workspace():
 
     b = _body(ConflictError(409, "m", title="Name Taken", raw={"detail": {"title": "Name Taken", "message": "m"}}))
     assert "update_pod, update_storage or update_workspace `name`" in b["next_step"]
+
+
+# --- hosting -------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status,title,code", [
+    (400, "Insufficient Notice Period", "insufficient_notice"),
+    (400, "Maintenance In Progress", "maintenance_state"),
+    (400, "Maintenance Already Done", "maintenance_state"),
+    (400, "Maintenance Not Started", "maintenance_state"),
+    (400, "Not in Maintenance State", "maintenance_state"),
+    (400, "Listing Failed", "listing_refused"),
+    (400, "Unlisting Failed", "listing_refused"),
+    (400, "Not in Any Setup Stage", "not_retryable"),
+    (400, "Too Many Requests", "port_check_cooldown"),
+    (400, "Delete In Progress", "delete_in_progress"),
+    (400, "Recipient Not Allowed", "recipient_not_allowed"),
+    (400, "Message Send Failed", "message_rejected"),
+    (409, "Overlapping Maintenance Window", "maintenance_overlap"),
+    (409, "Maintenance Not Available", "maintenance_not_available"),
+    (409, "Not Retryable", "not_retryable"),
+])
+def test_host_titles_map_to_codes(status, title, code):
+    from meshive.exceptions import ConflictError
+
+    exc = (ConflictError if status == 409 else MeshiveAPIError)(
+        status, "the server's reason", title=title, raw={"detail": {"title": title, "message": "the server's reason"}})
+    b = _body(exc)
+    assert b["code"] == code and b["message"] == "the server's reason" and b["next_step"], b
+
+
+def test_host_not_found_titles():
+    b = _body(NotFoundError(404, "IPMI isn't set up for this machine.", title="Credentials Not Available"))
+    assert b["code"] == "credentials_not_available" and "IPMI" in b["message"] and "don't retry" in b["next_step"]
+    for title in ("Machine not found", "Maintenance Not Found", "Message Not Found", None):
+        assert _body(NotFoundError(404, "gone", title=title))["code"] == "not_found", title
+
+
+def test_a_rate_limit_named_too_many_requests_stays_rate_limited():
+    # Only the port check's cooldown is a 400 with this title; a 429 keeps its own waiting instructions.
+    b = _body(RateLimitError(429, "Rate limit exceeded.", title="Too Many Requests", retry_after=12.0))
+    assert b["code"] == "rate_limited" and b["retry_after"] == 12
+
+
+def test_host_refusals_carry_their_own_retry_advice():
+    from meshive_mcp.tools._common import _OWN_RETRY_ADVICE_CODES
+
+    assert {"insufficient_notice", "maintenance_overlap", "recipient_not_allowed", "message_rejected", "listing_refused",
+            "port_check_cooldown", "delete_in_progress", "maintenance_state"} <= _OWN_RETRY_ADVICE_CODES

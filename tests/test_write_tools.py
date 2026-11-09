@@ -74,12 +74,41 @@ async def test_pod_tool_descriptions_cover_the_console_rules(mcp_client, fake, w
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("estimate_pod", "create_pod"):
         desc = tools[name].description
-        assert "EXISTING network (nfs) storage" in desc and "NEW local storage" in desc, name
-        assert "at least 10 GiB" in desc and "spot" in desc and "cpus tool" in desc, name
-        assert "8 cores / 32 GiB" in desc and "`region` is accepted for compatibility and ignored" in desc, name
-        assert "`template_ports` changes the ports the template opens" in desc and "can't be removed" in desc, name
+        assert "existing network storage" in desc and "new local storage" in desc, name
+        assert "cpus tool" in desc and "8 cores / 32 GiB" in desc, name
         props = tools[name].input_schema["properties"]
         assert {"local_volumes", "cpu_line", "region", "volumes", "template_ports"} <= set(props), name
+        assert "EXISTING network (nfs) storage" in props["volumes"]["description"], name
+        local = props["local_volumes"]["description"]
+        assert "NEW local storage" in local and "at least 10 GiB" in local and "spot" in local, name
+        assert "Accepted for compatibility and ignored" in props["region"]["description"], name
+        ports = props["template_ports"]["description"]
+        assert "Changes the ports the template opens" in ports and "can't be removed" in ports, name
+
+
+# The argument formats of estimate_pod and create_pod are in each argument's own description, where clients don't cut
+# them; a phrase each one must carry.
+POD_ARG_DESCRIPTIONS = {
+    "workspace": "workspaces tool", "template_id": "templates tool", "gpu_model": "gpus tool",
+    "cpu_line": "CPU pods only", "vcpu": "sizes the console offers", "ram_gb": "in GiB", "volumes": '"mount_path"',
+    "local_volumes": '"size_gb"', "env": "leaves blank need a value", "secret_keys": "secret", "ports": '"external"',
+    "template_ports": '"new_port"', "command": "32,000 characters", "region": "ignored",
+    "max_price_per_hour": "caps the final COMPUTE hourly rate", "input_assets": '"strip_prefix": ""',
+    "watched_folders": '"include_existing"', "watched_template_folders": "moves an output folder",
+    "harvest_destination": '{"mode": "user_s3", "credential_id": n}', "model_set": "`selectable`",
+    "hf_token_id": "accept the license on the page in `gated_sources`"}
+
+
+async def test_pod_argument_formats_are_in_their_own_descriptions(mcp_client):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    for name in ("estimate_pod", "create_pod"):
+        props = tools[name].input_schema["properties"]
+        for arg, phrase in POD_ARG_DESCRIPTIONS.items():
+            assert phrase in props[arg].get("description", ""), (name, arg)
+        assert "Each argument's format is in its own description" in tools[name].description, name
+    # Both tools take the same arguments, described the same way.
+    assert tools["estimate_pod"].input_schema["properties"] == {
+        k: v for k, v in tools["create_pod"].input_schema["properties"].items() if k not in ("confirm", "operation_id")}
 
 
 async def test_template_ports_are_passed_to_estimate_and_create(mcp_client, fake, with_key):
@@ -101,8 +130,10 @@ async def test_watched_template_folders_and_strip_prefix_reach_the_sdk(mcp_clien
     """The console's create screen: template watched folders turned off, Keep structure for chosen asset files."""
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("estimate_pod", "create_pod"):
-        assert "watched_template_folders" in tools[name].input_schema["properties"], name
-        assert '"strip_prefix": ""' in tools[name].description and "Only these keys" in tools[name].description, name
+        props = tools[name].input_schema["properties"]
+        assert "watched_template_folders" in props, name
+        assets = props["input_assets"]["description"]
+        assert '"strip_prefix": ""' in assets and "Only these keys" in assets, name
     folders = {"/outputs": {"enabled": False}}
     assets = [{"asset": "asset_b", "paths": ["unet/"], "strip_prefix": ""}]
     args = {"name": "p", "template_id": 457, "watched_template_folders": folders, "input_assets": assets}
@@ -338,6 +369,7 @@ async def test_task_tools(mcp_client, fake, with_key):
     done = _payload(await mcp_client.call_tool("submit_task", {"name": "t", "script": "print(1)", "image": "img",
                                                                "gpu_model": "RTX 3060", "confirm": True, "operation_id": "test-operation-0001"}))
     assert done["task"]["task_id"] == "task_1" and "logs with task=" in done["next_step"]
+    assert "queued → scheduling → running" in done["next_step"]
     body = _payload(await mcp_client.call_tool("stop_task", {"operation_id": "test-operation-0001", "task": "task_1"}))
     assert body["resource"] == "task"
 
@@ -512,11 +544,11 @@ async def test_model_registration_tools(mcp_client, fake, with_key):
 
     # No cost, so it registers without confirm, but operation_id still goes as the idempotency key per the write convention.
     done = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
-                                                                   "framework": "sglang",
+                                                                   "framework": "vllm",
                                                                    "operation_id": "test-operation-0002"}))
     assert done["registration_id"] == 12 and "deploy_serving" in done["next_step"]
     (_, args, kw), = _calls(fake, "register_model")
-    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "sglang" and kw["idempotency_key"] == "test-operation-0002"
+    assert args == ("Qwen/Qwen3-0.6B",) and kw["framework"] == "vllm" and kw["idempotency_key"] == "test-operation-0002"
 
     prev = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12}))
     assert prev["confirmed"] is False and prev["model"]["name"] == "qwen-small" and not _calls(fake, "delete_model")
@@ -525,6 +557,19 @@ async def test_model_registration_tools(mcp_client, fake, with_key):
     gone = _payload(await mcp_client.call_tool("delete_model", {"registration_id": 12, "confirm": True,
                                                                  "operation_id": prev["operation_id"]}))
     assert gone["action"] == "delete" and _calls(fake, "delete_model")[0][1][0] == "12"
+
+
+async def test_register_model_passes_on_why_sglang_is_refused(mcp_client, fake, with_key):
+    """Text models run on vLLM. The server refuses sglang with a 400 that says so, and the agent gets that reason."""
+    message = "SGLang is no longer offered for text models. Text models are served with vLLM — omit framework or set framework='vllm'."
+    fake["setup"] = lambda inst: inst.raise_on.update(register_model=MeshiveAPIError(
+        400, message, title="SGLang Not Offered", raw={"detail": {"title": "SGLang Not Offered", "message": message}}))
+    body = _payload(await mcp_client.call_tool("register_model", {"huggingface_repo": "Qwen/Qwen3-0.6B",
+                                                                   "framework": "sglang",
+                                                                   "operation_id": "test-operation-0003"}))
+    assert body["code"] == "invalid_request" and "vLLM" in body["message"]
+    (_, _, kw), = _calls(fake, "register_model")
+    assert kw["framework"] == "sglang"
 
 
 async def test_import_asset_is_a_write_without_confirm(mcp_client, fake, with_key):
