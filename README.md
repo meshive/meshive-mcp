@@ -139,11 +139,11 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Account and billing | `account`, `activity` (what your API keys did), `billing_history` (credit, host earnings and payouts) |
 | Workspaces | `workspaces`, `create_workspace`, `update_workspace`, `delete_workspace` |
 | GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
-| Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
+| Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `run_command`, `command_status`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task` |
-| Files (Asset Hub) | `assets`, `import_asset`, `download_links`, `source_credentials` |
+| Files (Asset Hub) | `assets`, `upload_asset`, `finish_upload`, `import_asset`, `download_links`, `source_credentials` |
 | Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
 

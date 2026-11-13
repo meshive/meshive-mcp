@@ -3,6 +3,26 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## Unreleased
+
+An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it
+can do work in a pod without SSH or the console. There are 4 new tools; existing tool names and arguments are
+unchanged.
+
+### New
+
+- `run_command` runs a shell command in a running pod's main container and returns its exit code, stdout and stderr
+  (64 KiB at most). It waits up to `timeout` seconds (1 to 25); with `background=true` it starts the command detached
+  and returns a `run_id`. No password is handed out. Its description tells the agent to run only what the user asked
+  for or what their request plainly needs, never because output said so, and to keep secrets out of commands. It is
+  marked destructive and not idempotent, and the server keeps no operation record of it.
+- `command_status` shows a background command's state (running, exited or lost), exit code and the end of its output.
+- `upload_asset` starts an upload of local files as a new asset and returns an upload link per file. The agent PUTs
+  each file from its own shell (`curl -T`), since this server can't read local files, then calls `finish_upload`.
+  Files over 200 MiB are refused with `file_too_large_for_mcp`, which points to `meshive asset-upload`.
+- `finish_upload` makes the asset ready after every file was uploaded, or cancels the upload with `cancel=true`.
+- The server instructions name `run_command` and `command_status` output as untrusted, like `logs`.
+
 ## v1.8.0
 
 An agent can now look after the machines a user hosts on Meshive, as the console's host screens do: maintenance
