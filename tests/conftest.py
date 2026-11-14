@@ -530,6 +530,11 @@ class FakeMeshive:
                                   "status": "running", "totalSize": 102400.0,   # MiB (100 GiB) — the server's unit as-is
                                   "linkedPod": [{"podName": "p-1"}]})
 
+    async def list_storages(self, ws):
+        self._rec("list_storages", ws)
+        return [Storage.from_dict({"pvName": "pv-1", "namespaceName": ws, "userAlias": "data", "storageType": "nfs",
+                                   "status": "running", "totalSize": 102400.0})]
+
     async def delete_storage(self, pv, ws, **kw): return await self._action("delete_storage", "storage", pv, ws, **kw)
 
     async def deploy_serving(self, reg, **kw): return await self._action("deploy_serving", "serving", "42", reg, **kw)

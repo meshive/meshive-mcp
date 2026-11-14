@@ -16,7 +16,7 @@ from pydantic import Field
 from .. import money
 from ..client import meshive_client
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve, resolve_pod
+from ..workspace import needs_input, resolve, resolve_pod, resolve_storage
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview, price_change
 
 # What estimate_pod and create_pod say about all their arguments together. The format of each argument is in that
@@ -40,7 +40,7 @@ _Vcpu = Annotated[int | None, Field(description="vCPUs for the whole pod, one of
 _RamGb = Annotated[int | None, Field(description="RAM for the whole pod in GiB, one of the sizes the console offers.")]
 _Volumes = Annotated[list[dict[str, str]] | None, Field(description=(
     'Attaches EXISTING network (nfs) storage from the storages tool: [{"storage": pv_name, "mount_path": "/data"}]. '
-    "Existing local storage can't be attached to a new pod."))]
+    "A display name works on estimates/previews; confirm with the returned ids. Existing local storage can't be attached to a new pod."))]
 _LocalVolumes = Annotated[list[dict[str, Any]] | None, Field(description=(
     'Creates NEW local storage on the pod\'s machine together with the pod: [{"name": "scratch", "mount_path": '
     '"/scratch", "size_gb": 50}] with optional "encrypted", "usage_warning" and "usage_warning_threshold" (0-1). Each '
@@ -140,6 +140,35 @@ def _model_set(est: Any) -> dict[str, Any] | None:
     return summary if isinstance(summary, dict) else None
 
 
+async def _storage_arguments(client: Any, ws: str, args: dict[str, Any], *, confirm: bool = False) -> dict[str, Any]:
+    """Resolve existing volumes by name on a preview; confirmed calls keep the returned ids."""
+    out = dict(args)
+    if out.get("volumes") is not None:
+        volumes = []
+        for v in out["volumes"]:
+            selector = v.get("storage", v.get("pv_name"))
+            volume = dict(v)
+            if selector is not None:
+                volume["storage"] = await resolve_storage(client, ws, selector, confirm=confirm)
+                volume.pop("pv_name", None)
+            volumes.append(volume)
+        out["volumes"] = volumes
+    for key in ("detach_storages", "delete_local_storages"):
+        if out.get(key) is not None:
+            out[key] = [await resolve_storage(client, ws, s, confirm=confirm) for s in out[key]]
+    return out
+
+
+def _storage_preview(kind: str, payload: dict[str, Any], question: str, args: dict[str, Any]) -> dict[str, Any]:
+    out = preview(kind, payload, question)
+    storage_args = {k: args[k] for k in ("volumes", "detach_storages", "delete_local_storages") if args.get(k)}
+    if storage_args:
+        out["storage_arguments"] = storage_args
+        out["next_step"] += (" Use the canonical storage ids in `storage_arguments` for confirmation and every retry; "
+                             "display names can change or be reused.")
+    return out
+
+
 def _model_set_note(est: Any) -> str:
     """Sentence for the user about the model set in an estimate, or "" when there is none."""
     summary = _model_set(est)
@@ -211,6 +240,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            volumes = (await _storage_arguments(client, ws, {"volumes": volumes}))["volumes"]
             est = await call(client.estimate_pod, name, template_id, workspace=ws, **_pod_kwargs(
                 gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type, vcpu=vcpu,
                 ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes, env=env,
@@ -228,6 +258,10 @@ def register(server: MCPServer) -> None:
                             _model_set_note(est) +
                             " Create the pod only after they agree, by calling create_pod with the same arguments and "
                             "confirm=true.")
+        if volumes:
+            out["storage_arguments"] = {"volumes": volumes}
+            out["next_step"] += (" For create_pod, replace volumes with the canonical ids in `storage_arguments`; "
+                                 "keep those ids for every retry.")
         return out
 
     estimate_pod.__doc__ = (estimate_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
@@ -267,15 +301,16 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            kwargs = await _storage_arguments(client, ws, kwargs, confirm=confirm)
             if not confirm:
                 est = await call(client.estimate_pod, name, template_id, workspace=ws, **kwargs)
                 payload = {"estimate": to_dict(est), "workspace": ws, "name": name}
                 if _model_set(est) is not None:
                     payload["model_set"] = _model_set(est)
-                return preview("create_pod", payload,
+                return _storage_preview("create_pod", payload,
                                f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est)
                                + _model_set_note(est)
-                               + (_SLOW_CREATE if _model_set(est) is not None or hf_token_id is not None else ""))
+                               + (_SLOW_CREATE if _model_set(est) is not None or hf_token_id is not None else ""), kwargs)
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
         tx = created.transaction_id
@@ -390,17 +425,20 @@ def register(server: MCPServer) -> None:
                          delete_local_storages: list[str] | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a pod permanently. With confirm=false (default) it only returns what would be deleted; call again
         with confirm=true after the user agreed. Attached network storage survives; local (hostPath) volumes are deleted
-        only if listed in `delete_local_storages` by pv_name."""
+        only if listed in `delete_local_storages` by pv_name or display name on the preview. Use its returned ids to confirm."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
             pod = await resolve_pod(client, ws, pod)
+            delete_local_storages = (await _storage_arguments(client, ws, {"delete_local_storages": delete_local_storages},
+                                                             confirm=confirm))["delete_local_storages"]
             if not confirm:
                 current = await call(client.get_pod, pod, ws)
-                return preview("delete_pod", {"pod": to_dict(current), "workspace": ws,
+                return _storage_preview("delete_pod", {"pod": to_dict(current), "workspace": ws,
                                               "delete_local_storages": delete_local_storages or []},
-                               f"Delete pod '{current.user_alias or pod}' ({current.status})? This cannot be undone.")
+                               f"Delete pod '{current.user_alias or pod}' ({current.status})? This cannot be undone.",
+                               {"delete_local_storages": delete_local_storages})
             result = await call(client.delete_pod, pod, ws, delete_local_storages=delete_local_storages)
         out = to_dict(result)
         out["next_step"] = "Deletion was accepted. The pod disappears from the pods list within a minute."
@@ -430,7 +468,7 @@ def register(server: MCPServer) -> None:
         `template_id` moves the pod to another template; its variables, ports and command then start from that template,
         and the preview's changes list what was added before that doesn't carry over.
         `env` sets or adds variables (`secret_keys` names the secret ones) and `remove_env` removes variables the user added. `ports` opens new ports, `template_ports` renames, renumbers or exposes/hides current ports ([{"port": 8188, "name": "ui", "new_port": 8189, "external": false}]) and `remove_ports` closes ports the user added. Template variables and ports can't be removed. `command` replaces the start command ("" = back to the template's).
-        Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Spot pods can't have local storage, so detach it to switch to spot.
+        Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Names work on previews; confirm with the returned ids. Spot pods can't have local storage, so detach it to switch to spot.
         If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes unpreserved workspace files: when the pod has any, allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
         If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
         `enable_folder_saving=true` adds the uploader to an older pod that has none (watched_folders shows editable false with reason no_sidecar), so its folders can be watched; it needs storage on the pod and restarts a running pod once.
@@ -447,6 +485,7 @@ def register(server: MCPServer) -> None:
             if needs_input(ws):
                 return ws
             pod = await resolve_pod(client, ws, pod)
+            changes = await _storage_arguments(client, ws, changes, confirm=confirm)
             # A move deletes unpreserved workspace files, so it needs the same separate consent as start_pod any_node.
             loss = False
             if allow_node_migration:
@@ -476,10 +515,10 @@ def register(server: MCPServer) -> None:
                                    "another machine. Obtain separate explicit consent and pass allow_data_loss=true.")
                 elif allow_data_loss:
                     question += " allow_data_loss is only sent together with allow_node_migration."
-                return preview("update_pod", {"pod": pod, "workspace": ws, "estimate": to_dict(est),
+                return _storage_preview("update_pod", {"pod": pod, "workspace": ws, "estimate": to_dict(est),
                                               "allow_node_migration": allow_node_migration,
                                               "requires_data_loss_consent": loss, "data_loss_warning": warning},
-                               question + warning)
+                               question + warning, changes)
             result = await call(client.update_pod, pod, ws, **changes, allow_node_migration=allow_node_migration,
                                 allow_data_loss=allow_data_loss if allow_node_migration else False)
         out = to_dict(result)
@@ -543,9 +582,10 @@ def register(server: MCPServer) -> None:
                     wanted[path] = True if isinstance(item, str) else bool(item.get("enabled", True))
                 grows = [path for path, on in wanted.items() if on and not before.get(path, False)]
                 if grows:
+                    current_pod = await call(client.get_pod, pod, ws)
                     return preview("set_watched_folders", {"pod": pod, "workspace": ws, "adds_or_enables": grows,
                                                            "current": to_dict(current)},
-                                   f"Watch {', '.join(grows)} on {pod}? New files there are uploaded as assets "
+                                   f"Watch {', '.join(grows)} on '{current_pod.user_alias or pod}'? New files there are uploaded as assets "
                                    "and their storage is billed.")
             result = await call(client.set_watched_folders, pod, ws, expected_version=expected_version,
                                 template=template, user=user)

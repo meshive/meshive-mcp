@@ -7,7 +7,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import paginate
 from ..serialize import to_dict
-from ..workspace import ALL, needs_input, resolve, resolve_many
+from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many
 from ._common import READ_ONLY, call, meshive_tool
 
 
@@ -26,8 +26,8 @@ def register(server: MCPServer) -> None:
                 return targets
             items = []
             for ws in targets:
-                items.extend(await call(client.list_servings, ws))
-        page = paginate([to_dict(s) for s in items], limit, cursor)
+                items.extend(in_workspace(s, ws, targets) for s in await call(client.list_servings, ws))
+        page = paginate(items, limit, cursor)
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
         return page
 
@@ -37,11 +37,12 @@ def register(server: MCPServer) -> None:
         Register a new one from Hugging Face with detect_model and register_model.
         `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
         async with meshive_client(ctx) as client:
-            ws = await resolve(client, workspace)
-            if needs_input(ws):
-                return ws
+            targets = await resolve_many(client, workspace, allow_all=False)
+            if needs_input(targets):
+                return targets
+            ws = targets[0]
             items = await call(client.list_models, ws)
-        return {"items": [to_dict(m) for m in items], "workspace": ws}
+        return {"items": [in_workspace(m, ws, targets) for m in items], "workspace": ws}
 
     @meshive_tool(server, "source_credentials", title="List Source Credentials", annotations=READ_ONLY)
     async def source_credentials(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
@@ -49,12 +50,14 @@ def register(server: MCPServer) -> None:
         Pass an id as `hf_token_id` or `civitai_key_id` to detect_model, register_model or import_asset for a private or gated source. Tokens and keys are added in the console.
         `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
         async with meshive_client(ctx) as client:
-            ws = await resolve(client, workspace)
-            if needs_input(ws):
-                return ws
+            targets = await resolve_many(client, workspace, allow_all=False)
+            if needs_input(targets):
+                return targets
+            ws = targets[0]
             tokens = await call(client.list_hf_tokens, ws)
             keys = await call(client.list_civitai_keys, ws)
-        return {"hf_tokens": [to_dict(t) for t in tokens], "civitai_keys": [to_dict(k) for k in keys], "workspace": ws}
+        return {"hf_tokens": [in_workspace(t, ws, targets) for t in tokens],
+                "civitai_keys": [in_workspace(k, ws, targets) for k in keys], "workspace": ws}
 
     @meshive_tool(server, "detect_model", title="Check Model Compatibility", annotations=READ_ONLY)
     async def detect_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,

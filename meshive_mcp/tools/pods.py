@@ -7,7 +7,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import paginate
 from ..serialize import to_dict
-from ..workspace import ALL, needs_input, resolve, resolve_many, resolve_pod
+from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many, resolve_pod
 from ._common import READ_ONLY, call, meshive_tool
 
 
@@ -56,12 +56,12 @@ def register(server: MCPServer) -> None:
                 return targets
             items = []
             for ws in targets:
-                items.extend(await call(client.list_pods, ws))
+                items.extend(in_workspace(_pod_dict(p), ws, targets) for p in await call(client.list_pods, ws))
         if status:
-            items = [p for p in items if p.status.lower() == status.lower()]
+            items = [p for p in items if p["status"].lower() == status.lower()]
         if not include_system:
             # Like the web console, system downloader pods are hidden (for asset downloads, $0/h, recovered automatically by the system).
-            items = [p for p in items if not p.is_downloader]
-        page = paginate([_pod_dict(p) for p in items], limit, cursor)
+            items = [p for p in items if not p["is_system"]]
+        page = paginate(items, limit, cursor)
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
         return page

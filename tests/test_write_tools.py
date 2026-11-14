@@ -642,7 +642,7 @@ async def test_create_workspace_with_confirm_creates_and_says_to_wait_for_runnin
     assert done["workspace"] == "fedcba9876543210" and done["name"] == "research-2" and done["transaction_id"] == 21
     assert done["estimate"]["price_per_hour"] == "0" and done["operation_id"] == prev["operation_id"]
     step = done["next_step"]
-    assert "`fedcba9876543210`" in step and "transaction" not in step  # the transactions tool can't look it up
+    assert "Workspace 'research-2'" in step and "fedcba9876543210" not in step and "transaction" not in step
     assert "`workspaces` tool with no arguments until its status is `running`" in step
     assert "before creating anything in it" in step and "setup failed: tell the user" in step
     assert "taking longer than usual and don't create another" in step
@@ -757,7 +757,7 @@ async def test_update_workspace_without_confirm_only_checks_the_name(mcp_client,
 async def test_update_workspace_with_confirm_renames_and_says_to_keep_using_the_id(mcp_client, fake, with_key):
     done = _payload(await mcp_client.call_tool("update_workspace", {**RENAME, "confirm": True, "operation_id": OP}))
     assert done["workspace"] == WS and done["name"] == "lab-2" and done["operation_id"] == OP
-    assert f"`{WS}`" in done["next_step"] and "Keep using the id" in done["next_step"]
+    assert WS not in done["next_step"] and "Keep using its returned workspace id" in done["next_step"]
     assert "can take a moment to show the new name" in done["next_step"]
     assert _calls(fake, "update_workspace") == [("update_workspace", (WS,), {"name": "lab-2", "idempotency_key": OP})]
     assert not _calls(fake, "estimate_workspace_update")           # the confirmed call does not estimate again
@@ -796,7 +796,7 @@ async def test_delete_workspace_without_confirm_checks_and_deletes_nothing(mcp_c
     body = _payload(await mcp_client.call_tool("delete_workspace", {"workspace": WS}))
     assert body["confirmed"] is False and body["action"] == "delete_workspace" and body["workspace"] == WS
     assert body["deletable"] is True and body["blockers"] == {}
-    assert "'research'" in body["question"] and f"`{WS}`" in body["question"] and "can't be undone" in body["question"]
+    assert "'research'" in body["question"] and WS not in body["question"] and "can't be undone" in body["question"]
     assert body["operation_id"] and "Reuse this operation_id" in body["next_step"]
     assert _calls(fake, "check_workspace_delete") == [("check_workspace_delete", (WS,), {})]
     assert not _calls(fake, "delete_workspace")
@@ -831,7 +831,7 @@ async def test_delete_workspace_with_confirm_deletes_and_a_retry_reuses_the_key(
     assert done["operation_id"] == OP
     step = done["next_step"]
     assert "Deletion was accepted" in step and "leaves the workspaces list within a moment" in step
-    assert "the delete didn't fail, so don't delete it again" in step and "name stays taken for a while" in step
+    assert "the delete didn't fail, so don't delete it again" in step and "name becomes available when deletion finishes" in step
     assert "right away" not in step and "for a moment" not in step
     assert _calls(fake, "delete_workspace") == [("delete_workspace", (WS,), {"idempotency_key": OP})]
     assert not _calls(fake, "check_workspace_delete")              # the server checks again itself

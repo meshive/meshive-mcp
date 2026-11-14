@@ -8,7 +8,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import clamp_limit, decode_cursor, encode_cursor
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve
+from ..workspace import in_workspace, needs_input, resolve, resolve_many
 from ..errors import invalid_argument, tool_error
 from ._common import CREATE, MUTATE, READ_ONLY, call, meshive_tool
 
@@ -30,9 +30,10 @@ def register(server: MCPServer) -> None:
         async with meshive_client(ctx) as client:
             if asset is not None:
                 return {"asset": to_dict(await call(client.get_asset, asset))}
-            ws = await resolve(client, workspace)
-            if needs_input(ws):
-                return ws
+            targets = await resolve_many(client, workspace, allow_all=False)
+            if needs_input(targets):
+                return targets
+            ws = targets[0]
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
             # The backend takes page/pageSize. Cursor offsets are only ever issued as multiples of size, so they convert to a page.
@@ -42,7 +43,7 @@ def register(server: MCPServer) -> None:
             storage = await call(client.get_asset_storage, ws)
         next_offset = offset + len(page.items)
         return {
-            "items": [to_dict(a) for a in page.items],
+            "items": [in_workspace(a, ws, targets) for a in page.items],
             "total": page.total,
             "next_cursor": encode_cursor(next_offset) if next_offset < page.total else None,
             "storage": to_dict(storage),

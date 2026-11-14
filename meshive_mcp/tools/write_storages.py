@@ -12,7 +12,7 @@ from .. import money
 from ..client import meshive_client
 from ..errors import invalid_argument
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve
+from ..workspace import needs_input, resolve, resolve_storage
 from ._common import CREATE, DESTRUCTIVE, MUTATE, REVEAL, call, meshive_tool, preview, price_change
 
 # How long connect_storage waits for the storage to be ready. Hosted MCP requests sit behind a proxy that ends calls
@@ -23,6 +23,13 @@ _CONNECT_WAIT_MAX = 90.0
 _SSH_NOTE = ("This password opens a shell with access to the files on this storage. Give it only to the user who "
              "asked; never run the command yourself or put the password in files, commits or other tools. It expires in "
              "a few minutes and a new confirmed call issues a new one.")
+
+
+def _storage_preview(kind: str, storage: str, payload: dict[str, Any], question: str) -> dict[str, Any]:
+    out = preview(kind, {**payload, "pv_name": storage}, question)
+    out["next_step"] += (" Set `storage` to the returned `pv_name` for confirmation and every retry; "
+                         "display names can change or be reused.")
+    return out
 
 
 def _volume_size(mib: Any) -> str:
@@ -84,16 +91,17 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
     async def delete_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Delete a storage volume and all data on it. `storage` is the pv_name from the storages tool.
+        """Delete a storage volume and all data on it. `storage` is its pv_name or display name from the storages tool.
         With confirm=false (default) it only returns what would be deleted (including pods that still mount it);
         call again with confirm=true after the user agreed. Volumes mounted by a user pod are refused (storage_in_use)."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            storage = await resolve_storage(client, ws, storage, confirm=confirm)
             if not confirm:
                 current = await call(client.get_storage, storage, ws)
-                return preview("delete_storage", {"storage": to_dict(current), "workspace": ws},
+                return _storage_preview("delete_storage", storage, {"storage": to_dict(current), "workspace": ws},
                                f"Delete storage '{current.user_alias or storage}' ({_volume_size(current.total_size)}, "
                                f"{len(current.linked_pods)} linked pod(s))? All data on it is lost.")
             result = await call(client.delete_storage, storage, ws)
@@ -108,7 +116,7 @@ def register(server: MCPServer) -> None:
                              operation_id: str | None = None) -> dict[str, Any]:
         """Change a storage volume like the console's Edit: rename it (`name`), grow it (`size_gb`, in GiB) or set its
         usage warning (`usage_warning` on/off, `usage_warning_threshold` 0-1). Pass only what changes; `storage` is the
-        pv_name from the storages tool.
+        pv_name or display name from the storages tool.
         Storage can grow but never shrink (storage_cannot_shrink), and growing raises its hourly price, which is billed
         for as long as the volume exists.
         With confirm=false (default) it only returns the estimate (new and current size and hourly price) and changes
@@ -122,7 +130,9 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            storage = await resolve_storage(client, ws, storage, confirm=confirm)
             if not confirm:
+                current = await call(client.get_storage, storage, ws)
                 est = await call(client.estimate_storage_update, storage, ws, **kwargs)
                 parts = []
                 if name is not None:
@@ -140,8 +150,8 @@ def register(server: MCPServer) -> None:
                     threshold = next(t for t in (est.usage_warning_threshold, usage_warning_threshold, 0.9)
                                      if t is not None)
                     parts.append(f"warn when it is {threshold:.0%} full" if on else "turn its usage warning off")
-                label = storage if name is not None else est.name or storage
-                return preview("update_storage", {"estimate": to_dict(est), "workspace": ws, "storage": storage},
+                label = current.user_alias or storage
+                return _storage_preview("update_storage", storage, {"estimate": to_dict(est), "workspace": ws, "storage": storage},
                                f"Update storage '{label}': {', '.join(parts)}?" + price_change(est))
             result = await call(client.update_storage, storage, ws, **kwargs)
         out = to_dict(result)
@@ -155,7 +165,7 @@ def register(server: MCPServer) -> None:
                               wait: float = _CONNECT_WAIT_DEFAULT, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:
         """Get an SSH login to a storage volume's files, like the console's Connect, only when the user asks to connect: the `command` to run and a one-time `password` that expires in a few minutes (`expires_at`).
-        `storage` is the pv_name from the storages tool. Encrypted storage is unlocked and an access pod is started for it; it locks again by itself after `auto_lock_minutes` (`remaining_seconds` left). Other storage is reached through the access pod that already runs for it.
+        `storage` is its pv_name or display name from the storages tool. Encrypted storage is unlocked and an access pod is started for it; it locks again by itself after `auto_lock_minutes` (`remaining_seconds` left). Other storage is reached through the access pod that already runs for it.
         With confirm=false (default) it only returns the storage's connection state and changes nothing; call again with confirm=true after the user agreed. It needs a read & write key.
         The confirmed call waits up to `wait` seconds (0-90, default 60) for the storage to be ready; if it isn't yet, the result has no password and says to call again.
         Give the command and password to the user and nobody else: never run the command yourself or put the password in files, commits or other tools. Each confirmed call issues a new password."""
@@ -163,6 +173,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
+            storage = await resolve_storage(client, ws, storage, confirm=confirm)
             if not confirm:
                 current = await call(client.get_storage, storage, ws)
                 state = await call(client.get_storage_connection, storage, ws)
@@ -173,7 +184,7 @@ def register(server: MCPServer) -> None:
                                                else " after a while."))
                 else:
                     question = f"Open an SSH login to the files on storage '{label}'?"
-                return preview("connect_storage", {"storage": storage, "workspace": ws, "connection": to_dict(state)},
+                return _storage_preview("connect_storage", storage, {"storage": storage, "workspace": ws, "connection": to_dict(state)},
                                question + " The answer includes a one-time SSH password, which is a secret for you "
                                           "alone.")
             seconds = min(max(float(wait), 0.0), _CONNECT_WAIT_MAX)

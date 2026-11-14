@@ -119,8 +119,7 @@ _CONFLICT_CODES = {
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one. For a rename "
                                  "(update_pod, update_storage or update_workspace `name`), ask the user for another "
-                                 "name. For create_workspace, a workspace's name stays taken for a while after it is "
-                                 "deleted, even though the list no longer shows it; this doesn't affect a rename."),
+                                 "name. A resource being deleted still holds its name until deletion finishes."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
     # submit_task (CPU): between the estimate and placement the cheapest machine went away or got pricier, and what is

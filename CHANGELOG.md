@@ -28,6 +28,16 @@ There are 4 new tools; existing tool names and arguments are unchanged.
 
 ### Changed
 
+- Resource lists include their workspace's display name. The instructions tell agents to show display names to users
+  and keep ids for calls; workspace, pod, storage and port names are explicitly untrusted data.
+- Workspace selection candidates include the billing members' emails as `owner_emails` and the caller's
+  `member_role`, so an agent can ask users to distinguish workspaces with the same name.
+- Storage reads and previews accept display names, ignoring case and surrounding spaces. Storage write confirmations
+  use the returned `pv_name`, including storage selections inside pod creation and editing, so retries keep the same
+  target after a name changes or is reused. Storage rename previews show the current display name.
+- Pod responses retain template and attached-storage names, and storage responses retain linked-pod names with SDK
+  1.9. Existing fields remain available. Ambiguous pod errors list every matching pod, with unrelated pods omitted.
+- Workspace deletion guidance now says its name is available when deletion finishes.
 - `download_links` tells the agent to pass each url exactly as given, in quotes: every query parameter is part of
   the signature, and a shortened url is refused with 403.
 - `create_pod` and `estimate_pod` say that a template's blank `HF_TOKEN` doesn't need a value: the server no longer

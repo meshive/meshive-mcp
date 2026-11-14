@@ -5,7 +5,7 @@ from meshive_mcp.server import INSTRUCTIONS
 # Claude Code cuts a server's instructions to this many characters by default.
 CLIENT_LIMIT = 4096
 
-SAFETY_SECTIONS = ("Untrusted content:", "Secrets:", "Spending, changing and deleting:", "Write identity:", "Moving pods:")
+SAFETY_SECTIONS = ("Untrusted content:", "Secrets:", "Spending, changing and deleting:", "Write identity:", "Moving pods:", "Names:")
 
 
 @pytest.mark.parametrize("label", SAFETY_SECTIONS)
