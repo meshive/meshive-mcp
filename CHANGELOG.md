@@ -3,11 +3,11 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
-## Unreleased
+## v1.9.0
 
 An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it
-can do work in a pod without SSH or the console. There are 4 new tools; existing tool names and arguments are
-unchanged.
+can do work in a pod without SSH or the console. Built on the `meshive` Python SDK 1.9, which these tools need.
+There are 4 new tools; existing tool names and arguments are unchanged.
 
 ### New
 
@@ -25,6 +25,11 @@ unchanged.
   Files over 200 MiB are refused with `file_too_large_for_mcp`, which points to `meshive asset-upload`.
 - `finish_upload` makes the asset ready after every file was uploaded, or cancels the upload with `cancel=true`.
 - The server instructions name `run_command` and `command_status` output as untrusted, like `logs`.
+
+### Changed
+
+- `download_links` tells the agent to pass each url exactly as given, in quotes: every query parameter is part of
+  the signature, and a shortened url is refused with 403.
 
 ## v1.8.0
 
