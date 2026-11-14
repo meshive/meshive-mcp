@@ -30,6 +30,9 @@ There are 4 new tools; existing tool names and arguments are unchanged.
 
 - `download_links` tells the agent to pass each url exactly as given, in quotes: every query parameter is part of
   the signature, and a shortened url is refused with 403.
+- `create_pod` and `estimate_pod` say that a template's blank `HF_TOKEN` doesn't need a value: the server no longer
+  refuses a pod without it and leaves it out, since public Hugging Face models download without a token. Other blank
+  template variables still need one.
 
 ## v1.8.0
 

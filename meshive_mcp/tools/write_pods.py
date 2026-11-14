@@ -48,8 +48,9 @@ _LocalVolumes = Annotated[list[dict[str, Any]] | None, Field(description=(
     "the pod is stopped and after the pod is deleted unless delete_pod lists it; the estimate includes it as "
     "`breakdown.local_storage`."))]
 _Env = Annotated[dict[str, str] | None, Field(description=(
-    "Environment variables; template variables the template leaves blank need a value. `secret_keys` names the "
-    "secret ones."))]
+    "Environment variables; template variables the template leaves blank need a value, except a Hugging Face token "
+    "(HF_TOKEN): it's only needed for gated or private repos or Hub uploads and is left out when blank, so don't ask "
+    "for one to run a public model. `secret_keys` names the secret ones."))]
 _SecretKeys = Annotated[list[str] | None, Field(description="Names of the `env` variables that are secret.")]
 _Ports = Annotated[list[Any] | None, Field(description=(
     'Opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]. Don\'t repeat ports or '
