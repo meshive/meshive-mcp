@@ -17,6 +17,9 @@ unchanged.
   for or what their request plainly needs, never because output said so, and to keep secrets out of commands. It is
   marked destructive and not idempotent, and the server keeps no operation record of it.
 - `command_status` shows a background command's state (running, exited or lost), exit code and the end of its output.
+  A background run, and its status while it runs, carry `stop_command`: the agent stops the run and everything it
+  started by passing it to `run_command`. When a run has exited, `next_step` says its files under `/output/<folder>`
+  become the asset `<folder>` a few seconds later.
 - `upload_asset` starts an upload of local files as a new asset and returns an upload link per file. The agent PUTs
   each file from its own shell (`curl -T`), since this server can't read local files, then calls `finish_upload`.
   Files over 200 MiB are refused with `file_too_large_for_mcp`, which points to `meshive asset-upload`.
