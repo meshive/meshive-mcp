@@ -30,6 +30,18 @@ async def test_run_command_timeout_points_to_background(mcp_client, fake, with_k
     assert body["timed_out"] is True and "background=true" in body["next_step"]
 
 
+async def test_truncated_output_says_how_to_read_big_output(mcp_client, fake, with_key, monkeypatch):
+    from meshive.models import CommandResult
+
+    async def run_command(self, pod, ws, command, *, timeout=20, background=False):
+        return CommandResult.from_dict({"podName": pod, "workspace": ws, "mode": "run", "exitCode": None,
+                                        "stdout": "a" * 10, "truncated": True, "timedOut": False})
+    fake["setup"] = lambda inst: monkeypatch.setattr(type(inst), "run_command", run_command)
+    body = _payload(await mcp_client.call_tool("run_command", {"pod": "pod-1", "command": "cat big.log"}))
+    assert body["truncated"] is True and body["exit_code"] is None
+    assert "head, tail, grep" in body["next_step"] and "background=true" in body["next_step"]
+
+
 async def test_background_then_status(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("run_command", {"pod": "pod-1", "command": "blender -b s.blend -a",
                                                                "background": True}))
@@ -75,15 +87,22 @@ async def test_upload_asset_sends_big_files_to_the_cli_and_cancels(mcp_client, f
     body = _payload(result)
     assert result.is_error and body["code"] == "file_too_large_for_mcp"
     assert "huge.blend" in body["message"] and "meshive asset-upload 0123456789abcdef" in body["next_step"]
+    assert 'meshive>=1.9' in body["next_step"]
     assert [c[1] for c in _calls(fake, "abort_asset_upload")] == [("asset_up",)]
 
 
 async def test_finish_and_cancel_upload(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("finish_upload", {"upload_id": "asset_up"}))
     assert body["asset_id"] == "asset_up" and body["status"] == "ready" and "input_assets" in body["next_step"]
+    assert "/inputs/<asset name>/" in body["next_step"] and "/work/" not in body["next_step"]
     body = _payload(await mcp_client.call_tool("finish_upload", {"upload_id": "asset_up", "cancel": True}))
     assert body["cancelled"] is True
     assert [c[1] for c in _calls(fake, "abort_asset_upload")] == [("asset_up",)]
+
+
+async def test_download_links_say_to_use_the_url_whole(mcp_client, fake, with_key):
+    body = _payload(await mcp_client.call_tool("download_links", {"asset": "asset_abc"}))
+    assert "exactly as given, in quotes" in body["note"] and "403" in body["note"]
 
 
 async def test_upload_links_are_marked_as_capabilities(mcp_client):

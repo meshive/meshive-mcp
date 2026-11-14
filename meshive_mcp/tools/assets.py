@@ -13,7 +13,9 @@ from ..errors import invalid_argument, tool_error
 from ._common import CREATE, MUTATE, READ_ONLY, call, meshive_tool
 
 _LINKS_NOTE = ("These links are temporary and work for anyone who has one until they expire. Give them only to the "
-               "user; they can also run `meshive asset-download` or `meshive task-outputs --download` to save files.")
+               "user; they can also run `meshive asset-download` or `meshive task-outputs --download` to save files. "
+               "To download one yourself, pass its url exactly as given, in quotes (`curl -fsS -o <file> \"<url>\"`): "
+               "every query parameter is part of the signature, and a shortened url is refused with 403.")
 
 
 def register(server: MCPServer) -> None:
@@ -103,7 +105,8 @@ def register(server: MCPServer) -> None:
                 await call(client.abort_asset_upload, session.upload_id)
                 raise tool_error("file_too_large_for_mcp",
                                  f"{', '.join(large)} is over 200 MiB and must be uploaded in parts. Nothing was kept.",
-                                 "Upload it with the CLI instead: pip install meshive, sign in with `meshive login` "
+                                 "Upload it with the CLI instead: pip install -U \"meshive>=1.9\", sign in with "
+                                 "`meshive login` "
                                  "(or set MESHIVE_API_KEY) using a read & write key, then run "
                                  f"`meshive asset-upload {ws} <local path>`.")
         return {"upload_id": session.upload_id, "name": session.name, "workspace": ws,
@@ -125,5 +128,5 @@ def register(server: MCPServer) -> None:
             asset = await call(client.complete_asset_upload, upload_id)
         out = to_dict(asset)
         out["next_step"] = ("Uploaded. Use asset_id in input_assets of create_pod or submit_task (a pod sees it under "
-                            "/work/<asset name>/), or look at it with the assets tool.")
+                            "/inputs/<asset name>/ unless you give a target_dir), or look at it with the assets tool.")
         return out
