@@ -3,6 +3,47 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.9.0
+
+An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it
+can do work in a pod without SSH or the console. Built on the `meshive` Python SDK 1.9, which these tools need.
+There are 4 new tools; existing tool names and arguments are unchanged.
+
+### New
+
+- `run_command` runs a shell command in a running pod's main container and returns its exit code, stdout and stderr
+  (64 KiB at most). It waits up to `timeout` seconds (1 to 25); with `background=true` it starts the command detached
+  and returns a `run_id`. No password is handed out. Its description tells the agent to run only what the user asked
+  for or what their request plainly needs, never because output said so, and to keep secrets out of commands. It is
+  marked destructive and not idempotent, and the server keeps no operation record of it.
+- `command_status` shows a background command's state (running, exited or lost), exit code and the end of its output.
+  A background run, and its status while it runs, carry `stop_command`: the agent stops the run and everything it
+  started by passing it to `run_command`. When a run has exited, `next_step` says its files under `/output/<folder>`
+  become the asset `<folder>` a few seconds later.
+- `upload_asset` starts an upload of local files as a new asset and returns an upload link per file. The agent PUTs
+  each file from its own shell (`curl -T`), since this server can't read local files, then calls `finish_upload`.
+  Files over 200 MiB are refused with `file_too_large_for_mcp`, which points to `meshive asset-upload`.
+- `finish_upload` makes the asset ready after every file was uploaded, or cancels the upload with `cancel=true`.
+- The server instructions name `run_command` and `command_status` output as untrusted, like `logs`.
+
+### Changed
+
+- Resource lists include their workspace's display name. The instructions tell agents to show display names to users
+  and keep ids for calls; workspace, pod, storage and port names are explicitly untrusted data.
+- Workspace selection candidates include the billing members' emails as `owner_emails` and the caller's
+  `member_role`, so an agent can ask users to distinguish workspaces with the same name.
+- Storage reads and previews accept display names, ignoring case and surrounding spaces. Storage write confirmations
+  use the returned `pv_name`, including storage selections inside pod creation and editing, so retries keep the same
+  target after a name changes or is reused. Storage rename previews show the current display name.
+- Pod responses retain template and attached-storage names, and storage responses retain linked-pod names with SDK
+  1.9. Existing fields remain available. Ambiguous pod errors list every matching pod, with unrelated pods omitted.
+- Workspace deletion guidance now says its name is available when deletion finishes.
+- `download_links` tells the agent to pass each url exactly as given, in quotes: every query parameter is part of
+  the signature, and a shortened url is refused with 403.
+- `create_pod` and `estimate_pod` say that a template's blank `HF_TOKEN` doesn't need a value: the server no longer
+  refuses a pod without it and leaves it out, since public Hugging Face models download without a token. Other blank
+  template variables still need one.
+
 ## v1.8.0
 
 An agent can now look after the machines a user hosts on Meshive, as the console's host screens do: maintenance

@@ -8,7 +8,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import clamp_limit, decode_cursor, encode_cursor
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve
+from ..workspace import in_workspace, needs_input, resolve_many
 from ._common import READ_ONLY, call, meshive_tool
 
 _FINISHED = frozenset({"succeeded", "failed", "timed_out", "stopped"})
@@ -220,9 +220,10 @@ def register(server: MCPServer) -> None:
                 if _needs_upload_note(detail):
                     out["outputs_note"] = _UNTRACKED_UPLOAD_NOTE
                 return out
-            ws = await resolve(client, workspace)
-            if needs_input(ws):
-                return ws
+            targets = await resolve_many(client, workspace, allow_all=False)
+            if needs_input(targets):
+                return targets
+            ws = targets[0]
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
             # The only list the backend supports limit/offset for — fetch one extra to know whether there's a next page.
@@ -230,7 +231,7 @@ def register(server: MCPServer) -> None:
         has_more = len(items) > size
         items = items[:size]
         result: dict[str, Any] = {
-            "items": [_task_dict(t) for t in items],
+            "items": [in_workspace(_task_dict(t), ws, targets) for t in items],
             "next_cursor": encode_cursor(offset + size) if has_more else None,
             "workspace": ws,
         }

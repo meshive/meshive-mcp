@@ -7,7 +7,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import paginate
 from ..serialize import to_dict
-from ..workspace import ALL, needs_input, resolve, resolve_many
+from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many
 from ._common import READ_ONLY, call, meshive_tool
 
 # Same reason as the logs tool — the injection warning has to be in the same response to be read at that point.
@@ -47,8 +47,8 @@ def register(server: MCPServer) -> None:
                 return targets
             items = []
             for ws in targets:
-                items.extend(await call(client.list_transactions, ws))
-        page = paginate([to_dict(t) for t in items], limit, cursor)
+                items.extend(in_workspace(t, ws, targets) for t in await call(client.list_transactions, ws))
+        page = paginate(items, limit, cursor)
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
         if any(t["init_logs"] for t in page["items"]):
             page["note"] = _INIT_LOGS_NOTE

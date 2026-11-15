@@ -98,11 +98,6 @@ def _using_workspaces(detail: Any) -> list[str]:
                   | {s.workspace for s in clients.storages if s.workspace and _active(s.status)})
 
 
-def _some(items: list[str], shown: int = 10) -> str:
-    listed = ", ".join(f"`{i}`" for i in items[:shown])
-    return listed + (f" and {len(items) - shown} more" if len(items) > shown else "")
-
-
 def _choice(value: str | None, allowed: tuple[str, ...], name: str, default: str) -> str:
     choice = (value or default).strip().lower()
     if choice not in allowed:
@@ -476,9 +471,9 @@ def register(server: MCPServer) -> None:
                                          "message to \"all\" has no one to go to.",
                                          "Nothing was sent. Tell the user; a workspace that used the machine before "
                                          "can still be answered by its id.", machine_id=machine)
-                    recipients, who = using, f"all {len(using)} workspace(s) using '{name}' ({_some(using)})"
+                    recipients, who = using, f"all {len(using)} workspace(s) using '{name}'"
                 else:
-                    recipients, who = [recipient], f"workspace `{recipient}`"
+                    recipients, who = [recipient], "the selected workspace"
                     if recipient not in using:
                         who += f", which isn't using '{name}' now, so the server may refuse it"
                 return preview("send_host_message", {"machine": machine, "to": recipient, "recipients": recipients,

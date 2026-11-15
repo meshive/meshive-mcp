@@ -67,7 +67,7 @@ def register(server: MCPServer) -> None:
                 return preview("create_workspace", {"estimate": to_dict(est), "name": label}, question)
             created = await call(client.create_workspace, name)
         out = to_dict(created)
-        out["next_step"] = (f"Workspace '{created.name}' (id `{created.workspace}`) is being set up. Call the "
+        out["next_step"] = (f"Workspace '{created.name}' is being set up. Call the "
                             "`workspaces` tool with no arguments until its status is `running` before creating "
                             "anything in it: pods and tasks are refused until then. `error`, or a `terminated` that "
                             "doesn't change, means setup failed: tell the user. If it is still `creating` after a few "
@@ -93,12 +93,12 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 est = await call(client.estimate_workspace_update, ws, name=name)
                 return _preview_by_id("update_workspace", ws, to_dict(est),
-                                      f"Rename the workspace '{est.current_name}' to '{est.name}'? Its id stays `{ws}`. "
+                                      f"Rename the workspace '{est.current_name}' to '{est.name}'? "
                                       "Other members see the new name too.")
             updated = await call(client.update_workspace, ws, name=name)
         out = to_dict(updated)
-        out["next_step"] = (f"The workspace is now named '{updated.name}'; its id is still `{updated.workspace}`. Keep using "
-                            "the id: the workspaces list can take a moment to show the new name.")
+        out["next_step"] = (f"The workspace is now named '{updated.name}'. Keep using its returned workspace id for calls: "
+                            "the workspaces list can take a moment to show the new name.")
         return out
 
     @meshive_tool(server, "delete_workspace", title="Delete Workspace", annotations=DESTRUCTIVE)
@@ -112,7 +112,7 @@ def register(server: MCPServer) -> None:
         progress. Follow its next_step, and clear nothing the user didn't ask you to.
         With confirm=false (default) it only checks and deletes nothing; call again with the workspace id and confirm=true
         after the user agreed (a label is refused there). Deletion runs in the background: the workspace leaves the list
-        within a moment, and its name stays taken for a while."""
+        within a moment. Its name becomes available when deletion finishes."""
         async with meshive_client(ctx) as client:
             ws = await resolve_target(client, workspace, confirm=confirm)
             if not confirm:
@@ -122,10 +122,10 @@ def register(server: MCPServer) -> None:
                                      "deleted here. `blockers` counts what is left.", NEXT_STEP_WORKSPACE_NOT_EMPTY,
                                      workspace=ws, blockers=check.blockers)
                 return _preview_by_id("delete_workspace", ws, to_dict(check),
-                                      f"Delete the empty workspace '{check.name}' (id `{ws}`)? This can't be undone.")
+                                      f"Delete the empty workspace '{check.name}'? This can't be undone.")
             result = await call(client.delete_workspace, ws)
         out = to_dict(result)
         out["next_step"] = ("Deletion was accepted. The workspace leaves the workspaces list within a moment and is "
                             "removed in the background. If it still shows briefly, the delete didn't fail, so don't "
-                            "delete it again. Its name stays taken for a while, so a new workspace can't use it yet.")
+                            "delete it again. Its name becomes available when deletion finishes.")
         return out

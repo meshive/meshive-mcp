@@ -8,12 +8,14 @@ from mcp.server.mcpserver import Context, MCPServer
 from ..client import meshive_client
 from ..paging import clamp_limit, decode_cursor, encode_cursor
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve
-from ..errors import invalid_argument
-from ._common import CREATE, READ_ONLY, call, meshive_tool
+from ..workspace import in_workspace, needs_input, resolve, resolve_many
+from ..errors import invalid_argument, tool_error
+from ._common import CREATE, MUTATE, READ_ONLY, call, meshive_tool
 
 _LINKS_NOTE = ("These links are temporary and work for anyone who has one until they expire. Give them only to the "
-               "user; they can also run `meshive asset-download` or `meshive task-outputs --download` to save files.")
+               "user; they can also run `meshive asset-download` or `meshive task-outputs --download` to save files. "
+               "To download one yourself, pass its url exactly as given, in quotes (`curl -fsS -o <file> \"<url>\"`): "
+               "every query parameter is part of the signature, and a shortened url is refused with 403.")
 
 
 def register(server: MCPServer) -> None:
@@ -28,9 +30,10 @@ def register(server: MCPServer) -> None:
         async with meshive_client(ctx) as client:
             if asset is not None:
                 return {"asset": to_dict(await call(client.get_asset, asset))}
-            ws = await resolve(client, workspace)
-            if needs_input(ws):
-                return ws
+            targets = await resolve_many(client, workspace, allow_all=False)
+            if needs_input(targets):
+                return targets
+            ws = targets[0]
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
             # The backend takes page/pageSize. Cursor offsets are only ever issued as multiples of size, so they convert to a page.
@@ -40,7 +43,7 @@ def register(server: MCPServer) -> None:
             storage = await call(client.get_asset_storage, ws)
         next_offset = offset + len(page.items)
         return {
-            "items": [to_dict(a) for a in page.items],
+            "items": [in_workspace(a, ws, targets) for a in page.items],
             "total": page.total,
             "next_cursor": encode_cursor(next_offset) if next_offset < page.total else None,
             "storage": to_dict(storage),
@@ -84,4 +87,47 @@ def register(server: MCPServer) -> None:
                                 revision=revision, paths=paths, hf_token_id=hf_token_id, civitai_key_id=civitai_key_id)
         out = to_dict(result)
         out["next_step"] = "Imported. Use asset_id in input_assets of submit_task, or look at its files with the assets tool."
+        return out
+
+    @meshive_tool(server, "upload_asset", title="Upload Files", annotations=CREATE, operation_record=False)
+    async def upload_asset(ctx: Context[Any, Any], files: list[dict[str, Any]], workspace: str | None = None,
+                           name: str | None = None, asset_type: str | None = None) -> dict[str, Any]:
+        """Start uploading files from the user's computer as a new Asset Hub asset, when the user asks to upload them. This server can't read local files: it returns an upload link per file, you PUT each file's exact bytes to its link from your own shell, then call finish_upload.
+        `files` = [{"path": name inside the asset (a file name, or a/b.txt for a folder), "size_bytes": exact size, "sha256": optional}]. One call makes one asset; `name` defaults from the files and `asset_type` (dataset, model, adapter, checkpoint, config, file) is guessed when omitted.
+        Upload each with `curl -fsS -T <local file> "<url>"` (on Windows `curl.exe`, not PowerShell's curl alias). The links expire after `presign_expires_in` seconds and let anyone who has them upload into this asset: use them only in that command, never in files or other tools. Files over 200 MiB need the CLI instead (`meshive asset-upload <path>`, which uploads in parts); this tool then cancels and says so.
+        Managed storage is billed per GiB-month (see the assets tool); accounts with no payment yet have a storage limit."""
+        async with meshive_client(ctx) as client:
+            ws = await resolve(client, workspace)
+            if needs_input(ws):
+                return ws
+            session = await call(client.start_asset_upload, ws, files, name=name, asset_type=asset_type)
+            large = [t.relative_path for t in session.files if t.mode != "single" or not t.url]
+            if large:
+                await call(client.abort_asset_upload, session.upload_id)
+                raise tool_error("file_too_large_for_mcp",
+                                 f"{', '.join(large)} is over 200 MiB and must be uploaded in parts. Nothing was kept.",
+                                 "Upload it with the CLI instead: pip install -U \"meshive>=1.9\", sign in with "
+                                 "`meshive login` "
+                                 "(or set MESHIVE_API_KEY) using a read & write key, then run "
+                                 f"`meshive asset-upload {ws} <local path>`.")
+        return {"upload_id": session.upload_id, "name": session.name, "workspace": ws,
+                "presign_expires_in": session.presign_expires_in,
+                "files": [{"path": t.relative_path, "file_id": t.file_id, "url": t.url} for t in session.files],
+                "next_step": ("PUT every file to its url with `curl -fsS -T <local file> \"<url>\"` (curl.exe on "
+                              "Windows) before the links expire, then call finish_upload with this upload_id. If a "
+                              "PUT fails, call finish_upload with cancel=true and start again.")}
+
+    @meshive_tool(server, "finish_upload", title="Finish Upload", annotations=MUTATE, operation_record=False)
+    async def finish_upload(ctx: Context[Any, Any], upload_id: str, cancel: bool = False) -> dict[str, Any]:
+        """Finish an upload started with upload_asset, after every file was PUT to its link: the server checks each file's size and makes the asset ready (`asset_id`). Calling it again after success returns the same asset.
+        With cancel=true it cancels instead and removes what was uploaded. If a file is missing or its size is wrong, it says so: PUT that file again (or cancel and start over if its link expired)."""
+        async with meshive_client(ctx) as client:
+            if cancel:
+                await call(client.abort_asset_upload, upload_id)
+                return {"upload_id": upload_id, "cancelled": True,
+                        "next_step": "Cancelled; nothing was kept. Start again with upload_asset if needed."}
+            asset = await call(client.complete_asset_upload, upload_id)
+        out = to_dict(asset)
+        out["next_step"] = ("Uploaded. Use asset_id in input_assets of create_pod or submit_task (a pod sees it under "
+                            "/inputs/<asset name>/ unless you give a target_dir), or look at it with the assets tool.")
         return out

@@ -9,21 +9,23 @@ from meshive.exceptions import AuthenticationError, RateLimitError
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "cpus", "templates", "servings", "tasks",
               "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task",
               "download_links", "models", "detect_model", "source_credentials", "watched_folders", "model_sets",
-              "machine_history", "host_messages", "activity"}
+              "machine_history", "host_messages", "activity", "command_status"}
 WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
                "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
                "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
                "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace",
                "schedule_maintenance", "maintenance_window", "set_machine_listing", "retry_machine_setup",
                "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
-               "host_install_command"}
-DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine"}
+               "host_install_command", "run_command", "upload_asset", "finish_upload"}
+# run_command can change or delete anything in the pod.
+DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine",
+               "run_command"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
 # reveals a login again or issues a new one-time password or install command (machine logins and install commands
 # also email the account owner every time).
 NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task", "register_model", "import_asset",
                   "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
-                  "host_install_command", "ssh_access", "connect_storage"}
+                  "host_install_command", "ssh_access", "connect_storage", "run_command", "upload_asset"}
 # Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
 
@@ -40,7 +42,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 59
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 63
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -967,7 +969,7 @@ async def test_server_instructions_cover_creating_a_workspace():
 CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders"}
 # Writes without `confirm`, as in the console.
 NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
-                     "retry_machine_setup", "mark_host_messages_read"}
+                     "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload"}
 
 
 async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):
@@ -989,7 +991,8 @@ async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_clien
 # --- Operation records -----------------------------------------------------------------------------------------------
 
 # Writes whose SDK call keeps no operation record on the server: a repeated call runs again.
-UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command"}
+UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command", "run_command",
+                    "upload_asset", "finish_upload"}
 
 
 def _sdk_calls_per_tool() -> dict[str, set[str]]:

@@ -48,7 +48,10 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
 # keep as a replayable record. retry_port_check has no operation record either; its cooldown keeps it from repeating.
 _UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "issue_install_command",
-               "retry_port_check"}
+               "retry_port_check",
+               # A command run in a pod and the steps of a file upload: the server keeps no operation record of them
+               # (it would hold the command's output or the upload links), so calling again runs or starts it again.
+               "run_command", "start_asset_upload", "complete_asset_upload", "abort_asset_upload"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -76,6 +79,8 @@ DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempote
 # install command, so repeating it does more than the first call (machine logins and install commands also email the
 # account owner every time).
 REVEAL = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
+# Run a command in the user's pod: it can change or delete anything there, and running it again runs it again.
+EXECUTE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True)
 
 CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only then call this tool again with the same "
                 "arguments and confirm=true. Never set confirm=true on your own.")

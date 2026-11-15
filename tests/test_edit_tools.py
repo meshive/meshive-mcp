@@ -235,7 +235,7 @@ async def test_update_storage_rename_and_usage_warning(mcp_client, fake, with_ke
     args = {"storage": "pv-1", "name": "archive", "usage_warning": True, "usage_warning_threshold": 0.8}
     prev = _payload(await mcp_client.call_tool("update_storage", args))
     q = prev["question"]
-    assert q.startswith("Update storage 'pv-1': rename it to 'archive', warn when it is 80% full?")
+    assert q.startswith("Update storage 'data': rename it to 'archive', warn when it is 80% full?")
     assert "price stays at $0.010/hour" in q and "grow" not in q
     done = _payload(await mcp_client.call_tool("update_storage", {**args, "confirm": True,
                                                                   "operation_id": prev["operation_id"]}))
