@@ -25,8 +25,13 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # checked against the list or changed, and a refused workspace delete is checked again without confirm or left alone.
 # Host refusals are fixed and asked about again (new times, a recipient from the machine's clients, the reason the
 # machine can't be listed, the window's state), waited out (a port check), or not retried (a removal in progress, a
-# login the machine doesn't have).
-_OWN_RETRY_ADVICE_CODES = {"name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
+# login the machine doesn't have). A request for a locked port that the server can't lock goes back to the user, who
+# may change it; a failed lock change is repaired port by port, not by sending the edit again; and an access key call
+# without a clear answer, or one whose answer lost the value, is followed by the key list and the user's decision,
+# because calling again issues another key value.
+_OWN_RETRY_ADVICE_CODES = {"endpoint_lock_unavailable", "port_lock_change_failed", "access_key_outcome_unknown",
+                           "access_key_value_missing",
+                           "name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
                            "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
                            "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable",
@@ -42,13 +47,15 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "create_workspace", "update_workspace", "delete_workspace",
            "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
            "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
-           "send_host_message", "mark_host_messages_read"}
+           "send_host_message", "mark_host_messages_read", "set_port_lock", "revoke_access_key"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
 # keep as a replayable record. retry_port_check has no operation record either; its cooldown keeps it from repeating.
+# create_access_key and roll_access_key answer with a key's value, which the server must not keep either: every call
+# issues another value, and the SDK doesn't send one again after a timeout.
 _UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "issue_install_command",
-               "retry_port_check",
+               "retry_port_check", "create_access_key", "roll_access_key",
                # A command run in a pod and the steps of a file upload: the server keeps no operation record of them
                # (it would hold the command's output or the upload links), so calling again runs or starts it again.
                "run_command", "start_asset_upload", "complete_asset_upload", "abort_asset_upload"}

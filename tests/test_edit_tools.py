@@ -38,9 +38,11 @@ async def test_update_pod_preview_shows_changes_price_and_restart(mcp_client, fa
     assert est["current_price_per_hour_display"] == "$0.500" and est["price_per_hour_display"] == "$1.000"
     assert est["breakdown_display"] == {"gpu": "$1.000"} and est["restarts"] is True
     assert body["requires_data_loss_consent"] is False and body["data_loss_warning"] == ""
-    # Only what changes is sent; the consent flags are not part of the estimate.
+    # Only what changes is sent; the consent flags are not part of the estimate. lock_public_ports always goes along:
+    # it changes nothing by itself and decides the lock of a port the edit newly exposes.
     (_, args, kw), = _calls(fake, "estimate_pod_update")
-    assert args == (POD, WS) and kw == {"gpu_count": 2, "env": {"HF_TOKEN": "hf_secret_1"}, "secret_keys": ["HF_TOKEN"]}
+    assert args == (POD, WS) and kw == {"gpu_count": 2, "env": {"HF_TOKEN": "hf_secret_1"}, "secret_keys": ["HF_TOKEN"],
+                                        "lock_public_ports": True}
     assert not _calls(fake, "update_pod") and not _calls(fake, "get_pod")
     assert "hf_secret_1" not in result.content[0].text          # values the agent passed are never echoed back
 
@@ -66,7 +68,7 @@ async def test_update_pod_confirm_sends_the_edit_with_the_operation_id(mcp_clien
 async def test_update_pod_enable_folder_saving_is_sent_only_when_asked(mcp_client, fake, with_key):
     await mcp_client.call_tool("update_pod", {"pod": POD, "enable_folder_saving": True})
     (_, args, kw), = _calls(fake, "estimate_pod_update")
-    assert args == (POD, WS) and kw == {"enable_folder_saving": True}
+    assert args == (POD, WS) and kw == {"enable_folder_saving": True, "lock_public_ports": True}
     await mcp_client.call_tool("update_pod", {"pod": POD, "vcpu": 16, "enable_folder_saving": False})
     assert "enable_folder_saving" not in _calls(fake, "estimate_pod_update")[-1][2]
 

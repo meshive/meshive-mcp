@@ -53,7 +53,20 @@ client, so they need no network and no API key.
   `show_secrets=true`. Tools that return a password or an install command (`ssh_access`, `connect_storage`,
   `machine_credentials`, `host_install_command`) send no `Idempotency-Key` of their own, so the API never keeps a
   replayable copy of the response; `ssh_access` and `connect_storage` never return the browser-terminal URL, which
-  carries the password, and previews never carry a secret.
+  carries the password, and previews never carry a secret. The value of a port access key is handled the same way:
+  `create_access_key` and `roll_access_key` return it once, as `access_key` in their confirmed answer, and the
+  serializer drops it everywhere else. Each of their calls issues another value, so a call without a clear answer
+  (`access_key_outcome_unknown`) is followed by `access_keys`, never by a second call; their previews say so too,
+  because the general rule for writes (reuse the operation ID, look the call up with `operation_status`) doesn't
+  hold for a call the server keeps no record of.
+- **Public ports are locked unless someone decided otherwise.** `create_pod`, `estimate_pod` and `update_pod` pass
+  `lock_public_ports` to the SDK on every call (default `true`) and list the outcome as `locked_ports` and
+  `open_ports`. A preview that leaves a port open says that anyone who knows the URL gets in, and tells apart who
+  decided it: the user (the arguments said so), or the template's author, whose open port is listed as
+  `open_by_template` with the argument that locks it and the instruction to ask the user. A lock the server can't
+  give (`endpoint_lock_unavailable`) goes back to the user: no tool falls back to open ports. Wherever a locked port
+  is shown, the response says that a 401 from it is the lock working, so that an agent doesn't restart or delete the
+  pod over it.
 - Responses are capped at 1 MiB and lists are paged.
 - **Descriptions fit the client's cut.** Claude Code keeps the first 4096 characters of a tool description, so every
   description, with the notes `meshive_tool` appends, stays under that (`tests/test_tools.py` checks it). Put an

@@ -16,6 +16,7 @@ from meshive.exceptions import (
     AuthenticationError,
     ConfigurationError,
     ConflictError,
+    EndpointLockUnavailableError,
     InsufficientCreditError,
     MeshiveAPIError,
     MeshiveError,
@@ -83,6 +84,68 @@ NEXT_STEP_WORKSPACE_NOT_EMPTY = (
     "check. No tool can delete a workspace that still holds things. A person can still delete it in the console, which "
     "removes what's in it for good."
 )
+
+
+# --- Port locks and access keys ---
+# A pod create, edit or estimate asked for a locked port and the server can't lock ports. The SDK sends nothing with the
+# ports open instead, and neither may the agent: an open port is the user's decision.
+_LOCK_UNAVAILABLE = {
+    "disabled": ("Ports can't be locked on Meshive right now: port locking is turned off on the platform.",
+                 "right now"),
+    "unsupported": ("This Meshive API server doesn't support locking ports yet.", "on this server yet"),
+}
+# Added to the message of a pod request refused by a server without locks: what sending it would have done.
+_WOULD_EXPOSE = " It would expose them to anyone who knows the URL."
+_NEXT_STEP_LOCK_UNAVAILABLE = (
+    "Nothing was created or changed, and the request was not sent again with open ports. Tell the user that the ports "
+    "this request exposes over HTTPS can't be locked {when}. Never go ahead with open ports on your own. The user can "
+    "wait and try again later with the same arguments, keep the port internal (\"external\": false on its item in "
+    "`ports` or `template_ports`), or decide to have it open to anyone who knows the URL. Only if the user explicitly "
+    "chooses open ports, call the tool again with lock_public_ports=false (or \"locked\": false on that port's item), "
+    "without confirm first, so that the preview shows them which ports would be open.")
+# set_port_lock, create_access_key and roll_access_key while the platform has locking turned off, and an edit that only
+# locks ports the pod already exposes: nothing here could go ahead with an open port instead.
+_NEXT_STEP_LOCK_OFF = (
+    "Nothing was changed: every port keeps the lock it has now. Port locking is turned off on the platform right now, "
+    "so a port can't be locked and access keys can't be created or rolled; unlocking a port and listing or revoking "
+    "keys still work. Tell the user and try again later; don't retry in a loop.")
+# The same calls on an API server that has no port locks yet.
+_NEXT_STEP_LOCK_UNSUPPORTED = ("Nothing was changed. This Meshive API server has no port locks and access keys yet. "
+                               "Tell the user; don't retry.")
+NEXT_STEP_PORT_NOT_FOUND = "Use a port number from the pod's `endpoints` in the pods tool. Do not guess."
+NEXT_STEP_PORT_NOT_PUBLIC = (
+    "Nothing was changed. Only a port exposed over HTTPS has a lock and access keys; the pods tool shows each port's "
+    "`access`, and this one is internal (reachable only inside the workspace) or belongs to a platform-managed "
+    "workload. To expose a port, the user edits the pod (update_pod `template_ports` with \"external\": true, which "
+    "restarts a running pod); it is then locked by default.")
+NEXT_STEP_PORT_NOT_LOCKED = (
+    "Nothing was created or changed. An access key can be created or rolled only while the port is locked; this one "
+    "is unlocked, so anyone who knows its URL gets in without a key. Ask the user whether to lock it (set_port_lock "
+    "with locked=true; no restart), then call again.")
+
+
+def lock_unavailable(reason: str, *, pod_request: bool) -> ToolError:
+    """`pod_request`: the refusal of a pod create, edit or estimate, which could go ahead with open ports if the user
+    chose that. Otherwise the refusal of a lock or access key call, which has no such way out."""
+    reason = reason if reason in _LOCK_UNAVAILABLE else "disabled"
+    message, when = _LOCK_UNAVAILABLE[reason]
+    if pod_request:
+        next_step = _NEXT_STEP_LOCK_UNAVAILABLE.format(when=when)
+        message += _WOULD_EXPOSE if reason == "unsupported" else ""
+    else:
+        next_step = _NEXT_STEP_LOCK_OFF if reason == "disabled" else _NEXT_STEP_LOCK_UNSUPPORTED
+    return tool_error("endpoint_lock_unavailable", message, next_step, reason=reason)
+
+
+def lock_unavailable_reason(error: ToolError) -> str | None:
+    """The `reason` of an endpoint_lock_unavailable error, or None for any other error."""
+    try:
+        body = json.loads(str(error))
+    except ValueError:
+        return None
+    if not isinstance(body, dict) or body.get("code") != "endpoint_lock_unavailable":
+        return None
+    return body.get("reason") or "disabled"
 
 
 def tool_error(code: str, message: str, next_step: str, **extra: Any) -> ToolError:
@@ -369,6 +432,21 @@ _BAD_REQUEST_CODES = {
                             "Nothing was sent. Fix what the message says (for example a blank or too long title or "
                             "text, or nobody using the machine for to=\"all\"), then show the user the new message "
                             "before sending it."),
+    # --- port locks and access keys ---
+    "not a public endpoint": ("port_not_public", NEXT_STEP_PORT_NOT_PUBLIC),
+    "endpoint not locked": ("port_not_locked", NEXT_STEP_PORT_NOT_LOCKED),
+    "endpoint not found": ("port_not_found", NEXT_STEP_PORT_NOT_FOUND),
+    "too many keys": ("too_many_access_keys",
+                      "Nothing was created. This port holds as many access keys as it can; the message has the limits, "
+                      "and values that still work after a roll count too. Show the user the port's keys (access_keys) "
+                      "and ask which one to revoke, or wait until the rolled values run out."),
+    # update_pod: the edit asked to lock or unlock ports, and the server couldn't change the lock of those in `ports`.
+    "lock change failed": ("port_lock_change_failed",
+                           "The lock of the ports in `ports` could not be changed, so a port that was meant to be "
+                           "locked may be open. The rest of the edit may have been accepted all the same: don't send "
+                           "the edit again. Check each listed port's `access` with the pods tool, tell the user which "
+                           "ports are not as asked, and set each one with set_port_lock (locking needs no confirm; "
+                           "unlocking needs the user's go-ahead)."),
 }
 
 # 404 titles that aren't a wrong id.
@@ -376,7 +454,30 @@ _NOT_FOUND_CODES = {
     "credentials not available": ("credentials_not_available",
                                   "This machine has no login of that kind to reveal (for example, IPMI isn't set up or "
                                   "Grafana isn't configured for it). Tell the user; don't retry."),
+    "port not found": ("port_not_found", NEXT_STEP_PORT_NOT_FOUND),
 }
+_LOCK_DISABLED_CODE = "endpoint_lock_disabled"
+
+
+def _server_code(exc: MeshiveAPIError) -> str | None:
+    detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
+    return detail.get("code") if isinstance(detail, dict) else None
+
+
+def _lock_route_refusal(exc: NotFoundError) -> ToolError | None:
+    """404s of the port lock and access key calls that aren't a wrong pod or port."""
+    message = exc.message or ""
+    if _server_code(exc) == _LOCK_DISABLED_CODE:
+        return lock_unavailable("disabled", pod_request=False)
+    if exc.title is None and "does not support port locks" in message:
+        # What the SDK makes of an API server without these routes.
+        return lock_unavailable("unsupported", pod_request=False)
+    if message.strip().lower().startswith("access key not found"):
+        return tool_error("access_key_not_found", message,
+                          "No working key with this id on this port: it was revoked, it expired, or it was rolled "
+                          "(a roll gives the key a new id). List the port's keys with access_keys and use an `id` "
+                          "from there. Do not guess.")
+    return None
 
 
 def _detail_extras(exc: MeshiveAPIError) -> dict[str, Any]:
@@ -390,6 +491,9 @@ def _detail_extras(exc: MeshiveAPIError) -> dict[str, Any]:
 
 
 def _conflict(exc: ConflictError) -> ToolError:
+    if _server_code(exc) == _LOCK_DISABLED_CODE:
+        # The server's own refusal of a pod request that locks a port, should the SDK pass it on as it came.
+        return lock_unavailable("disabled", pod_request=True)
     title = (exc.title or "").strip().lower()
     code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
                                                               "before retrying."))
@@ -432,6 +536,9 @@ def translate(exc: BaseException) -> ToolError:
             return tool_error("pod_creation_failed", exc.message or "Pod creation failed.",
                               "Tell the user the reason. Don't retry this pod; fix the cause (template, command, "
                               "inputs) and create a new pod.")
+        refusal = _lock_route_refusal(exc)
+        if refusal is not None:
+            return refusal
         special = _NOT_FOUND_CODES.get((exc.title or "").strip().lower())
         if special is not None:
             return tool_error(special[0], exc.message or exc.title, special[1])
@@ -444,6 +551,9 @@ def translate(exc: BaseException) -> ToolError:
     if isinstance(exc, InsufficientCreditError):
         return tool_error("insufficient_credit", exc.message or "Insufficient credit.",
                           f"Ask the user to top up credit at {CONSOLE_URL} before retrying. Do not retry on your own.")
+    if isinstance(exc, EndpointLockUnavailableError):
+        # The SDK's own message names its Python arguments; the agent gets this server's argument names instead.
+        return lock_unavailable(exc.reason, pod_request=True)
     if isinstance(exc, ConflictError):
         return _conflict(exc)
     if isinstance(exc, MeshiveAPIError):

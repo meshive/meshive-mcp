@@ -11,12 +11,15 @@ import math
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .. import money
 from ..client import meshive_client
+from ..errors import lock_unavailable, lock_unavailable_reason
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_storage
+from . import _ports
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview, price_change
 
 # What estimate_pod and create_pod say about all their arguments together. The format of each argument is in that
@@ -29,7 +32,8 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (from the cpus tool; de
 `volumes` attaches existing network storage. `local_volumes` creates new local storage on the pod's machine, billed hourly by size until it is deleted, also while the pod is stopped and after the pod is deleted unless delete_pod lists it.
 `max_price_per_hour` caps the compute hourly rate; existing storage you attach and Asset Hub retention are billed separately.
 `input_assets` places Asset Hub assets in the pod. New files in the template's output folders and in `watched_folders` are uploaded as assets; `watched_template_folders` changes the template's folders and `harvest_destination` where the files go.
-`model_set` adds one model set to the pod, and `hf_token_id` is the token a set gated on Hugging Face needs; the set's files are added before the pod is created, often several minutes."""
+`model_set` adds one model set to the pod, and `hf_token_id` is the token a set gated on Hugging Face needs; the set's files are added before the pod is created, often several minutes.
+Ports exposed over HTTPS are created locked: only workspace members signed in to the console and requests with one of the port's access keys get through, and anything else gets 401. `lock_public_ports=false` (or "locked": false on a port) creates them open to anyone who knows the URL: only when the user explicitly asks for that. One exception: a template port whose template sets it open is created open; the preview lists it as `open_by_template` and says how to lock it."""
 
 _Workspace = Annotated[str | None, Field(description="Workspace id from the workspaces tool (a label also works).")]
 _TemplateId = Annotated[int, Field(description="Template id from the templates tool.")]
@@ -53,13 +57,28 @@ _Env = Annotated[dict[str, str] | None, Field(description=(
     "for one to run a public model. `secret_keys` names the secret ones."))]
 _SecretKeys = Annotated[list[str] | None, Field(description="Names of the `env` variables that are secret.")]
 _Ports = Annotated[list[Any] | None, Field(description=(
-    'Opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]. Don\'t repeat ports or '
-    "port names the template already has."))]
+    'Opens new ports: a list like [8888, {"port": 6006, "name": "tb", "external": false}]. A port is exposed over '
+    'HTTPS unless "external" is false, and an exposed port is locked unless its item says "locked": false (open to '
+    "anyone who knows the URL; only when the user explicitly asks). Don't repeat ports or port names the template "
+    "already has."))]
 _TemplatePorts = Annotated[list[dict[str, Any]] | None, Field(description=(
     'Changes the ports the template opens, like the console\'s deploy screen: [{"port": 8188, "name": "ui", '
     '"new_port": 8189, "external": false}], where `port` is the template\'s port and "name" (rename), "new_port" '
-    '(renumber) and "external" (true = exposed over HTTPS, false = internal only) are optional. Template ports can\'t '
-    "be removed; use `ports` to open new ones."))]
+    '(renumber), "external" (true = exposed over HTTPS, false = internal only) and "locked" (for an exposed port: '
+    "true = locked, also when the template sets that port open; false = open to anyone who knows the URL, only when "
+    "the user explicitly asks) are optional. Template ports can't be removed; use `ports` to open new ones."))]
+_LockPublicPorts = Annotated[bool, Field(description=(
+    "Leave it true (the default): the ports the pod exposes over HTTPS are created locked, so only workspace members "
+    "signed in to the console and requests that carry one of the port's access keys get through. The one exception "
+    "is a template port that its template sets open: it stays open unless its `template_ports` item says "
+    "\"locked\": true (the preview lists such ports as `open_by_template`). false creates every exposed port open to "
+    "anyone who knows the URL: pass it only when the user explicitly asked for open ports. \"locked\" on a port's "
+    "item in `ports` or `template_ports` decides for that port alone."))]
+_LockNewPublicPorts = Annotated[bool, Field(description=(
+    "Leave it true (the default): a port this edit newly exposes over HTTPS is locked (a new template's ports follow "
+    "that template's own setting, and the preview lists the ones it leaves open as `open_by_template`). false leaves "
+    "the newly exposed ports open to anyone who knows the URL: pass it only when the user explicitly asked for that. "
+    "A port that is exposed already keeps its lock either way."))]
 _Command = Annotated[str | None, Field(description="Overrides the start command (at most 32,000 characters).")]
 _Region = Annotated[str | None, Field(description="Accepted for compatibility and ignored.")]
 _MaxPricePerHour = Annotated[float | None, Field(description=(
@@ -187,7 +206,45 @@ def _model_set_note(est: Any) -> str:
 
 
 # update_pod arguments that guard an edit rather than change the pod.
-_EDIT_CONTROLS = {"drop_watched_folders", "max_price_per_hour"}
+_EDIT_CONTROLS = {"drop_watched_folders", "max_price_per_hour", "lock_public_ports"}
+
+
+def _asks_only_for_locks(changes: dict[str, Any]) -> bool:
+    """Whether an edit asks for nothing but the lock of ports the pod already exposes: `template_ports` items with
+    nothing but "locked". The server applies that without restarting the pod (it refuses it for a port that isn't
+    exposed). Whether it did is the server's to say; see _lock_only."""
+    if set(changes) - _EDIT_CONTROLS != {"template_ports"}:
+        return False
+    items = changes["template_ports"]
+    return bool(items) and all(isinstance(item, dict) and "locked" in item and set(item) <= {"port", "locked"}
+                               for item in items)
+
+
+def _lock_only(changes: dict[str, Any], restarts: bool | None, transaction_id: Any = None) -> bool:
+    """Whether an edit only changed port locks, without a restart. The server's answer decides: an edit it says
+    restarts the pod, or runs as a transaction, is an ordinary edit whatever the request looked like. The request's
+    shape only settles it when the server doesn't say (`restarts` is null)."""
+    return _asks_only_for_locks(changes) and restarts is not True and transaction_id is None
+
+
+async def _edit(fn: Any, pod: str, ws: str, changes: dict[str, Any], **consent: Any) -> Any:
+    """Call estimate_pod_update or update_pod. An edit that only locks ports the pod already exposes has no open-port
+    way out when the server can't lock: the ports stay as they are, so its refusal says to try again later instead of
+    offering to open or hide a port."""
+    try:
+        return await call(fn, pod, ws, **changes, **consent)
+    except ToolError as exc:
+        reason = lock_unavailable_reason(exc)
+        if reason is None or not _asks_only_for_locks(changes):
+            raise
+        raise lock_unavailable(reason, pod_request=False) from exc
+
+
+def _locks(answer: Any, args: dict[str, Any]) -> _ports.Locks:
+    """The locks an estimate or result reports, sorted with the arguments the request was made with."""
+    return _ports.read(getattr(answer, "port_locks", None), lock_public_ports=args.get("lock_public_ports", True),
+                       ports=args.get("ports"), template_ports=args.get("template_ports"))
+
 
 # A create with a model set waits for its files, so the call itself may outlast the client's timeout.
 _SLOW_CREATE = (" If the create call times out, don't create the pod again: check operation_status with this "
@@ -232,9 +289,12 @@ def register(server: MCPServer) -> None:
                            watched_template_folders: _WatchedTemplateFolders = None,
                            harvest_destination: _HarvestDestination = None,
                            template_ports: _TemplatePorts = None,
-                           model_set: _ModelSet = None, hf_token_id: _HfTokenId = None) -> dict[str, Any]:
+                           model_set: _ModelSet = None, hf_token_id: _HfTokenId = None,
+                           lock_public_ports: _LockPublicPorts = True) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
         Call this first, show the user the price and hardware, then call create_pod with the same arguments.
+        `locked_ports` and `open_ports` list the ports the pod would expose over HTTPS, by the lock each would get
+        (`open_by_template`: open because the template sets them so, not because of this call).
         """
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
@@ -249,13 +309,15 @@ def register(server: MCPServer) -> None:
                 uptime_premium=uptime_premium, cpu_premium=cpu_premium, max_price_per_hour=max_price_per_hour,
                 input_assets=input_assets, watched_folders=watched_folders,
                 watched_template_folders=watched_template_folders, harvest_destination=harvest_destination,
-                model_set=model_set, hf_token_id=hf_token_id))
+                model_set=model_set, hf_token_id=hf_token_id, lock_public_ports=lock_public_ports))
         out = to_dict(est)
         out["workspace"] = ws
         if _model_set(est) is not None:
             out["model_set"] = _model_set(est)
+        locks = _locks(est, {"lock_public_ports": lock_public_ports, "ports": ports, "template_ports": template_ports})
+        out.update(_ports.summary(locks))
         out["next_step"] = ("Show the price per hour and hardware to the user." + _local_storage_note(est) +
-                            _model_set_note(est) +
+                            _model_set_note(est) + _ports.preview_note(locks, creating=True) +
                             " Create the pod only after they agree, by calling create_pod with the same arguments and "
                             "confirm=true.")
         if volumes:
@@ -281,12 +343,16 @@ def register(server: MCPServer) -> None:
                          harvest_destination: _HarvestDestination = None,
                          template_ports: _TemplatePorts = None,
                          model_set: _ModelSet = None, hf_token_id: _HfTokenId = None,
+                         lock_public_ports: _LockPublicPorts = True,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
         after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
         With `model_set` or `hf_token_id` the confirmed call returns only after the set's files were added, which can
         take minutes.
+        The preview's `locked_ports` and `open_ports` list the ports the pod exposes over HTTPS, by the lock each
+        gets; tell the user about any open port before they agree. `open_by_template` are open because the template
+        sets them so: ask the user whether to lock them ("locked": true on their `template_ports` items).
         """
         kwargs = _pod_kwargs(gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, rental_type=rental_type,
                              vcpu=vcpu, ram_gb=ram_gb, cpu_line=cpu_line, volumes=volumes, local_volumes=local_volumes,
@@ -296,7 +362,7 @@ def register(server: MCPServer) -> None:
                              max_price_per_hour=max_price_per_hour, input_assets=input_assets,
                              watched_folders=watched_folders, watched_template_folders=watched_template_folders,
                              harvest_destination=harvest_destination, model_set=model_set,
-                             hf_token_id=hf_token_id)
+                             hf_token_id=hf_token_id, lock_public_ports=lock_public_ports)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -304,15 +370,18 @@ def register(server: MCPServer) -> None:
             kwargs = await _storage_arguments(client, ws, kwargs, confirm=confirm)
             if not confirm:
                 est = await call(client.estimate_pod, name, template_id, workspace=ws, **kwargs)
-                payload = {"estimate": to_dict(est), "workspace": ws, "name": name}
+                locks = _locks(est, kwargs)
+                payload = {"estimate": to_dict(est), "workspace": ws, "name": name, **_ports.summary(locks)}
                 if _model_set(est) is not None:
                     payload["model_set"] = _model_set(est)
                 return _storage_preview("create_pod", payload,
                                f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est)
-                               + _model_set_note(est)
+                               + _model_set_note(est) + _ports.preview_note(locks, creating=True)
                                + (_SLOW_CREATE if _model_set(est) is not None or hf_token_id is not None else ""), kwargs)
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
+        locks = _locks(created, kwargs)
+        out.update(_ports.summary(locks))
         tx = created.transaction_id
         out["next_step"] = (f"Pod '{name}' is being created" + (f" (transaction {tx})" if tx is not None else "") +
                             ". It usually runs within a minute. Poll the pods tool (find it by name) for status and the "
@@ -321,6 +390,7 @@ def register(server: MCPServer) -> None:
             # A failed create drops off the transactions list after a few minutes; the lookup by id has no time window.
             out["next_step"] += (f" If the pod doesn't appear or stays creating, call the transactions tool with "
                                  f"transaction_id={tx}: it shows the current step and why it failed.")
+        out["next_step"] += _ports.result_note(locks)
         return out
 
     create_pod.__doc__ = (create_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
@@ -417,7 +487,8 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "restart_pod", title="Restart Pod", annotations=MUTATE)
     async def restart_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, operation_id: str | None = None) -> dict[str, Any]:
-        """Restart a pod in place (same machine, same storage). Asynchronous — poll pods for `running`."""
+        """Restart a pod in place (same machine, same storage). Asynchronous — poll pods for `running`.
+        A 401 from a port whose `access` is locked (pods tool) is the lock working; a restart doesn't change it."""
         return await _lifecycle(ctx, "restart_pod", pod, workspace, "restart")
 
     @meshive_tool(server, "delete_pod", title="Delete Pod", annotations=DESTRUCTIVE)
@@ -458,7 +529,7 @@ def register(server: MCPServer) -> None:
                          local_volumes: list[dict[str, Any]] | None = None, detach_storages: list[str] | None = None,
                          allow_node_migration: bool = False, allow_data_loss: bool = False,
                          drop_watched_folders: list[str] | None = None, max_price_per_hour: float | None = None,
-                         enable_folder_saving: bool = False,
+                         enable_folder_saving: bool = False, lock_public_ports: _LockNewPublicPorts = True,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name also works).
         With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
@@ -468,6 +539,7 @@ def register(server: MCPServer) -> None:
         `template_id` moves the pod to another template; its variables, ports and command then start from that template,
         and the preview's changes list what was added before that doesn't carry over.
         `env` sets or adds variables (`secret_keys` names the secret ones) and `remove_env` removes variables the user added. `ports` opens new ports, `template_ports` renames, renumbers or exposes/hides current ports ([{"port": 8188, "name": "ui", "new_port": 8189, "external": false}]) and `remove_ports` closes ports the user added. Template variables and ports can't be removed. `command` replaces the start command ("" = back to the template's).
+        Port locks: a port this edit newly exposes over HTTPS (an external port in `ports`, a port set to "external": true) is locked, so only signed-in workspace members and requests with the port's access key get through; a new template's ports follow that template (`open_by_template` in the preview). `lock_public_ports=false`, or "locked": false on its item, leaves it open to anyone who knows the URL: only when the user explicitly asks. A port that is exposed already keeps its lock; set_port_lock changes it without a restart. The preview lists `locked_ports` and `open_ports`.
         Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Names work on previews; confirm with the returned ids. Spot pods can't have local storage, so detach it to switch to spot.
         If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes unpreserved workspace files: when the pod has any, allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
         If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
@@ -479,7 +551,8 @@ def register(server: MCPServer) -> None:
                               template_ports=template_ports, remove_ports=remove_ports, command=command,
                               volumes=volumes, local_volumes=local_volumes, detach_storages=detach_storages,
                               drop_watched_folders=drop_watched_folders, max_price_per_hour=max_price_per_hour,
-                              enable_folder_saving=True if enable_folder_saving else None)
+                              enable_folder_saving=True if enable_folder_saving else None,
+                              lock_public_ports=lock_public_ports)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -494,19 +567,22 @@ def register(server: MCPServer) -> None:
             if not confirm or (loss and not allow_data_loss):
                 # The consent flags don't change the estimate; without them the server prices the edit instead of
                 # refusing it for consent, and the consent question is asked here.
-                est = await call(client.estimate_pod_update, pod, ws, **changes)
+                est = await _edit(client.estimate_pod_update, pod, ws, changes)
                 label = est.name or pod
                 question = f"Change pod '{label}': {'; '.join(est.changes) if est.changes else 'no visible change'}?"
                 question += price_change(est)
+                locks = _locks(est, changes)
                 if set(changes) - _EDIT_CONTROLS == {"name"}:
                     question += " Only the name changes; the pod isn't restarted."
+                elif _lock_only(changes, est.restarts):
+                    question += " Only the port lock changes; it applies within seconds and the pod isn't restarted."
                 elif est.restarts:
                     question += " The pod is running, so it restarts with the new settings."
                 elif est.restarts is None:
                     question += " A running pod restarts with the new settings; a stopped one uses them at its next start."
                 else:
                     question += " The pod isn't running; it uses the new settings at its next start."
-                question += _local_storage_note(est)
+                question += _local_storage_note(est) + _ports.preview_note(locks, creating=False)
                 warning = ""
                 if allow_node_migration:
                     question += " If its machine can't fit the change, the pod moves to another machine."
@@ -516,18 +592,25 @@ def register(server: MCPServer) -> None:
                 elif allow_data_loss:
                     question += " allow_data_loss is only sent together with allow_node_migration."
                 return _storage_preview("update_pod", {"pod": pod, "workspace": ws, "estimate": to_dict(est),
+                                              **_ports.summary(locks),
                                               "allow_node_migration": allow_node_migration,
                                               "requires_data_loss_consent": loss, "data_loss_warning": warning},
                                question + warning, changes)
-            result = await call(client.update_pod, pod, ws, **changes, allow_node_migration=allow_node_migration,
-                                allow_data_loss=allow_data_loss if allow_node_migration else False)
+            result = await _edit(client.update_pod, pod, ws, changes, allow_node_migration=allow_node_migration,
+                                 allow_data_loss=allow_data_loss if allow_node_migration else False)
         out = to_dict(result)
+        locks = _locks(result, changes)
+        out.update(_ports.summary(locks))
         tx = result.transaction_id
         if result.renamed_only:
             out["next_step"] = "Renamed; the pod wasn't restarted. The pods tool shows the new name."
             return out
-        step = "The edit was accepted" + (f" (transaction {tx})" if tx is not None else "") + "."
         restarts = result.estimate.restarts if result.estimate is not None else None
+        if _lock_only(changes, restarts, tx):
+            out["next_step"] = ("The port lock was changed without restarting the pod; it applies within seconds."
+                                + _ports.result_note(locks))
+            return out
+        step = "The edit was accepted" + (f" (transaction {tx})" if tx is not None else "") + "."
         if restarts:
             step += " The pod restarts with the new settings; poll the pods tool until it is `running` again."
         elif restarts is None:
@@ -538,7 +621,7 @@ def register(server: MCPServer) -> None:
         if tx is not None:
             step += (f" If it doesn't come back as expected, call the transactions tool with transaction_id={tx}: it "
                      "shows the current step and why it failed.")
-        out["next_step"] = step
+        out["next_step"] = step + _ports.result_note(locks)
         return out
 
     # --- Watched folders (harvest folders of a running Pod) ---------------------------------------------------

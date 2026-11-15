@@ -3,6 +3,73 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.10.0
+
+Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by
+default (a template port that its template sets open is the exception). A locked port lets through workspace members
+signed in to the console and programs that send one of the port's access keys; every other request gets 401. Built
+on the `meshive` Python SDK 1.10, which this release needs. There are 5 new tools; existing tool names are
+unchanged, and the pod tools gain one argument.
+
+### Changed
+
+- **New public ports are locked by default.** `create_pod`, `estimate_pod` and `update_pod` take
+  `lock_public_ports` (default `true`). A new pod's exposed ports are created locked, and so is a port an edit newly
+  exposes (a new external port, an internal port set to external). A port that is public already keeps the lock it
+  has. Before this release these ports were open to anyone who knew the URL, so a script that calls a new pod's URL
+  without a key now gets 401: give it an access key, or ask for the port to be unlocked.
+- **A port the template sets open is the one exception, and the user is asked about it.** A template's author can
+  set one of its ports to open, and such a port is then created open with plain arguments too (also when an edit
+  moves a pod to that template). The preview lists it under `open_by_template`, says that it is open because of the
+  template and not because the user asked, names the argument that locks it (`"locked": true` on its
+  `template_ports` item) and tells the agent to ask the user which they want.
+- **Opening a port is spelled out.** `lock_public_ports=false`, or `"locked": false` on an item of `ports` or
+  `template_ports`, leaves a port open. The preview then lists it under `open_ports` and warns that anyone who knows
+  the URL can reach the app, and the argument descriptions tell the agent to pass it only when the user explicitly
+  asks. Previews and results list `locked_ports` too, with one line on how to connect.
+- **A lock the server can't give is never replaced by an open port.** When the platform has locking turned off, or
+  the API server predates port locks, the pod tools fail with `endpoint_lock_unavailable` (`reason` `disabled` or
+  `unsupported`) and nothing is created or changed. Its `next_step` sends the choice back to the user: wait, keep
+  the port internal, or ask for open ports, which the agent then previews first. An edit that only locks ports the
+  pod already exposes has no such choice: its refusal says that the ports stay as they are and to try again later.
+- **A locked port is shown as one.** Every endpoint in `pods` has `access`: `internal`, `locked` or `unlocked`, with
+  `locked`, `lock_decided_at` and `access_key_count`. A response with a locked port carries `access_note`, and the
+  `pods`, `restart_pod` and `run_command` descriptions and the server instructions say the same: a 401 from a locked
+  port (a browser is sent to the console to sign in) is the lock working, not a fault, so the pod is not to be
+  restarted, edited or deleted for it. To call the app for its own work the agent uses `run_command` against
+  `http://localhost:<port>` inside the pod.
+- `update_pod` says that an edit which only changes port locks is applied within seconds without a restart, when
+  the server's answer says so (no restart, no transaction). If the server could not change a lock that an edit asked
+  for, the error is `port_lock_change_failed` with the `ports`, and the agent is told to check and set those ports
+  instead of sending the edit again.
+- The server instructions have a short `Locked ports` section inside the first 4096 characters (a 401 from a locked
+  port is the lock working), name the access key tools under `Secrets`, `set_port_lock` among the `confirm`
+  exceptions, and `create_access_key` and `roll_access_key` as the exception to looking a write up with
+  `operation_status`. To make room, the notes on paged lists and encrypted storage relocking moved behind the cut,
+  where a longer `Port access` section also sits; each list response and the `connect_storage` tool say the same
+  where it applies.
+
+### New
+
+- `set_port_lock` locks or unlocks one exposed port without restarting the pod. Locking needs no `confirm`.
+  Unlocking does: the preview says that anyone who knows the URL can then reach the app and that the port's access
+  keys are kept.
+- `access_keys` lists the access keys of one port, or of every exposed port of a pod, with each port's `access`. A
+  port that was made internal while it held keys is listed too, so that those keys can be found and revoked. A key's
+  value is never listed, only its first characters.
+- `create_access_key` creates a key for a locked port (30, 90 or 365 days, or no expiry) and `roll_access_key`
+  replaces a key's value while the old one keeps working for an hour, a day, a week or not at all. Both take
+  `confirm`, and both treat the value like an SSH password: it is returned once, as `access_key` in the confirmed
+  answer, only when the user asked for it; the agent is told to hand it to that user and never to use it or put it in
+  files, commits, commands or other tools. The server keeps no operation record of these calls. Every call issues
+  another value and none is resent after a timeout, so a call without a clear answer fails with
+  `access_key_outcome_unknown` and tells the agent to read `access_keys` before doing anything else; their previews
+  say the same for a call that ends on the agent's side, where the usual rule of reusing the operation ID doesn't
+  apply.
+- `revoke_access_key` revokes a key after `confirm`; its value stops working within seconds.
+- New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
+  `too_many_access_keys`, `access_key_not_found`.
+
 ## v1.9.0
 
 An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it

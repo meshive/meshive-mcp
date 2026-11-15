@@ -9,6 +9,7 @@ from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many, resolve_pod
 from ._common import READ_ONLY, call, meshive_tool
+from ._ports import ACCESS_NOTE
 
 
 _SECRETS_NOTE = ("Secret connect values are included because show_secrets was set. Give them only to the user who "
@@ -27,6 +28,10 @@ def _pod_dict(p: Any, show_secrets: bool = False) -> dict[str, Any]:
     return d
 
 
+def _has_locked_port(pod: dict[str, Any]) -> bool:
+    return any(e.get("access") == "locked" for e in pod.get("endpoints") or [])
+
+
 def register(server: MCPServer) -> None:
     @meshive_tool(server, "pods", title="List Pods", annotations=READ_ONLY)
     async def pods(ctx: Context[Any, Any], workspace: str | None = None, pod: str | None = None,
@@ -36,6 +41,7 @@ def register(server: MCPServer) -> None:
         `workspace` takes the id from the workspaces tool (a label also works); pass "all" to list pods across every workspace, or omit it if the user has only one.
         Set `include_metrics` for live CPU/RAM/GPU usage of a single pod (`ram_size`, `ephemeral_storage_*` and GPU `vram_size` are MiB); use `status` to filter the list. System-managed downloader pods are hidden unless `include_system` is true; they are free and cannot be stopped or deleted.
         To open a pod, use its `endpoints` (URLs; `readiness` ready/preparing/interrupted) and `connect_credentials` (logins the console shows on Connect, e.g. ComfyUI's ACCESS_PASSWORD). Secret values are null; set `show_secrets` with a single `pod` only when the user asks for the login (a read-only API key gets "***").
+        Each endpoint's `access` says who can reach it: internal (only from inside the workspace), locked (only workspace members signed in to the console and requests that carry one of the port's access keys) or unlocked (anyone who knows the URL). A locked port answers a request without a key with 401 and sends a browser to the console to sign in. That is the lock working, not a fault: don't restart, edit or delete the pod for it. To call the app for your own work, use run_command inside the pod against http://localhost:<port>; for a program outside the pod, ask the user whether to create an access key (create_access_key). set_port_lock locks or unlocks a port.
         A stopped pod's `stop_reason_code` (other than "user") says the system stopped it, and `same_node_unavailable_reason` why it cannot start on its machine now."""
         async with meshive_client(ctx) as client:
             if pod is not None:
@@ -50,6 +56,8 @@ def register(server: MCPServer) -> None:
                 secret = [c for c in item["connect_credentials"] if c["is_secret"]]
                 if show_secrets and secret:
                     out["note"] = _MASKED_NOTE if all(c["value"] == "***" for c in secret) else _SECRETS_NOTE
+                if _has_locked_port(item):
+                    out["access_note"] = ACCESS_NOTE
                 return out
             targets = await resolve_many(client, workspace)
             if needs_input(targets):
@@ -64,4 +72,6 @@ def register(server: MCPServer) -> None:
             items = [p for p in items if not p["is_system"]]
         page = paginate(items, limit, cursor)
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
+        if any(_has_locked_port(p) for p in page["items"]):
+            page["access_note"] = ACCESS_NOTE
         return page

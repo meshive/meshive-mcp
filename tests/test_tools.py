@@ -9,23 +9,25 @@ from meshive.exceptions import AuthenticationError, RateLimitError
 READ_TOOLS = {"operation_status", "account", "workspaces", "pods", "storages", "gpus", "cpus", "templates", "servings", "tasks",
               "assets", "machines", "billing_history", "logs", "transactions", "estimate_pod", "estimate_task",
               "download_links", "models", "detect_model", "source_credentials", "watched_folders", "model_sets",
-              "machine_history", "host_messages", "activity", "command_status"}
-WRITE_TOOLS = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
+              "machine_history", "host_messages", "activity", "command_status", "access_keys"}
+WRITE_TOOLS = {"set_port_lock", "create_access_key", "roll_access_key", "revoke_access_key",
+               "create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "update_pod", "create_storage",
                "update_storage", "delete_storage", "connect_storage", "deploy_serving", "scale_serving", "pause_serving",
                "delete_serving", "submit_task", "stop_task", "register_model", "delete_model", "import_asset",
                "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace",
                "schedule_maintenance", "maintenance_window", "set_machine_listing", "retry_machine_setup",
                "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
                "host_install_command", "run_command", "upload_asset", "finish_upload"}
-# run_command can change or delete anything in the pod.
+# run_command can change or delete anything in the pod. A revoked access key can't be brought back.
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine",
-               "run_command"}
+               "run_command", "revoke_access_key"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
 # reveals a login again or issues a new one-time password or install command (machine logins and install commands
-# also email the account owner every time).
+# also email the account owner every time). An access key call issues another key value every time.
 NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task", "register_model", "import_asset",
                   "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
-                  "host_install_command", "ssh_access", "connect_storage", "run_command", "upload_asset"}
+                  "host_install_command", "ssh_access", "connect_storage", "run_command", "upload_asset",
+                  "create_access_key", "roll_access_key"}
 # Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
 
@@ -42,7 +44,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 63
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 68
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -966,7 +968,7 @@ async def test_server_instructions_cover_creating_a_workspace():
 
 
 # Tools whose `confirm` applies only to some calls; the server instructions name each exception.
-CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders"}
+CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders", "set_port_lock"}
 # Writes without `confirm`, as in the console.
 NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
                      "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload"}
@@ -992,7 +994,7 @@ async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_clien
 
 # Writes whose SDK call keeps no operation record on the server: a repeated call runs again.
 UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command", "run_command",
-                    "upload_asset", "finish_upload"}
+                    "upload_asset", "finish_upload", "create_access_key", "roll_access_key"}
 
 
 def _sdk_calls_per_tool() -> dict[str, set[str]]:

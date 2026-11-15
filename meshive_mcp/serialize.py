@@ -22,14 +22,16 @@ _DROP = {"raw"}
 #
 # One-time SSH logins never go out through to_dict: ssh_access and connect_storage put the command and password into their
 # own response, once, and the browser-terminal URL (which carries the password) is never sent. Machine logins and
-# install commands likewise go out only in the confirmed answer of machine_credentials and host_install_command.
+# install commands likewise go out only in the confirmed answer of machine_credentials and host_install_command, and
+# the value of a port access key only in the confirmed answer of create_access_key and roll_access_key.
 _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance"},
                                        "SshAccess": {"password", "web_url"},
                                        "StorageConnection": {"ssh"},
                                        "SshCredentials": {"password"},
                                        "IpmiCredentials": {"password"},
                                        "GrafanaCredentials": {"password"},
-                                       "InstallCommand": {"command"}}
+                                       "InstallCommand": {"command"},
+                                       "AccessKeyCreated": {"access_key"}}
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}
@@ -107,6 +109,10 @@ def to_dict(obj: Any) -> Any:
         # carry the whole Pod too, so they're blocked here. Only the pods tool with show_secrets=true fills the values back in.
         if cls == "ConnectCredential" and getattr(obj, "is_secret", False):
             out["value"] = None
+        # Who can reach the port: internal (inside the workspace only), locked (signed-in workspace members and the
+        # port's access keys) or unlocked (anyone with the URL). The SDK works it out; it isn't a dataclass field.
+        if cls == "PodEndpoint":
+            out["access"] = obj.access
         return out
     if isinstance(obj, dict):
         return {str(k): to_dict(v) for k, v in obj.items() if k not in _DROP}
