@@ -98,6 +98,17 @@ def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]
     return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
+def bind_pod(out: dict[str, Any], pod_name: str, *, retries: bool = True) -> dict[str, Any]:
+    """A confirmation goes by id: a display name can move to another pod between the preview and the confirmation.
+    retries=False for a call that is never sent again after an unclear outcome (an access key's value is issued once
+    per call), whose preview mustn't mention retrying."""
+    out["pod_name"] = pod_name
+    use = "for confirmation and every retry" if retries else "for the confirmation"
+    out["next_step"] += (f" Set `pod` to the returned `pod_name` ({pod_name}) {use}; display names can change or be "
+                         "reused.")
+    return out
+
+
 def price_change(est: Any) -> str:
     """Sentence with the hourly price before and after an edit, from a pod or storage update estimate."""
     after = money.hourly(est.price_per_hour)

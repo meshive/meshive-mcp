@@ -22,10 +22,12 @@ from ..errors import (NEXT_STEP_PORT_NOT_FOUND, NEXT_STEP_PORT_NOT_LOCKED, NEXT_
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod
-from ._common import DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview
+from ._common import DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, bind_pod, call, meshive_tool, preview
 from ._ports import OPEN_MEANS, ports_text
 
-_Pod = Annotated[str, Field(description="The pod_name from the pods tool (its display name also works).")]
+_Pod = Annotated[str, Field(description=(
+    "The pod_name from the pods tool. Its display name also works, except on a confirmed unlock or key change "
+    "(confirm=true): use the `pod_name` the preview returned."))]
 _Port = Annotated[int, Field(description=(
     "The port number, from the pod's `endpoints` in the pods tool; it must be exposed over HTTPS (`access` locked or "
     "unlocked)."))]
@@ -120,9 +122,9 @@ async def _issue(fn: Any, *args: Any, what: str, check: str, **kwargs: Any) -> A
             f"with access_keys. {check} If the list can't be read either, tell the user and stop.") from exc
 
 
-def _key_preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]:
+def _key_preview(kind: str, payload: dict[str, Any], question: str, pod_name: str) -> dict[str, Any]:
     """The confirm=false answer of create_access_key and roll_access_key."""
-    out = preview(kind, payload, question)
+    out = bind_pod(preview(kind, payload, question), pod_name, retries=False)
     out["next_step"] += _NO_SECOND_CALL
     return out
 
@@ -192,13 +194,15 @@ def register(server: MCPServer) -> None:
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Lock or unlock one port a pod exposes over HTTPS. The pod isn't restarted. The change takes a few seconds to take effect: the answer's `state` is `locking` or `unlocking` until it does (read `lock_state` with the pods tool). Repeating the call doesn't speed this up: wait by reading `lock_state` with the pods tool instead.
         locked=true locks it at once, without `confirm`: only workspace members signed in to the console and requests that carry one of the port's access keys (create_access_key) get through. Everything else gets 401, also programs that called the port without a key until now, so tell the user.
-        locked=false unlocks it: anyone who knows the URL can then reach the app, with no sign-in and no key. Do it only when the user explicitly asks. With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true after the user agreed. The port's access keys are kept and work again once it is locked.
+        locked=false unlocks it: anyone who knows the URL can then reach the app, with no sign-in and no key. Do it only when the user explicitly asks. With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. The port's access keys are kept and work again once it is locked.
         Only a workspace admin or billing member can change a lock. An internal port has no lock (port_not_public)."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            # An unlock is confirmed by id: the name may have moved to another pod since the preview. A lock has no
+            # preview, and an unneeded confirm=true on it doesn't refuse the display name.
+            pod = await resolve_pod(client, ws, pod, confirm=confirm and not locked)
             if not locked and not confirm:
                 current = await call(client.get_pod, pod, ws)
                 endpoint = _exposed(current, pod, port)
@@ -212,11 +216,11 @@ def register(server: MCPServer) -> None:
                 kept = endpoint.access_key_count
                 count = f" ({kept})" if kept else ""
                 keys = "" if kept == 0 else f" Its access keys{count} are kept and work again once the port is locked."
-                return preview("set_port_lock",
-                               {"pod": pod, "workspace": ws, "port": port, "locked": False,
-                                "endpoint": to_dict(endpoint)},
-                               f"Unlock port {port}{f' ({endpoint.name})' if endpoint.name else ''} of pod '{label}'? "
-                               f"Then {OPEN_MEANS}." + keys)
+                return bind_pod(preview("set_port_lock",
+                                        {"pod": pod, "workspace": ws, "port": port, "locked": False,
+                                         "endpoint": to_dict(endpoint)},
+                                        f"Unlock port {port}{f' ({endpoint.name})' if endpoint.name else ''} of pod "
+                                        f"'{label}'? Then {OPEN_MEANS}." + keys), pod)
             result = await call(client.set_port_lock, pod, ws, port, locked)
         out: dict[str, Any] = {"pod": pod, "workspace": ws, "port": result.port, "locked": result.locked,
                                "access": "locked" if result.locked else "unlocked"}
@@ -243,7 +247,7 @@ def register(server: MCPServer) -> None:
                                 workspace: str | None = None, confirm: bool = False,
                                 operation_id: str | None = None) -> dict[str, Any]:
         """Create an access key for a locked port of a pod, only when the user asks for one. The key is a secret that lets a program outside the pod call the port: it is sent as `Authorization: Bearer <key>`, or as `X-Meshive-Key: <key>` when the app uses Authorization itself.
-        With confirm=false (default) it only returns a summary and creates nothing; call again with confirm=true after the user agreed. The confirmed answer has the value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools. To call the app for your own work, use run_command inside the pod against http://localhost:<port>, which needs no key.
+        With confirm=false (default) it only returns a summary and creates nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. The confirmed answer has the value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools. To call the app for your own work, use run_command inside the pod against http://localhost:<port>, which needs no key.
         `name` is a label of 1-64 characters. `expires_in_days` is 30, 90 (default) or 365, or 0 for a key that never expires. The port must be locked (port_not_locked), and only a workspace admin or billing member can create keys.
         If a confirmed call times out or fails without a clear answer, don't call again: read access_keys first, because the key may exist, and a key whose value was lost can only be revoked."""
         name = (name or "").strip()
@@ -255,7 +259,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             if not confirm:
                 current = await call(client.get_pod, pod, ws)
                 endpoint = _locked(current, pod, port)
@@ -266,7 +270,7 @@ def register(server: MCPServer) -> None:
                     f"Create access key '{name}' for port {port} of pod '{current.user_alias or pod}'? It "
                     f"{_lifetime(expires_in_days)}. Any program that has its value can call this port until the key "
                     "expires or is revoked. The answer includes the value, which is a secret for the user alone and "
-                    "is shown only once.")
+                    "is shown only once.", pod)
             created = await _issue(
                 client.create_access_key, pod, ws, port, name, expires_in_days=expires_in_days,
                 what=f"create access key '{name}'",
@@ -287,7 +291,7 @@ def register(server: MCPServer) -> None:
                               operation_id: str | None = None) -> dict[str, Any]:
         """Replace the value of one access key, only when the user asks: the key keeps its name and port and gets a new value and a new `id`. Use it when a value may have leaked, before a key expires, or to replace a key that has expired (`expired` in access_keys): its old value is dead already, so `overlap_seconds` is ignored and there is no overlap.
         The old value keeps working for `overlap_seconds`, so the user's programs can be moved to the new value: 3600 (1 hour, default), 86400 (24 hours), 604800 (7 days), or 0 to stop the old value at once. The new value expires after the same lifetime the key was created with, counted from now.
-        With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true after the user agreed. The confirmed answer has the new value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools.
+        With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. The confirmed answer has the new value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools.
         The port must be locked, and only a workspace admin or billing member can roll keys. If a confirmed call times out or fails without a clear answer, don't call again: read access_keys first."""
         if isinstance(overlap_seconds, bool) or overlap_seconds not in _OVERLAPS:
             raise invalid_argument("`overlap_seconds` must be 0, 3600 (1 hour), 86400 (24 hours) or 604800 (7 days).")
@@ -295,7 +299,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             if not confirm:
                 current = await call(client.get_pod, pod, ws)
                 _locked(current, pod, port)
@@ -309,7 +313,7 @@ def register(server: MCPServer) -> None:
                         f"'{current.user_alias or pod}'? Its old value stopped working when it expired, so there is "
                         "no overlap. The roll issues a new value with the same name and lifetime, counted from now. "
                         "The answer includes the new value, which is a secret for the user alone and is shown only "
-                        "once.")
+                        "once.", pod)
                 return _key_preview(
                     "roll_access_key",
                     {"pod": pod, "workspace": ws, "port": port, "key": to_dict(key),
@@ -317,7 +321,7 @@ def register(server: MCPServer) -> None:
                     f"Roll access key '{key.name}' ({key.prefix}…) of port {port} of pod "
                     f"'{current.user_alias or pod}'? It gets a new value, and the old value stops working "
                     f"{_OVERLAPS[overlap_seconds]}: programs still sending the old value then get 401. The answer "
-                    "includes the new value, which is a secret for the user alone and is shown only once.")
+                    "includes the new value, which is a secret for the user alone and is shown only once.", pod)
             # What became of the old value if the roll went through: with no overlap it is dead already.
             old_value = ("the old value works until that key's `previous_value_valid_until`. Tell the user"
                          if overlap_seconds else
@@ -344,20 +348,21 @@ def register(server: MCPServer) -> None:
                                 workspace: str | None = None, confirm: bool = False,
                                 operation_id: str | None = None) -> dict[str, Any]:
         """Revoke one access key of a pod's port so that its value stops working. It can't be undone; a new key has a new value.
-        With confirm=false (default) it only returns which key would be revoked and changes nothing; call again with confirm=true after the user agreed.
+        With confirm=false (default) it only returns which key would be revoked and changes nothing; call again with confirm=true and the summary's `pod_name` after the user agreed.
         The value stops working within seconds, and so does an older value that still worked after a roll. Programs that send it then get 401. A connection that is already open, such as a WebSocket, stays open until it closes.
         Only a workspace admin or billing member can revoke keys. To replace a key's value without an outage, use roll_access_key instead."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             if not confirm:
                 key = await _key(client, pod, ws, port, key_id)
-                return preview("revoke_access_key",
-                               {"pod": pod, "workspace": ws, "port": port, "key": to_dict(key)},
-                               f"Revoke access key '{key.name}' ({key.prefix}…) of port {port}? Its value stops "
-                               "working within seconds and programs that send it get 401. This cannot be undone.")
+                return bind_pod(preview("revoke_access_key",
+                                        {"pod": pod, "workspace": ws, "port": port, "key": to_dict(key)},
+                                        f"Revoke access key '{key.name}' ({key.prefix}…) of port {port}? Its value "
+                                        "stops working within seconds and programs that send it get 401. This cannot "
+                                        "be undone."), pod)
             result = await call(client.revoke_access_key, pod, ws, port, key_id)
         out = to_dict(result)
         out.update(pod=pod, port=port)

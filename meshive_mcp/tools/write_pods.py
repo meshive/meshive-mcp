@@ -20,7 +20,8 @@ from ..errors import lock_unavailable, lock_unavailable_reason
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_storage
 from . import _ports
-from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview, price_change
+from ._common import (CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, bind_pod, call, meshive_tool, preview,
+                      price_change)
 
 # What estimate_pod and create_pod say about all their arguments together. The format of each argument is in that
 # argument's own description below (the tool's input schema), which keeps the tool descriptions short enough for
@@ -210,19 +211,11 @@ def _deleted_storage_note(pod: Any, delete_local_storages: list[str]) -> tuple[s
     return question, hint
 
 
-def _bind_pod(out: dict[str, Any], pod_name: str) -> dict[str, Any]:
-    """A confirmation goes by id: a display name can move to another pod between the preview and the confirmation."""
-    out["pod_name"] = pod_name
-    out["next_step"] += (f" Set `pod` to the returned `pod_name` ({pod_name}) for confirmation and every retry; "
-                         "display names can change or be reused.")
-    return out
-
-
 def _storage_preview(kind: str, payload: dict[str, Any], question: str, args: dict[str, Any], *,
                      pod_name: str | None = None) -> dict[str, Any]:
     out = preview(kind, payload, question)
     if pod_name is not None:
-        _bind_pod(out, pod_name)
+        bind_pod(out, pod_name)
     storage_args = {k: args[k] for k in ("volumes", "detach_storages", "delete_local_storages") if args.get(k)}
     if storage_args:
         out["storage_arguments"] = storage_args
@@ -502,14 +495,14 @@ def register(server: MCPServer) -> None:
                     where = ((" It waits until a machine has room and then starts by itself."
                               if choice in _WAITING_PLACEMENTS else "")
                              + _same_node_note(choice, current.same_node_unavailable_reason))
-                return _bind_pod(preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
-                                                       # null: not known until the server picks the placement.
-                                                       "requires_data_loss_consent": None if choice is None else loss,
-                                                       "data_loss_warning": warning},
-                                         f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes "
-                                         f"at {money.hourly(current.price_per_hour)}/hour compute plus "
-                                         f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning),
-                                 pod)
+                return bind_pod(preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
+                                                      # null: not known until the server picks the placement.
+                                                      "requires_data_loss_consent": None if choice is None else loss,
+                                                      "data_loss_warning": warning},
+                                        f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes "
+                                        f"at {money.hourly(current.price_per_hour)}/hour compute plus "
+                                        f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning),
+                                pod)
             # Consent is for a known move, so it goes only with an explicit placement.
             result = await call(client.start_pod, pod, ws, placement=choice,
                                 allow_data_loss=allow_data_loss if choice is not None else False)
@@ -716,10 +709,10 @@ def register(server: MCPServer) -> None:
                 grows = [path for path, on in wanted.items() if on and not before.get(path, False)]
                 if grows:
                     current_pod = await call(client.get_pod, pod, ws)
-                    return _bind_pod(preview("set_watched_folders", {"pod": pod, "workspace": ws, "adds_or_enables": grows,
-                                                                     "current": to_dict(current)},
-                                             f"Watch {', '.join(grows)} on '{current_pod.user_alias or pod}'? New files there are uploaded as assets "
-                                             "and their storage is billed."), pod)
+                    return bind_pod(preview("set_watched_folders", {"pod": pod, "workspace": ws, "adds_or_enables": grows,
+                                                                    "current": to_dict(current)},
+                                            f"Watch {', '.join(grows)} on '{current_pod.user_alias or pod}'? New files there are uploaded as assets "
+                                            "and their storage is billed."), pod)
             result = await call(client.set_watched_folders, pod, ws, expected_version=expected_version,
                                 template=template, user=user)
         out = to_dict(result)

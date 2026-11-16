@@ -173,9 +173,12 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm
         # Exact ids in another format (older servers) still confirm; a display name never does.
         if any(p.pod_name == pod for p in pods):
             return pod
+        # Previewing again by name could reach another pod with a question that reads the same, so the user's yes
+        # isn't carried over to a new preview.
         raise tool_error("invalid_argument", "confirm=true needs the pod's pod_name, not its display name.",
-                         "Nothing was sent. Call without confirm to preview by name, then use the returned pod_name "
-                         "for confirmation and every retry so a renamed or replaced pod cannot change the target.")
+                         "Nothing was sent. Call again with `pod` set to the `pod_name` returned by the preview the "
+                         "user agreed to, keeping the operation_id and the other arguments. If you don't have that "
+                         "pod_name, preview again and ask the user again: the name may belong to another pod now.")
     # Downloaders are left out of label matching too — they were already left out of the candidate list, only matching was off.
     hits = [p for p in pods if not _is_downloader(p) and name_key(p.user_alias) == name_key(pod)]
     if len(hits) == 1:

@@ -8,6 +8,8 @@ import json
 import pytest
 from meshive.models import Pod
 
+from conftest import LOCK_ENDPOINTS
+
 pytestmark = pytest.mark.anyio
 
 A = "aaaaaaaaaaaaaaaa-0"
@@ -128,3 +130,97 @@ async def test_delete_preview_names_the_local_storage_it_deletes_and_the_one_it_
     assert both["question"] == ("Delete pod 'trainer' (running) and its local volumes 'scratch' (10 GiB) and "
                                 "'cache' (50 GiB) with all data on them? This cannot be undone.")
     assert "add it to" not in both["next_step"]
+
+
+# Port locks and access keys confirm the same way. Unlocking another pod's port opens it to anyone who knows its URL,
+# and a key created on another pod lets programs into that pod.
+ENDPOINT_CASES = [
+    ("set_port_lock", {"port": 8188, "locked": False}),
+    ("create_access_key", {"port": 8188, "name": "batch-script"}),
+    ("roll_access_key", {"port": 8188, "key_id": 12}),
+    ("revoke_access_key", {"port": 8188, "key_id": 12}),
+]
+
+
+def shared_ports(fake, pods):
+    state = shared(fake, pods)
+    plain = fake["setup"]
+
+    def setup(inst):
+        plain(inst)
+        inst.endpoints = LOCK_ENDPOINTS
+    fake["setup"] = setup
+    return state
+
+
+@pytest.mark.parametrize("tool,extra", ENDPOINT_CASES)
+async def test_port_confirm_by_name_after_the_name_moved_reaches_no_other_pod(tool, extra, mcp_client, fake,
+                                                                             with_key):
+    state = shared_ports(fake, [pod(A, "web"), pod(B, "scratch")])
+    preview = await mcp_client.call_tool(tool, {"pod": "web", **extra})
+    assert not preview.is_error, preview.content
+    op = payload(preview)["operation_id"]
+
+    # Between preview and confirmation the pod is renamed and its name given to another pod.
+    state["pods"][:] = [pod(A, "web-old"), pod(B, "web")]
+    confirmed = await mcp_client.call_tool(tool, {"pod": "web", "confirm": True, "operation_id": op, **extra})
+
+    assert not sent(state, tool), f"confirm=true by name sent {tool}: {sent(state, tool)}"
+    refused = payload(confirmed)
+    assert confirmed.is_error and refused["code"] == "invalid_argument"
+    # The way back is the id the user agreed to; a new preview by name may reach the other pod, so it needs a new yes.
+    assert "`pod_name` returned by the preview the user agreed to" in refused["next_step"]
+    assert "preview again and ask the user again" in refused["next_step"]
+
+
+@pytest.mark.parametrize("tool,extra", ENDPOINT_CASES)
+async def test_port_preview_returns_the_pod_id_to_confirm_with(tool, extra, mcp_client, fake, with_key):
+    shared_ports(fake, [pod(A, "web"), pod(B, "scratch")])
+    body = payload(await mcp_client.call_tool(tool, {"pod": "web", **extra}))
+    assert body.get("pod_name") == A
+    assert f"`pod_name` ({A})" in body["next_step"]
+
+
+async def test_expired_key_roll_preview_returns_the_pod_id_too(mcp_client, fake, with_key):
+    from conftest import access_key_item
+    shared_ports(fake, [pod(A, "web")])
+    base = fake["setup"]
+
+    def setup(inst):
+        base(inst)
+        inst.access_keys = {8188: [{**access_key_item(14, "old-ci"), "expiresAt": "2026-11-10T09:00:00Z",
+                                    "expired": True}]}
+    fake["setup"] = setup
+    body = payload(await mcp_client.call_tool("roll_access_key", {"pod": "web", "port": 8188, "key_id": 14}))
+    assert body["question"].startswith("Roll expired access key 'old-ci'"), body["question"]
+    assert body["pod_name"] == A and f"`pod_name` ({A}) for the confirmation;" in body["next_step"]
+
+
+@pytest.mark.parametrize("tool,extra", ENDPOINT_CASES)
+async def test_port_confirm_with_the_previewed_id_still_works(tool, extra, mcp_client, fake, with_key):
+    state = shared_ports(fake, [pod(A, "web-old"), pod(B, "web")])
+    result = await mcp_client.call_tool(tool, {"pod": A, "confirm": True, "operation_id": "op-confirm-0001", **extra})
+    assert not result.is_error, result.content
+    assert [call[1][0] for call in sent(state, tool)] == [A]
+
+
+async def test_key_previews_bind_the_confirmation_without_inviting_a_retry(mcp_client, fake, with_key):
+    # A second create or roll call issues a second value, so these previews never mention retrying.
+    shared_ports(fake, [pod(A, "web")])
+    for tool, extra in ENDPOINT_CASES:
+        if tool not in ("create_access_key", "roll_access_key"):
+            continue
+        step = payload(await mcp_client.call_tool(tool, {"pod": "web", **extra}))["next_step"]
+        assert f"Set `pod` to the returned `pod_name` ({A}) for the confirmation;" in step
+        assert "retry" not in step and step.index("`pod_name`") < step.index("don't call it again"), step
+        assert step.endswith(" Reuse this operation_id for the confirmation."), step
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_locking_by_display_name_still_works(confirm, mcp_client, fake, with_key):
+    # A lock has no preview, so there is nothing to bind; an unneeded confirm=true doesn't refuse the name.
+    state = shared_ports(fake, [pod(A, "web"), pod(B, "scratch")])
+    args = {"pod": "web", "port": 8188, "locked": True, "operation_id": "op-lock-0001"}
+    result = await mcp_client.call_tool("set_port_lock", {**args, "confirm": confirm})
+    assert not result.is_error, result.content
+    assert [call[1][:4] for call in sent(state, "set_port_lock")] == [(A, "0123456789abcdef", 8188, True)]

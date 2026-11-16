@@ -87,8 +87,9 @@ unchanged, and the pod tools gain one argument.
   `set_watched_folders` refuse a display name with `confirm=true` (`invalid_argument`, nothing is sent). Before, the
   confirmation looked the name up again, so if the pod was renamed, or deleted and its name taken by another pod,
   between the preview and the confirmation, the change was made to that other pod. The previews return `pod_name` and
-  say to confirm with it, as storage previews already do. Display names still work on previews and in the other pod
-  tools.
+  say to confirm with it, as storage previews already do. The new `set_port_lock` (unlocking), `create_access_key`,
+  `roll_access_key` and `revoke_access_key` confirm the same way, so a port can't be opened, or a key issued, for a
+  pod the user didn't see. Display names still work on previews, for locking a port, and in the other pod tools.
 - **`delete_pod` names the local storage it deletes.** The preview question names each local volume listed in
   `delete_local_storages`, with its size, and the pod's other local volumes, which are kept and stay billed. Before,
   the volumes to delete appeared only as ids outside the question.
