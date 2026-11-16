@@ -1574,6 +1574,7 @@ async def test_the_descriptions_and_instructions_explain_the_lock_state(mcp_clie
 
     tools = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
     assert "`lock_state` is locking or unlocking until then" in tools["pods"]
+    assert "Repeating the call doesn't speed this up" in tools["set_port_lock"]
     assert "the answer's `state` is `locking` or `unlocking`" in tools["set_port_lock"]
     assert "`lock_state` is `locking` or `unlocking` until it is in effect" in INSTRUCTIONS
 
@@ -1602,6 +1603,7 @@ async def test_rolling_an_expired_key_is_previewed_without_an_overlap(mcp_client
     question = body["question"]
     assert question.startswith(f"Roll expired access key 'old-ci' (mshv_Zq7Zq7Zq…) of port 8188 of pod '{POD}'?")
     assert "no overlap" in question and "stops working" not in question
+    assert "overlap_seconds" not in body
     assert not _calls(fake, "roll_access_key")
     done = _payload(await mcp_client.call_tool("roll_access_key", {**ROLL_ARGS, "key_id": 14, "overlap_seconds": 0,
                                                                    "confirm": True, "operation_id": OP}))

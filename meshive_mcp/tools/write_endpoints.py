@@ -190,7 +190,7 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "set_port_lock", title="Lock or Unlock Port", annotations=MUTATE)
     async def set_port_lock(ctx: Context[Any, Any], pod: _Pod, port: _Port, locked: bool, workspace: str | None = None,
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Lock or unlock one port a pod exposes over HTTPS. The pod isn't restarted. The change takes a few seconds to take effect: the answer's `state` is `locking` or `unlocking` until it does (read `lock_state` with the pods tool).
+        """Lock or unlock one port a pod exposes over HTTPS. The pod isn't restarted. The change takes a few seconds to take effect: the answer's `state` is `locking` or `unlocking` until it does (read `lock_state` with the pods tool). Repeating the call doesn't speed this up: wait by reading `lock_state` with the pods tool instead.
         locked=true locks it at once, without `confirm`: only workspace members signed in to the console and requests that carry one of the port's access keys (create_access_key) get through. Everything else gets 401, also programs that called the port without a key until now, so tell the user.
         locked=false unlocks it: anyone who knows the URL can then reach the app, with no sign-in and no key. Do it only when the user explicitly asks. With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true after the user agreed. The port's access keys are kept and work again once it is locked.
         Only a workspace admin or billing member can change a lock. An internal port has no lock (port_not_public)."""
@@ -301,10 +301,10 @@ def register(server: MCPServer) -> None:
                 _locked(current, pod, port)
                 key = await _key(client, pod, ws, port, key_id)
                 if key.expired:
+                    # No overlap applies to an expired key, so no overlap_seconds is shown.
                     return _key_preview(
                         "roll_access_key",
-                        {"pod": pod, "workspace": ws, "port": port, "key": to_dict(key),
-                         "overlap_seconds": overlap_seconds},
+                        {"pod": pod, "workspace": ws, "port": port, "key": to_dict(key)},
                         f"Roll expired access key '{key.name}' ({key.prefix}…) of port {port} of pod "
                         f"'{current.user_alias or pod}'? Its old value stopped working when it expired, so there is "
                         "no overlap. The roll issues a new value with the same name and lifetime, counted from now. "
