@@ -70,6 +70,18 @@ unchanged, and the pod tools gain one argument.
 - New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
   `too_many_access_keys`, `access_key_not_found`.
 
+### Fixed
+
+- **A confirmed pod change reaches the pod the user saw.** `start_pod`, `delete_pod`, `update_pod` and
+  `set_watched_folders` refuse a display name with `confirm=true` (`invalid_argument`, nothing is sent). Before, the
+  confirmation looked the name up again, so if the pod was renamed, or deleted and its name taken by another pod,
+  between the preview and the confirmation, the change was made to that other pod. The previews return `pod_name` and
+  say to confirm with it, as storage previews already do. Display names still work on previews and in the other pod
+  tools.
+- **`delete_pod` names the local storage it deletes.** The preview question names each local volume listed in
+  `delete_local_storages`, with its size, and the pod's other local volumes, which are kept and stay billed. Before,
+  the volumes to delete appeared only as ids outside the question.
+
 ## v1.9.0
 
 An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it

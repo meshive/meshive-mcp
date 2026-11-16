@@ -155,9 +155,12 @@ def _is_downloader(pod: Any) -> bool:
     return bool(getattr(pod, "raw", {}).get("isDownloader"))
 
 
-async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
+async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm: bool = False) -> str:
     """If `pod` is a pod_name (16 hex + "-N") it's used as-is; otherwise it's treated as a label (user_alias) and looked up in the list.
-    Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again."""
+    Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again.
+
+    With confirm=True a display name is refused: between a preview and its confirmation the name can move to another
+    pod (renamed, or deleted and taken by a new pod), and the confirmed write must reach the pod the user saw."""
     pod = (pod or "").strip()
     if not pod:
         # An empty string passed as a label matched the **system downloader pod**, whose user_alias is empty, so stop/delete/logs
@@ -166,6 +169,13 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
     if _POD_NAME_RE.match(pod):
         return pod
     pods = await _read(client.list_pods, workspace)
+    if confirm:
+        # Exact ids in another format (older servers) still confirm; a display name never does.
+        if any(p.pod_name == pod for p in pods):
+            return pod
+        raise tool_error("invalid_argument", "confirm=true needs the pod's pod_name, not its display name.",
+                         "Nothing was sent. Call without confirm to preview by name, then use the returned pod_name "
+                         "for confirmation and every retry so a renamed or replaced pod cannot change the target.")
     # Downloaders are left out of label matching too — they were already left out of the candidate list, only matching was off.
     hits = [p for p in pods if not _is_downloader(p) and name_key(p.user_alias) == name_key(pod)]
     if len(hits) == 1:

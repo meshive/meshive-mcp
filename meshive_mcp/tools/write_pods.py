@@ -178,8 +178,51 @@ async def _storage_arguments(client: Any, ws: str, args: dict[str, Any], *, conf
     return out
 
 
-def _storage_preview(kind: str, payload: dict[str, Any], question: str, args: dict[str, Any]) -> dict[str, Any]:
+def _storage_label(storage: Any) -> str:
+    """'name' (10 GiB) for a pod's mounted volume; capacity is MiB."""
+    size = f" ({storage.capacity / 1024:g} GiB)" if getattr(storage, "capacity", 0) else ""
+    return f"'{storage.user_alias or storage.pv_name}'{size}"
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _deleted_storage_note(pod: Any, delete_local_storages: list[str]) -> tuple[str, str]:
+    """For the delete_pod preview: the end of the question (which local volumes go with the pod, and which stay and
+    keep being billed) and a next_step hint for the agent when some stay."""
+    mounted = {s.pv_name: s for s in getattr(pod, "linked_storages", None) or []}
+    gone = [_storage_label(mounted[pv]) if pv in mounted else f"'{pv}'" for pv in delete_local_storages]
+    kept = [_storage_label(s) for pv, s in mounted.items()
+            if pv not in delete_local_storages and s.storage_type == "hostPath"]
+    if len(gone) == 1:
+        question = f" and its local volume {gone[0]} with all data on it? This cannot be undone."
+    elif gone:
+        question = f" and its local volumes {_and(gone)} with all data on them? This cannot be undone."
+    else:
+        question = "? This cannot be undone."
+    if len(kept) == 1:
+        question += f" Its local volume {kept[0]} is kept and stays billed until it is deleted."
+    elif kept:
+        question += f" Its local volumes {_and(kept)} are kept and stay billed until they are deleted."
+    hint = (" To delete a kept local volume with the pod, add it to `delete_local_storages` and preview again."
+            if kept else "")
+    return question, hint
+
+
+def _bind_pod(out: dict[str, Any], pod_name: str) -> dict[str, Any]:
+    """A confirmation goes by id: a display name can move to another pod between the preview and the confirmation."""
+    out["pod_name"] = pod_name
+    out["next_step"] += (f" Set `pod` to the returned `pod_name` ({pod_name}) for confirmation and every retry; "
+                         "display names can change or be reused.")
+    return out
+
+
+def _storage_preview(kind: str, payload: dict[str, Any], question: str, args: dict[str, Any], *,
+                     pod_name: str | None = None) -> dict[str, Any]:
     out = preview(kind, payload, question)
+    if pod_name is not None:
+        _bind_pod(out, pod_name)
     storage_args = {k: args[k] for k in ("volumes", "detach_storages", "delete_local_storages") if args.get(k)}
     if storage_args:
         out["storage_arguments"] = storage_args
@@ -420,6 +463,8 @@ def register(server: MCPServer) -> None:
                         operation_id: str | None = None) -> dict[str, Any]:
         """Start a stopped pod; hourly billing resumes. With confirm=false (default) it only returns the pod's current
         state and hourly price and changes nothing; call again with confirm=true after the user agreed to pay again.
+        `pod` is the pod_name from the pods tool; a display name works on the preview, and confirm=true needs the
+        returned `pod_name`.
         `placement`: omit it (default) and the server picks what the console's Start button would; the result's
         `placement` says which one it used. Or choose: "same_node" starts it on its original machine now;
         "wait_same_node" waits until that machine has room and then starts it there; "any_node" moves it to another
@@ -435,7 +480,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             current = await call(client.get_pod, pod, ws)
             # Both placements that may land on another machine delete unpreserved workspace files (the server asks the same).
             loss = choice in _MOVING_PLACEMENTS and current.has_unpreserved_workspace is not False
@@ -457,13 +502,14 @@ def register(server: MCPServer) -> None:
                     where = ((" It waits until a machine has room and then starts by itself."
                               if choice in _WAITING_PLACEMENTS else "")
                              + _same_node_note(choice, current.same_node_unavailable_reason))
-                return preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
-                                             # null: not known until the server picks the placement.
-                                             "requires_data_loss_consent": None if choice is None else loss,
-                                             "data_loss_warning": warning},
-                               f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes at "
-                               f"{money.hourly(current.price_per_hour)}/hour compute plus "
-                               f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning)
+                return _bind_pod(preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
+                                                       # null: not known until the server picks the placement.
+                                                       "requires_data_loss_consent": None if choice is None else loss,
+                                                       "data_loss_warning": warning},
+                                         f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes "
+                                         f"at {money.hourly(current.price_per_hour)}/hour compute plus "
+                                         f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning),
+                                 pod)
             # Consent is for a known move, so it goes only with an explicit placement.
             result = await call(client.start_pod, pod, ws, placement=choice,
                                 allow_data_loss=allow_data_loss if choice is not None else False)
@@ -496,20 +542,24 @@ def register(server: MCPServer) -> None:
                          delete_local_storages: list[str] | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a pod permanently. With confirm=false (default) it only returns what would be deleted; call again
         with confirm=true after the user agreed. Attached network storage survives; local (hostPath) volumes are deleted
-        only if listed in `delete_local_storages` by pv_name or display name on the preview. Use its returned ids to confirm."""
+        only if listed in `delete_local_storages` by pv_name or display name on the preview. Confirm with the returned
+        `pod_name` and storage ids: a display name is refused with confirm=true."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             delete_local_storages = (await _storage_arguments(client, ws, {"delete_local_storages": delete_local_storages},
                                                              confirm=confirm))["delete_local_storages"]
             if not confirm:
                 current = await call(client.get_pod, pod, ws)
-                return _storage_preview("delete_pod", {"pod": to_dict(current), "workspace": ws,
-                                              "delete_local_storages": delete_local_storages or []},
-                               f"Delete pod '{current.user_alias or pod}' ({current.status})? This cannot be undone.",
-                               {"delete_local_storages": delete_local_storages})
+                question, hint = _deleted_storage_note(current, delete_local_storages or [])
+                out = _storage_preview("delete_pod", {"pod": to_dict(current), "workspace": ws,
+                                                      "delete_local_storages": delete_local_storages or []},
+                                       f"Delete pod '{current.user_alias or pod}' ({current.status})" + question,
+                                       {"delete_local_storages": delete_local_storages}, pod_name=pod)
+                out["next_step"] += hint
+                return out
             result = await call(client.delete_pod, pod, ws, delete_local_storages=delete_local_storages)
         out = to_dict(result)
         out["next_step"] = "Deletion was accepted. The pod disappears from the pods list within a minute."
@@ -531,7 +581,7 @@ def register(server: MCPServer) -> None:
                          drop_watched_folders: list[str] | None = None, max_price_per_hour: float | None = None,
                          enable_folder_saving: bool = False, lock_public_ports: _LockNewPublicPorts = True,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name also works).
+        """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name works on the preview; confirm with the returned `pod_name`).
         With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
         A running pod restarts with the new settings and a stopped pod uses them at its next start; renaming alone (`name`) doesn't restart it. Input assets and watched folders are kept.
         Locked like the console: the pod type (GPU or CPU), premiums and the image can't change.
@@ -557,7 +607,7 @@ def register(server: MCPServer) -> None:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             changes = await _storage_arguments(client, ws, changes, confirm=confirm)
             # A move deletes unpreserved workspace files, so it needs the same separate consent as start_pod any_node.
             loss = False
@@ -595,7 +645,7 @@ def register(server: MCPServer) -> None:
                                               **_ports.summary(locks),
                                               "allow_node_migration": allow_node_migration,
                                               "requires_data_loss_consent": loss, "data_loss_warning": warning},
-                               question + warning, changes)
+                               question + warning, changes, pod_name=pod)
             result = await _edit(client.update_pod, pod, ws, changes, allow_node_migration=allow_node_migration,
                                  allow_data_loss=allow_data_loss if allow_node_migration else False)
         out = to_dict(result)
@@ -650,12 +700,12 @@ def register(server: MCPServer) -> None:
         `template` = {template folder path: {"enabled": bool, "include": [...] or null}} and `user` = [{"path", "include", "enabled", "include_existing"}].
         `expected_version` is the `revision` you read; a version conflict means someone else changed it — read again.
         A running pod's template folder can't be moved: to save another folder instead, turn the template folder off and add the new path to `user` (the app keeps writing to $MESHIVE_OUTPUT_DIR, so tell the user to point the app there).
-        Adding or turning on a folder can raise storage costs (uploaded files are stored and billed): with confirm=false (default) such a change only returns a summary; call again with confirm=true after the user agreed. Removing or turning off applies immediately."""
+        Adding or turning on a folder can raise storage costs (uploaded files are stored and billed): with confirm=false (default) such a change only returns a summary; call again with confirm=true and the returned `pod_name` after the user agreed. Removing or turning off applies immediately."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
                 return ws
-            pod = await resolve_pod(client, ws, pod)
+            pod = await resolve_pod(client, ws, pod, confirm=confirm)
             if not confirm:
                 current = await call(client.get_watched_folders, pod, ws)
                 before = {f.path: f.enabled for f in current.folders or []}
@@ -666,10 +716,10 @@ def register(server: MCPServer) -> None:
                 grows = [path for path, on in wanted.items() if on and not before.get(path, False)]
                 if grows:
                     current_pod = await call(client.get_pod, pod, ws)
-                    return preview("set_watched_folders", {"pod": pod, "workspace": ws, "adds_or_enables": grows,
-                                                           "current": to_dict(current)},
-                                   f"Watch {', '.join(grows)} on '{current_pod.user_alias or pod}'? New files there are uploaded as assets "
-                                   "and their storage is billed.")
+                    return _bind_pod(preview("set_watched_folders", {"pod": pod, "workspace": ws, "adds_or_enables": grows,
+                                                                     "current": to_dict(current)},
+                                             f"Watch {', '.join(grows)} on '{current_pod.user_alias or pod}'? New files there are uploaded as assets "
+                                             "and their storage is billed."), pod)
             result = await call(client.set_watched_folders, pod, ws, expected_version=expected_version,
                                 template=template, user=user)
         out = to_dict(result)
