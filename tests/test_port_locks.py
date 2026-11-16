@@ -1646,7 +1646,7 @@ async def test_access_keys_say_when_each_key_was_last_used(mcp_client, fake, wit
     assert all(ACCESS_KEY not in json.dumps(k) for k in body["items"])
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     assert "`last_used_at`" in tools["access_keys"].description
-    assert "updated every few minutes" in tools["access_keys"].description
+    assert "collected about every 5 minutes" in tools["access_keys"].description
 
 
 # =====================================================================================================================
@@ -1684,6 +1684,7 @@ async def test_allowing_preflight_is_previewed_and_needs_confirm(mcp_client, fak
     (_, sent, kw), = _calls(fake, "set_port_preflight")
     assert sent == (POD, WS, 8188, True) and kw == {"idempotency_key": body["operation_id"]}
     assert done["allow_preflight"] is True and "every other request still needs one" in done["next_step"]
+    assert "gets the app's own answer instead of the lock's 401" in done["next_step"]
 
 
 async def test_allowing_preflight_on_an_unlocked_port_says_when_it_applies(mcp_client, fake, with_key):
@@ -1733,6 +1734,8 @@ async def test_signing_out_browser_sessions_is_previewed_and_needs_confirm(mcp_c
     assert body["locked_ports"] == [8188] and [e["port"] for e in body["endpoints"]] == [8188, 8080]
     assert body["question"].startswith(f"Sign out all browser sessions on pod '{POD}' (port 8188, the locked one)?")
     assert "Access keys keep working, and connections that are already open stay open." in body["question"]
+    assert "Every member who opened its locked ports in a browser, on any computer" in body["question"]
+    assert "one person's or one computer's session can't be signed out alone" in body["question"]
     assert body["pod_name"] == POD
 
     done = _payload(await mcp_client.call_tool("revoke_browser_sessions", {"pod": POD, "confirm": True,
@@ -1740,7 +1743,7 @@ async def test_signing_out_browser_sessions_is_previewed_and_needs_confirm(mcp_c
     (_, sent, kw), = _calls(fake, "revoke_browser_sessions")
     assert sent == (POD, WS) and kw == {"idempotency_key": body["operation_id"]}
     assert done["endpoint_count"] == 2 and done["revoked_at"].startswith("2026-11-16T08:00:00")
-    assert "Access keys keep" in done["next_step"]
+    assert "Access keys keep" in done["next_step"] and "Every member, on any computer" in done["next_step"]
 
 
 async def test_signing_out_on_a_pod_without_a_locked_port_says_so(mcp_client, fake, with_key):
