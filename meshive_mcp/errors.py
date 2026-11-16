@@ -474,8 +474,8 @@ def _lock_route_refusal(exc: NotFoundError) -> ToolError | None:
         return lock_unavailable("unsupported", pod_request=False)
     if message.strip().lower().startswith("access key not found"):
         return tool_error("access_key_not_found", message,
-                          "No working key with this id on this port: it was revoked, it expired, or it was rolled "
-                          "(a roll gives the key a new id). List the port's keys with access_keys and use an `id` "
+                          "No key with this id on this port: it was revoked, it expired more than 30 days ago, or it was "
+                          "rolled (a roll gives the key a new id). List the port's keys with access_keys and use an `id` "
                           "from there. Do not guess.")
     return None
 

@@ -49,6 +49,17 @@ unchanged, and the pod tools gain one argument.
   where a longer `Port access` section also sits; each list response and the `connect_storage` tool say the same
   where it applies.
 
+- **A lock choice that is not in effect yet is shown.** A lock or unlock takes a few seconds to reach every route of
+  the port. Each endpoint in `pods` has `lock_state` (`locked`, `locking`, `unlocked` or `unlocking`; null from a
+  server that doesn't say), and `set_port_lock` answers with `state` and one line of advice: until a locking port's
+  `lock_state` is `locked` it can still be reached without a key, and until an unlocking port's is `unlocked`
+  requests may still get 401. The `pods` and `set_port_lock` descriptions and the server instructions say so too
+  (behind the first 4096 characters).
+- **Expired access keys stay in the list for 30 days.** `access_keys` marks each key with `expired`, and
+  `roll_access_key` accepts an expired key: its preview says there is no overlap (the old value stopped working when
+  it expired) and the new value starts a fresh lifetime. `access_key_not_found` now says that a key that expired more
+  than 30 days ago is gone. Needs a Meshive API server that lists expired keys; an older one omits them.
+
 ### New
 
 - `set_port_lock` locks or unlocks one exposed port without restarting the pod. Locking needs no `confirm`.

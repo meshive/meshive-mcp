@@ -655,7 +655,7 @@ async def test_access_keys_of_one_port(mcp_client, fake, with_key):
     assert first == {"id": 12, "name": "batch-script", "prefix": "mshv_Zq7Zq7Zq", "port": 8188, "port_name": "ComfyUI",
                      "pod_name": "pod-1", "created_by": "dev@example.com", "created_at": "2026-11-02T09:00:00+00:00",
                      "issued_at": "2026-11-02T09:00:00+00:00", "expires_at": "2027-01-31T09:00:00+00:00",
-                     "previous_value_valid_until": None}
+                     "previous_value_valid_until": None, "expired": False}
     assert second["id"] == 13 and second["previous_value_valid_until"] == "2026-11-14T15:00:00+00:00"
     assert body["ports"] == [{"port": 8188, "name": "ComfyUI", "access": "locked"}]
     assert body["pod"] == POD and body["workspace"] == WS
@@ -794,7 +794,8 @@ async def test_the_confirmed_answer_carries_the_value_once(mcp_client, fake, wit
     assert body["key"] == {"id": 21, "name": "ci", "prefix": "mshv_Zq7Zq7Zq", "port": 8188, "port_name": "ComfyUI",
                            "pod_name": "pod-1", "created_by": "dev@example.com",
                            "created_at": "2026-11-02T09:00:00+00:00", "issued_at": "2026-11-02T09:00:00+00:00",
-                           "expires_at": "2027-02-14T09:00:00+00:00", "previous_value_valid_until": None}
+                           "expires_at": "2027-02-14T09:00:00+00:00", "previous_value_valid_until": None,
+                           "expired": False}
     # Exactly one copy in the text and one in the structured answer: `access_key`, and nowhere else.
     assert result.content[0].text.count(ACCESS_KEY) == 1
     assert json.dumps(result.structured_content).count(ACCESS_KEY) == 1
@@ -1503,3 +1504,127 @@ async def test_wire_keys_are_listed_port_by_port_and_never_with_a_value(mcp_clie
 
     one = _payload(await mcp_client.call_tool("access_keys", {"pod": WIRE_POD, "workspace": WS, "port": 8080}))
     assert one["items"] == [] and one["ports"] == [{"port": 8080, "name": "ide", "access": "unlocked"}]
+
+
+# =====================================================================================================================
+# A lock choice that is not in effect yet
+# =====================================================================================================================
+
+PENDING_ENDPOINTS = [{**LOCK_ENDPOINTS[0], "lockState": "locking"},
+                     {**LOCK_ENDPOINTS[1], "lockState": "unlocking"}, LOCK_ENDPOINTS[2]]
+
+
+async def test_pods_show_each_endpoints_lock_state(mcp_client, fake, with_key):
+    _setup(fake, endpoints=PENDING_ENDPOINTS)
+    body = _payload(await mcp_client.call_tool("pods", {"pod": POD}))
+    assert [(e["port"], e["access"], e["lock_state"]) for e in body["pod"]["endpoints"]] == [
+        (8188, "locked", "locking"), (8080, "unlocked", "unlocking"), (9100, "internal", None)]
+
+
+async def test_pods_from_a_server_without_lock_states_say_null(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    body = _payload(await mcp_client.call_tool("pods", {"pod": POD}))
+    assert [e["lock_state"] for e in body["pod"]["endpoints"]] == [None, None, None]
+
+
+async def test_locking_a_port_says_when_it_is_not_in_effect_yet(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS, toggle_state="locking")
+    result, body = await _call(mcp_client, "set_port_lock", {"pod": POD, "port": 8080, "locked": True,
+                                                             "operation_id": OP})
+    assert not result.is_error and body["state"] == "locking" and body["locked"] is True
+    assert ("takes a few seconds to take effect, and until `lock_state` is `locked` (read it with the pods tool) "
+            "the port can still be reached without a key") in body["next_step"]
+    assert "Then, only workspace members signed in" in body["next_step"]
+    assert "any other request gets 401, which is the lock working, not a fault" in body["next_step"]
+
+
+async def test_locking_that_is_in_effect_already_says_so(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS, toggle_state="locked")
+    body = _payload(await mcp_client.call_tool("set_port_lock", {"pod": POD, "port": 8080, "locked": True,
+                                                                 "operation_id": OP}))
+    assert body["state"] == "locked"
+    assert body["next_step"].startswith("Port 8080 is locked; it applies without a restart. Only workspace members")
+    assert "can still be reached" not in body["next_step"]
+
+
+async def test_unlocking_a_port_says_when_it_is_not_in_effect_yet(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS, toggle_state="unlocking")
+    done = _payload(await mcp_client.call_tool("set_port_lock", {"pod": POD, "port": 8188, "locked": False,
+                                                                 "confirm": True, "operation_id": OP}))
+    assert done["state"] == "unlocking" and done["locked"] is False
+    assert ("Port 8188 is being unlocked: until `lock_state` is `unlocked` (read it with the pods tool) requests may "
+            f"still get 401. Then {OPEN_TO_ANYONE}.") in done["next_step"]
+
+
+async def test_a_lock_answer_from_a_server_without_states_has_no_state(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    body = _payload(await mcp_client.call_tool("set_port_lock", {"pod": POD, "port": 8080, "locked": True,
+                                                                 "operation_id": OP}))
+    assert "state" not in body and "Port 8080 is locked; it applies without a restart." in body["next_step"]
+
+
+async def test_unlocking_a_port_that_is_being_unlocked_says_it_is_not_in_effect_yet(mcp_client, fake, with_key):
+    _setup(fake, endpoints=[LOCK_ENDPOINTS[0], {**LOCK_ENDPOINTS[1], "lockState": "unlocking"}])
+    body = _payload(await mcp_client.call_tool("set_port_lock", {"pod": POD, "port": 8080, "locked": False}))
+    assert "unlocked already; nothing was changed. It is not in effect yet (`lock_state` unlocking)." in body["next_step"]
+
+
+async def test_the_descriptions_and_instructions_explain_the_lock_state(mcp_client):
+    from meshive_mcp.server import INSTRUCTIONS
+
+    tools = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
+    assert "`lock_state` is locking or unlocking until then" in tools["pods"]
+    assert "the answer's `state` is `locking` or `unlocking`" in tools["set_port_lock"]
+    assert "`lock_state` is `locking` or `unlocking` until it is in effect" in INSTRUCTIONS
+
+
+# =====================================================================================================================
+# Expired access keys
+# =====================================================================================================================
+
+EXPIRED_KEY = {**access_key_item(14, "old-ci"), "expiresAt": "2026-11-10T09:00:00Z", "expired": True}
+
+
+async def test_access_keys_show_which_keys_expired(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS, access_keys={8188: [access_key_item(12, "batch-script"), EXPIRED_KEY]})
+    result, body = await _call(mcp_client, "access_keys", {"pod": POD, "port": 8188})
+    assert not result.is_error
+    assert [(k["id"], k["expired"]) for k in body["items"]] == [(12, False), (14, True)]
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}
+    assert "stays listed for 30 days" in desc["access_keys"] and "roll_access_key" in desc["access_keys"]
+    assert "replace a key that has expired" in desc["roll_access_key"]
+
+
+async def test_rolling_an_expired_key_is_previewed_without_an_overlap(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS, access_keys={8188: [EXPIRED_KEY]})
+    result, body = await _call(mcp_client, "roll_access_key", {**ROLL_ARGS, "key_id": 14})
+    assert not result.is_error and body["confirmed"] is False and body["key"]["expired"] is True
+    question = body["question"]
+    assert question.startswith(f"Roll expired access key 'old-ci' (mshv_Zq7Zq7Zq…) of port 8188 of pod '{POD}'?")
+    assert "no overlap" in question and "stops working" not in question
+    assert not _calls(fake, "roll_access_key")
+    done = _payload(await mcp_client.call_tool("roll_access_key", {**ROLL_ARGS, "key_id": 14, "overlap_seconds": 0,
+                                                                   "confirm": True, "operation_id": OP}))
+    assert done["access_key"] == ROLLED_ACCESS_KEY
+
+
+async def test_a_key_that_is_gone_says_expired_keys_stay_for_30_days(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    result, body = await _call(mcp_client, "roll_access_key", {**ROLL_ARGS, "key_id": 99})
+    assert result.is_error and body["code"] == "access_key_not_found"
+    assert "has no access key with id 99" in body["message"]
+    assert "expired more than 30 days ago" in body["next_step"]
+
+
+async def test_wire_expired_keys_are_listed_and_rolled(mcp_client, wire):
+    wire.routes[("GET", KEYS_PATH)] = (200, {"keys": [EXPIRED_KEY]})
+    wire.routes[("POST", f"{KEYS_PATH}/14/roll")] = (201, {**ROLLED_ITEM, "previousValueValidUntil": None})
+    body = _payload(await mcp_client.call_tool("access_keys", {"pod": WIRE_POD, "workspace": WS, "port": 8188}))
+    assert [(k["id"], k["expired"]) for k in body["items"]] == [(14, True)]
+    preview = _payload(await mcp_client.call_tool("roll_access_key", {**WIRE_ROLL, "key_id": 14}))
+    assert preview["question"].startswith("Roll expired access key")
+    done = _payload(await mcp_client.call_tool("roll_access_key", {**WIRE_ROLL, "key_id": 14, "overlap_seconds": 0,
+                                                                   "confirm": True,
+                                                                   "operation_id": preview["operation_id"]}))
+    assert wire.body("POST", f"{KEYS_PATH}/14/roll") == {"overlapSeconds": 0}
+    assert done["key"]["previous_value_valid_until"] is None and "The old value no longer works" in done["next_step"]

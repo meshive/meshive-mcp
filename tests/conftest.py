@@ -286,6 +286,8 @@ class FakeMeshive:
                                    access_key_item(13, "ci", previous_until="2026-11-14T15:00:00Z")]}
         # False: the server treats an edit that only sets "locked" on ports as an ordinary edit (restart, transaction).
         self.lock_only_in_place = True
+        # The state a lock toggle reports (locking / unlocking / ...); None = a server that doesn't report one.
+        self.toggle_state: str | None = None
 
     def _rec(self, name: str, /, *a: Any, **kw: Any) -> None:
         self.calls.append((name, a, kw))
@@ -491,7 +493,10 @@ class FakeMeshive:
     # --- Port locks and access keys ---
     async def set_port_lock(self, pod, ws, port, locked, **kw):
         self._rec("set_port_lock", pod, ws, port, locked, **kw)
-        return PortLock.from_dict({"port": port, "locked": locked})
+        reply = {"port": port, "locked": locked}
+        if self.toggle_state:
+            reply.update(state=self.toggle_state, lockDecidedAt="2026-11-16T05:00:00Z")
+        return PortLock.from_dict(reply)
 
     async def list_access_keys(self, pod, ws, port):
         self._rec("list_access_keys", pod, ws, port)

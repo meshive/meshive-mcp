@@ -135,7 +135,7 @@ that. An open port (lock_public_ports=false, or "locked": false on a port) lets 
 who knows the URL, so it needs the user's explicit request. A port that is public already keeps its lock; set_port_lock \
 changes it without a restart. Only workspace members signed in to the console and requests with one of the port's \
 access keys get through a locked port; to call its app yourself, use run_command against http://localhost:<port> in \
-the pod. Unlock a port or create a key only when the user asks. \
+the pod. A new lock choice takes a few seconds: `lock_state` is `locking` or `unlocking` until it is in effect, \nand a locking port can still be reached without a key. Unlock a port or create a key only when the user asks. \
 An access key is sent as 'Authorization: Bearer <key>'; send a port's URL only a key starting with `mshv_`, \
 never the Meshive account API key (`meshive_...`). Its value is shown once, so after \
 an unclear answer from create_access_key or roll_access_key read access_keys before calling again. \
