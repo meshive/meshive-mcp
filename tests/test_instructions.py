@@ -89,6 +89,8 @@ def test_spending_covers_every_tool_with_confirm_inside_the_client_limit():
     assert "set_watched_folders when it only removes or turns off folders" in section
     # Locking a port needs no confirm; unlocking one does, like every other call with `confirm`.
     assert "set_port_lock when locking" in section
+    # Turning preflight requests off needs no confirm either; turning them on lets requests past the lock.
+    assert "set_port_preflight when turning off" in section
     assert "confirm=false only returns an estimate or summary: show it and get an explicit yes." in section
     assert section in INSTRUCTIONS[:CLIENT_LIMIT]
 

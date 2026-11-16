@@ -139,6 +139,8 @@ ENDPOINT_CASES = [
     ("create_access_key", {"port": 8188, "name": "batch-script"}),
     ("roll_access_key", {"port": 8188, "key_id": 12}),
     ("revoke_access_key", {"port": 8188, "key_id": 12}),
+    ("set_port_preflight", {"port": 8188, "allow": True}),
+    ("revoke_browser_sessions", {}),
 ]
 
 
@@ -224,3 +226,13 @@ async def test_locking_by_display_name_still_works(confirm, mcp_client, fake, wi
     result = await mcp_client.call_tool("set_port_lock", {**args, "confirm": confirm})
     assert not result.is_error, result.content
     assert [call[1][:4] for call in sent(state, "set_port_lock")] == [(A, "0123456789abcdef", 8188, True)]
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_turning_preflight_off_by_display_name_still_works(confirm, mcp_client, fake, with_key):
+    # Turning it off has no preview, so there is nothing to bind; an unneeded confirm=true doesn't refuse the name.
+    state = shared_ports(fake, [pod(A, "web"), pod(B, "scratch")])
+    args = {"pod": "web", "port": 8188, "allow": False, "operation_id": "op-preflight-0001"}
+    result = await mcp_client.call_tool("set_port_preflight", {**args, "confirm": confirm})
+    assert not result.is_error, result.content
+    assert [call[1][:4] for call in sent(state, "set_port_preflight")] == [(A, "0123456789abcdef", 8188, False)]

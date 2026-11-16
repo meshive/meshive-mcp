@@ -8,7 +8,7 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by
 default (a template port that its template sets open is the exception). A locked port lets through workspace members
 signed in to the console and programs that send one of the port's access keys; every other request gets 401. Built
-on the `meshive` Python SDK 1.10, which this release needs. There are 5 new tools; existing tool names are
+on the `meshive` Python SDK 1.10, which this release needs. There are 7 new tools; existing tool names are
 unchanged, and the pod tools gain one argument.
 
 ### Changed
@@ -33,7 +33,8 @@ unchanged, and the pod tools gain one argument.
   the port internal, or ask for open ports, which the agent then previews first. An edit that only locks ports the
   pod already exposes has no such choice: its refusal says that the ports stay as they are and to try again later.
 - **A locked port is shown as one.** Every endpoint in `pods` has `access`: `internal`, `locked` or `unlocked`, with
-  `locked`, `lock_decided_at` and `access_key_count`. A response with a locked port carries `access_note`, and the
+  `locked` (the lock chosen; `lock_state` says whether it is in effect yet), `lock_decided_at`, `access_key_count`
+  and `allow_preflight`. A response with a locked port carries `access_note`, and the
   `pods`, `restart_pod` and `run_command` descriptions and the server instructions say the same: a 401 from a locked
   port (a browser is sent to the console to sign in) is the lock working, not a fault, so the pod is not to be
   restarted, edited or deleted for it. To call the app for its own work the agent uses `run_command` against
@@ -44,7 +45,8 @@ unchanged, and the pod tools gain one argument.
   instead of sending the edit again.
 - The server instructions have a short `Locked ports` section inside the first 4096 characters (a 401 from a locked
   port is the lock working), name the access key tools under `Secrets`, `set_port_lock` among the `confirm`
-  exceptions, and `create_access_key` and `roll_access_key` as the exception to looking a write up with
+  exceptions (with `set_port_preflight` when turning it off), and `create_access_key` and `roll_access_key` as the
+  exception to looking a write up with
   `operation_status`. To make room, the notes on paged lists and encrypted storage relocking moved behind the cut,
   where a longer `Port access` section also sits; each list response and the `connect_storage` tool say the same
   where it applies.
@@ -78,6 +80,16 @@ unchanged, and the pod tools gain one argument.
   say the same for a call that ends on the agent's side, where the usual rule of reusing the operation ID doesn't
   apply.
 - `revoke_access_key` revokes a key after `confirm`; its value stops working within seconds.
+- `access_keys` shows when each key was last used (`last_used_at`, null when it hasn't been used). It is updated every
+  few minutes, so it can lag a little; the description says so. It helps find keys nobody uses any more.
+- `set_port_preflight` lets CORS preflight requests (`OPTIONS`) to a locked port reach the app without a key, for a
+  web page on another site that calls the port from a browser; every other request still needs a key, and the app's
+  own CORS settings decide which sites may call it. Turning it on takes `confirm`, and the preview says that a key put
+  in a web page is visible to everyone who opens that page. Turning it off applies at once. Each endpoint in `pods`
+  shows the setting as `allow_preflight`.
+- `revoke_browser_sessions` signs out every browser session on a pod's locked ports after `confirm`: workspace
+  members who opened them in a browser enter again through the console. Access keys keep working, and connections
+  that are already open stay open.
 - New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
   `too_many_access_keys`, `access_key_not_found`.
 
@@ -87,9 +99,11 @@ unchanged, and the pod tools gain one argument.
   `set_watched_folders` refuse a display name with `confirm=true` (`invalid_argument`, nothing is sent). Before, the
   confirmation looked the name up again, so if the pod was renamed, or deleted and its name taken by another pod,
   between the preview and the confirmation, the change was made to that other pod. The previews return `pod_name` and
-  say to confirm with it, as storage previews already do. The new `set_port_lock` (unlocking), `create_access_key`,
-  `roll_access_key` and `revoke_access_key` confirm the same way, so a port can't be opened, or a key issued, for a
-  pod the user didn't see. Display names still work on previews, for locking a port, and in the other pod tools.
+  say to confirm with it, as storage previews already do. The new `set_port_lock` (unlocking),
+  `set_port_preflight` (turning it on), `revoke_browser_sessions`, `create_access_key`, `roll_access_key` and
+  `revoke_access_key` confirm the same way, so a port can't be opened, a key issued or browsers signed out for a pod
+  the user didn't see. Display names still work on previews, for locking a port, for turning preflight requests off,
+  and in the other pod tools.
 - **`delete_pod` names the local storage it deletes.** The preview question names each local volume listed in
   `delete_local_storages`, with its size, and the pod's other local volumes, which are kept and stay billed. Before,
   the volumes to delete appeared only as ids outside the question.

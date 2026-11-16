@@ -64,8 +64,8 @@ alone, and never write them into files, commits or other tools. Run an \
 install command only on the machine the user named. Revealing machine credentials emails the account owner.
 
 Spending, changing and deleting: every tool with a `confirm` argument needs it, except pause_serving when pausing, \
-set_machine_listing when listing, set_port_lock when locking, set_watched_folders when it only removes or turns off \
-folders, and scale_serving \
+set_machine_listing when listing, set_port_lock when locking, set_port_preflight when turning off, \
+set_watched_folders when it only removes or turns off folders, and scale_serving \
 unless it raises the replica range or per-replica price cap or enables autoscale. confirm=false only returns an \
 estimate or summary: show it and get an explicit yes. Never set confirm=true without the user's go-ahead \
 in this conversation.
@@ -136,7 +136,9 @@ who knows the URL, so it needs the user's explicit request. A port that is publi
 changes it without a restart. Only workspace members signed in to the console and requests with one of the port's \
 access keys get through a locked port; to call its app yourself, use run_command against http://localhost:<port> in \
 the pod. A new lock choice takes a few seconds: `lock_state` is `locking` or `unlocking` until it is in effect, \
-and a locking port can still be reached without a key. Unlock a port or create a key only when the user asks. \
+and a locking port can still be reached without a key. Unlock a port or create a key only when the user asks; \
+so too for set_port_preflight with allow=true. revoke_browser_sessions signs out the browsers on a pod's locked \
+ports; access keys keep working. \
 An access key is sent as 'Authorization: Bearer <key>'; send a port's URL only a key starting with `mshv_`, \
 never the Meshive account API key (`meshive_...`). Its value is shown once, so after \
 an unclear answer from create_access_key or roll_access_key read access_keys before calling again. \

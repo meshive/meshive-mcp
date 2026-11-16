@@ -17,7 +17,7 @@ from meshive.models import (AssetDownload, AssetImported, CpuLine, Credit, GpuAv
 
 from meshive.models import ActivityPage
 from meshive.models import CommandResult, CommandRun, UploadedAsset, UploadSession
-from meshive.models import AccessKey, AccessKeyCreated, PortLock
+from meshive.models import AccessKey, AccessKeyCreated, BrowserSessionsRevoked, PortLock, PortPreflight
 from meshive.models import (DowntimeEvent, HostMessage, InstallCommand, ListingCheck, ListingResult, Machine,
                             MachineCredentials, MachineDeleteCheck, MachineDeleted, MachineDetail, MaintenanceAction,
                             MaintenanceEstimate, MaintenanceWindow, MessageSent, MessagesRead, Payout, PayoutAccount,
@@ -497,6 +497,15 @@ class FakeMeshive:
         if self.toggle_state:
             reply.update(state=self.toggle_state, lockDecidedAt="2026-11-16T05:00:00Z")
         return PortLock.from_dict(reply)
+
+    async def set_port_preflight(self, pod, ws, port, allow, **kw):
+        self._rec("set_port_preflight", pod, ws, port, allow, **kw)
+        return PortPreflight.from_dict({"port": port, "allowPreflight": allow})
+
+    async def revoke_browser_sessions(self, pod, ws, **kw):
+        self._rec("revoke_browser_sessions", pod, ws, **kw)
+        return BrowserSessionsRevoked.from_dict({"podName": pod, "endpointCount": 2,
+                                                 "revokedAt": "2026-11-16T08:00:00Z"})
 
     async def list_access_keys(self, pod, ws, port):
         self._rec("list_access_keys", pod, ws, port)

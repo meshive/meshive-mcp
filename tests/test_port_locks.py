@@ -655,7 +655,7 @@ async def test_access_keys_of_one_port(mcp_client, fake, with_key):
     assert first == {"id": 12, "name": "batch-script", "prefix": "mshv_Zq7Zq7Zq", "port": 8188, "port_name": "ComfyUI",
                      "pod_name": "pod-1", "created_by": "dev@example.com", "created_at": "2026-11-02T09:00:00+00:00",
                      "issued_at": "2026-11-02T09:00:00+00:00", "expires_at": "2027-01-31T09:00:00+00:00",
-                     "previous_value_valid_until": None, "expired": False}
+                     "previous_value_valid_until": None, "expired": False, "last_used_at": None}
     assert second["id"] == 13 and second["previous_value_valid_until"] == "2026-11-14T15:00:00+00:00"
     assert body["ports"] == [{"port": 8188, "name": "ComfyUI", "access": "locked"}]
     assert body["pod"] == POD and body["workspace"] == WS
@@ -795,7 +795,7 @@ async def test_the_confirmed_answer_carries_the_value_once(mcp_client, fake, wit
                            "pod_name": "pod-1", "created_by": "dev@example.com",
                            "created_at": "2026-11-02T09:00:00+00:00", "issued_at": "2026-11-02T09:00:00+00:00",
                            "expires_at": "2027-02-14T09:00:00+00:00", "previous_value_valid_until": None,
-                           "expired": False}
+                           "expired": False, "last_used_at": None}
     # Exactly one copy in the text and one in the structured answer: `access_key`, and nowhere else.
     assert result.content[0].text.count(ACCESS_KEY) == 1
     assert json.dumps(result.structured_content).count(ACCESS_KEY) == 1
@@ -1630,3 +1630,129 @@ async def test_wire_expired_keys_are_listed_and_rolled(mcp_client, wire):
                                                                    "operation_id": preview["operation_id"]}))
     assert wire.body("POST", f"{KEYS_PATH}/14/roll") == {"overlapSeconds": 0}
     assert done["key"]["previous_value_valid_until"] is None and "The old value no longer works" in done["next_step"]
+
+
+# =====================================================================================================================
+# access_keys: when a key was last used
+# =====================================================================================================================
+
+async def test_access_keys_say_when_each_key_was_last_used(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS,
+           access_keys={8188: [{**access_key_item(12, "batch-script"), "lastUsedAt": "2026-11-16T07:30:00Z"},
+                               {**access_key_item(13, "unused"), "lastUsedAt": None}, access_key_item(14, "old")]})
+    body = _payload(await mcp_client.call_tool("access_keys", {"pod": POD, "port": 8188}))
+    used = {k["id"]: k["last_used_at"] for k in body["items"]}
+    assert used[12].startswith("2026-11-16T07:30:00") and used[13] is None and used[14] is None
+    assert all(ACCESS_KEY not in json.dumps(k) for k in body["items"])
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    assert "`last_used_at`" in tools["access_keys"].description
+    assert "updated every few minutes" in tools["access_keys"].description
+
+
+# =====================================================================================================================
+# set_port_preflight
+# =====================================================================================================================
+
+PREFLIGHT_ENDPOINTS = [{**LOCK_ENDPOINTS[0], "allowPreflight": False}, {**LOCK_ENDPOINTS[1], "allowPreflight": False},
+                       {**LOCK_ENDPOINTS[2], "allowPreflight": None}]
+
+
+async def test_pods_show_allow_preflight(mcp_client, fake, with_key):
+    _setup(fake, endpoints=[{**PREFLIGHT_ENDPOINTS[0], "allowPreflight": True}, *PREFLIGHT_ENDPOINTS[1:]])
+    body = _payload(await mcp_client.call_tool("pods", {"pod": POD}))
+    assert [e["allow_preflight"] for e in body["pod"]["endpoints"]] == [True, False, None]
+    _setup(fake, endpoints=LOCK_ENDPOINTS)                    # an older server doesn't report it
+    body = _payload(await mcp_client.call_tool("pods", {"pod": POD}))
+    assert [e["allow_preflight"] for e in body["pod"]["endpoints"]] == [None, None, None]
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    assert "`allow_preflight`" in tools["pods"].description and "set_port_preflight" in tools["pods"].description
+
+
+async def test_allowing_preflight_is_previewed_and_needs_confirm(mcp_client, fake, with_key):
+    _setup(fake, endpoints=PREFLIGHT_ENDPOINTS)
+    args = {"pod": POD, "port": 8188, "allow": True}
+    result, body = await _call(mcp_client, "set_port_preflight", args)
+    assert not result.is_error and body["confirmed"] is False and body["action"] == "set_port_preflight"
+    assert not _calls(fake, "set_port_preflight")
+    assert body["question"].startswith(f"Let preflight (OPTIONS) requests to port 8188 (ComfyUI) of pod '{POD}' reach "
+                                       "the app without a key?")
+    assert "A key put in a web page is visible to everyone who opens that page." in body["question"]
+    assert body["pod_name"] == POD and "Never set confirm=true on your own" in body["next_step"]
+
+    done = _payload(await mcp_client.call_tool("set_port_preflight", {**args, "confirm": True,
+                                                                      "operation_id": body["operation_id"]}))
+    (_, sent, kw), = _calls(fake, "set_port_preflight")
+    assert sent == (POD, WS, 8188, True) and kw == {"idempotency_key": body["operation_id"]}
+    assert done["allow_preflight"] is True and "every other request still needs one" in done["next_step"]
+
+
+async def test_allowing_preflight_on_an_unlocked_port_says_when_it_applies(mcp_client, fake, with_key):
+    _setup(fake, endpoints=PREFLIGHT_ENDPOINTS)
+    body = _payload(await mcp_client.call_tool("set_port_preflight", {"pod": POD, "port": 8080, "allow": True}))
+    assert "takes effect only once it is locked again" in body["question"]
+
+
+async def test_allowing_preflight_that_is_on_already_changes_nothing(mcp_client, fake, with_key):
+    _setup(fake, endpoints=[{**PREFLIGHT_ENDPOINTS[0], "allowPreflight": True}, *PREFLIGHT_ENDPOINTS[1:]])
+    body = _payload(await mcp_client.call_tool("set_port_preflight", {"pod": POD, "port": 8188, "allow": True}))
+    assert "already; nothing was changed" in body["next_step"] and "confirmed" not in body
+    assert not _calls(fake, "set_port_preflight")
+
+
+async def test_refusing_preflight_needs_no_confirm(mcp_client, fake, with_key):
+    _setup(fake, endpoints=PREFLIGHT_ENDPOINTS)
+    result, body = await _call(mcp_client, "set_port_preflight", {"pod": POD, "port": 8188, "allow": False,
+                                                                  "operation_id": OP})
+    assert not result.is_error
+    (_, args, kw), = _calls(fake, "set_port_preflight")
+    assert args == (POD, WS, 8188, False) and kw == {"idempotency_key": OP}
+    assert body["allow_preflight"] is False and "need a key like any other request" in body["next_step"]
+    assert not _calls(fake, "get_pod")
+    result, body = await _call(mcp_client, "set_port_preflight", {"pod": POD, "port": 8188, "allow": False})
+    assert result.is_error and body["code"] == "operation_id_required"
+
+
+async def test_preflight_on_an_internal_or_missing_port_is_refused_before_sending(mcp_client, fake, with_key):
+    _setup(fake, endpoints=PREFLIGHT_ENDPOINTS)
+    result, body = await _call(mcp_client, "set_port_preflight", {"pod": POD, "port": 9100, "allow": True})
+    assert result.is_error and body["code"] == "port_not_public"
+    result, body = await _call(mcp_client, "set_port_preflight", {"pod": POD, "port": 1234, "allow": True})
+    assert result.is_error and body["code"] == "port_not_found"
+    assert not _calls(fake, "set_port_preflight")
+
+
+# =====================================================================================================================
+# revoke_browser_sessions
+# =====================================================================================================================
+
+async def test_signing_out_browser_sessions_is_previewed_and_needs_confirm(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"pod": POD})
+    assert not result.is_error and body["confirmed"] is False and body["action"] == "revoke_browser_sessions"
+    assert not _calls(fake, "revoke_browser_sessions")
+    assert body["locked_ports"] == [8188] and [e["port"] for e in body["endpoints"]] == [8188, 8080]
+    assert body["question"].startswith(f"Sign out all browser sessions on pod '{POD}' (port 8188, the locked one)?")
+    assert "Access keys keep working, and connections that are already open stay open." in body["question"]
+    assert body["pod_name"] == POD
+
+    done = _payload(await mcp_client.call_tool("revoke_browser_sessions", {"pod": POD, "confirm": True,
+                                                                           "operation_id": body["operation_id"]}))
+    (_, sent, kw), = _calls(fake, "revoke_browser_sessions")
+    assert sent == (POD, WS) and kw == {"idempotency_key": body["operation_id"]}
+    assert done["endpoint_count"] == 2 and done["revoked_at"].startswith("2026-11-16T08:00:00")
+    assert "Access keys keep" in done["next_step"]
+
+
+async def test_signing_out_on_a_pod_without_a_locked_port_says_so(mcp_client, fake, with_key):
+    _setup(fake, endpoints=[LOCK_ENDPOINTS[1], LOCK_ENDPOINTS[2]])
+    body = _payload(await mcp_client.call_tool("revoke_browser_sessions", {"pod": POD}))
+    assert "none of its ports is locked now" in body["question"] and body["locked_ports"] == []
+
+
+async def test_signing_out_on_an_older_server_is_a_clear_error(mcp_client, fake, with_key):
+    old = NotFoundError(404, "This Meshive API server does not support signing out the browser sessions of a pod "
+                             "yet (it predates this SDK release). Use the console for now.")
+    _setup(fake, endpoints=LOCK_ENDPOINTS, raise_on={"revoke_browser_sessions": old})
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"pod": POD, "confirm": True,
+                                                                       "operation_id": OP})
+    assert result.is_error and "does not support signing out" in body["message"]
