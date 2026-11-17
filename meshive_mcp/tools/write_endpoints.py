@@ -3,8 +3,8 @@
 A port a pod exposes over HTTPS is locked or unlocked. set_port_lock changes that without a restart; unlocking opens the
 port to anyone who knows its URL, so it takes `confirm`. set_port_preflight lets CORS preflight requests to a locked
 port through without a key; turning it on opens a way past the lock, so it takes `confirm` too.
-revoke_browser_sessions signs out the browsers that entered a pod's locked ports. An access key lets a program outside the pod through a locked
-port. Its value is a secret like an SSH password: create_access_key and roll_access_key return it once, in their
+revoke_browser_sessions signs out the browsers that entered a pod's locked ports, or, with all_pods=true, those of
+every pod in a workspace. An access key lets a program outside the pod through a locked port. Its value is a secret like an SSH password: create_access_key and roll_access_key return it once, in their
 confirmed answer and nowhere else, and the server keeps no operation record of them (it would hold the value). Each of
 their calls issues another value and the SDK doesn't resend one after a timeout, so a call without a clear answer is
 followed by a look at the key list, never by a second call.
@@ -23,7 +23,7 @@ from ..errors import (NEXT_STEP_PORT_NOT_FOUND, NEXT_STEP_PORT_NOT_LOCKED, NEXT_
                       tool_error)
 from ..paging import paginate
 from ..serialize import to_dict
-from ..workspace import needs_input, resolve, resolve_pod
+from ..workspace import needs_input, resolve, resolve_pod, resolve_target
 from ._common import DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, bind_pod, call, meshive_tool, preview
 from ._ports import OPEN_MEANS, ports_text
 
@@ -34,6 +34,9 @@ _Port = Annotated[int, Field(description=(
     "The port number, from the pod's `endpoints` in the pods tool; it must be exposed over HTTPS (`access` locked or "
     "unlocked)."))]
 _KeyId = Annotated[int, Field(description="The key's `id` from the access_keys tool.")]
+_SessionsPod = Annotated[str | None, Field(description=(
+    "The pod_name from the pods tool (its display name also works, except with confirm=true: use the `pod_name` the "
+    "preview returned). Leave it out only together with all_pods=true."))]
 
 # The name length, lifetimes and overlaps the server accepts; anything else is refused before a request is sent.
 _NAME_LENGTH = 64
@@ -291,13 +294,22 @@ def register(server: MCPServer) -> None:
                                 "request, so pages on other sites can no longer call it from a browser.")
         return out
 
-    @meshive_tool(server, "revoke_browser_sessions", title="Sign Out Browser Sessions of Pod",
+    @meshive_tool(server, "revoke_browser_sessions", title="Sign Out Browser Sessions",
                   annotations=DESTRUCTIVE)
-    async def revoke_browser_sessions(ctx: Context[Any, Any], pod: _Pod, workspace: str | None = None,
-                                      confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Sign out every browser session on a pod's locked ports, only when the user asks: workspace members who opened them in a browser (they stay signed in there for 7 days) have to enter again through the console. Use it when a port was opened on a shared computer, or a session may have leaked. It covers every public port of this pod, and no other pod. It signs out every member at once, the user included: one person's or one computer's session can't be signed out alone, so say that before the user agrees.
+    async def revoke_browser_sessions(ctx: Context[Any, Any], pod: _SessionsPod = None, all_pods: bool = False,
+                                      workspace: str | None = None, confirm: bool = False,
+                                      operation_id: str | None = None) -> dict[str, Any]:
+        """Sign out every browser session on a pod's locked ports, only when the user asks: workspace members who opened them in a browser (they stay signed in there for 7 days) have to enter again through the console. Use it when a port was opened on a shared computer, or a session may have leaked. With `pod` it covers every public port of that pod, and no other pod. all_pods=true (and no `pod`) covers every pod of the workspace instead: use it only when the user asks for the whole workspace, and pass `workspace`. It signs out every member at once, the user included: one person's or one computer's session can't be signed out alone, so say that before the user agrees.
         Browser cookies only: access keys keep working, and connections that are already open (a WebSocket, for example) stay open. It takes a few seconds to apply and can't be undone; calling it again is safe.
-        With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. Only a workspace admin or billing member can do it."""
+        With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true and the summary's `pod_name` (for a whole workspace: all_pods=true and the summary's `workspace` id) after the user agreed. Only a workspace admin or billing member can do it."""
+        if all_pods:
+            if pod is not None:
+                raise invalid_argument("Pass either `pod` or all_pods=true, not both. Nothing was sent.")
+            return await _revoke_workspace_sessions(ctx, workspace, confirm)
+        if pod is None or not pod.strip():
+            # A missing pod never widens the scope to the whole workspace: that takes all_pods=true.
+            raise invalid_argument("`pod` is required: pass the pod_name, or all_pods=true to sign out every pod of "
+                                   "the workspace. Nothing was sent.")
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -325,6 +337,34 @@ def register(server: MCPServer) -> None:
         out["next_step"] = ("Browser sessions on this pod's public ports were signed out; this takes a few seconds to "
                             "apply. Every member, on any computer, enters again through the console on their next "
                             "visit. Access keys keep working, and connections that were already open stay open.")
+        return out
+
+    async def _revoke_workspace_sessions(ctx: Context[Any, Any], workspace: str | None,
+                                         confirm: bool) -> dict[str, Any]:
+        """revoke_browser_sessions without a pod: every pod of the workspace. The workspace is never picked for the
+        caller, and a confirmed call goes by its id (a label can move to another workspace between the two calls)."""
+        async with meshive_client(ctx) as client:
+            ws = await resolve_target(client, workspace or "", confirm=confirm)
+            if not confirm:
+                label = next((w.workspace_name for w in await call(client.list_workspaces)
+                              if w.namespace_name == ws), None) or ws
+                out = preview("revoke_browser_sessions", {"workspace": ws, "pods": "all"},
+                              f"Sign out all browser sessions on every pod in workspace '{label}'? Every member who "
+                              "opened a locked port of any of its pods in a browser, on any computer, will have to "
+                              "enter again through the console: one person's or one computer's session can't be "
+                              "signed out alone. Access keys keep working, and connections that are already open "
+                              "stay open. This can't be undone.")
+                out["next_step"] += (f" Set `workspace` to the returned id ({ws}) and keep all_pods=true for "
+                                     "confirmation and every retry.")
+                return out
+            result = await call(client.revoke_workspace_browser_sessions, ws)
+        out = to_dict(result)
+        out.pop("pod_name", None)
+        out.update(workspace=ws)
+        out["next_step"] = ("Browser sessions on the public ports of every pod in this workspace were signed out; this "
+                            "takes a few seconds to apply. Every member, on any computer, enters again through the "
+                            "console on their next visit. Access keys keep working, and connections that were "
+                            "already open stay open.")
         return out
 
     @meshive_tool(server, "create_access_key", title="Create Port Access Key", annotations=REVEAL,

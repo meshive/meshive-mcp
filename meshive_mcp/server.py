@@ -138,7 +138,7 @@ access keys get through a locked port; to call its app yourself, use run_command
 the pod. A new lock choice takes a few seconds: `lock_state` is `locking` or `unlocking` until it is in effect, \
 and a locking port can still be reached without a key. Unlock a port or create a key only when the user asks; \
 so too for set_port_preflight with allow=true. revoke_browser_sessions signs out the browsers on a pod's locked \
-ports; access keys keep working. \
+ports (or a whole workspace's, with all_pods); access keys keep working. \
 An access key is sent as 'Authorization: Bearer <key>'; send a port's URL only a key starting with `mshv_`, \
 never the Meshive account API key (`meshive_...`). Its value is shown once, so after \
 an unclear answer from create_access_key or roll_access_key read access_keys before calling again. \

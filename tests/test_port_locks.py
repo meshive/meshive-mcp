@@ -1759,3 +1759,42 @@ async def test_signing_out_on_an_older_server_is_a_clear_error(mcp_client, fake,
     result, body = await _call(mcp_client, "revoke_browser_sessions", {"pod": POD, "confirm": True,
                                                                        "operation_id": OP})
     assert result.is_error and "does not support signing out" in body["message"]
+
+
+async def test_signing_out_a_whole_workspace_needs_all_pods_the_workspace_and_confirm(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    # A missing or blank pod never widens the scope: the whole workspace takes all_pods=true.
+    for args in ({}, {"workspace": WS}, {"pod": "", "workspace": WS},
+                 {"pod": " ", "workspace": WS, "confirm": True, "operation_id": OP}):
+        result, body = await _call(mcp_client, "revoke_browser_sessions", args)
+        assert result.is_error and body["code"] == "invalid_argument", args
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"pod": POD, "all_pods": True})
+    assert result.is_error and body["code"] == "invalid_argument"
+    # The workspace is never picked, even when the user has one.
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"all_pods": True})
+    assert result.is_error and body["code"] == "invalid_argument"
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"all_pods": True, "workspace": "research"})
+    assert not result.is_error and body["confirmed"] is False and body["workspace"] == WS and body["pods"] == "all"
+    assert body["question"].startswith("Sign out all browser sessions on every pod in workspace 'research'?")
+    assert "one person's or one computer's session can't be signed out alone" in body["question"]
+    assert f"Set `workspace` to the returned id ({WS}) and keep all_pods=true" in body["next_step"]
+    assert not _calls(fake, "revoke_workspace_browser_sessions") and not _calls(fake, "revoke_browser_sessions")
+    # A label is refused on the confirmed call; the id goes through.
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"all_pods": True, "workspace": "research",
+                                                                       "confirm": True, "operation_id": OP})
+    assert result.is_error and not _calls(fake, "revoke_workspace_browser_sessions")
+    done = _payload(await mcp_client.call_tool("revoke_browser_sessions", {"all_pods": True, "workspace": WS,
+                                                                           "confirm": True, "operation_id": OP}))
+    (_, sent, kw), = _calls(fake, "revoke_workspace_browser_sessions")
+    assert sent == (WS,) and kw == {"idempotency_key": OP}
+    assert done["workspace"] == WS and done["endpoint_count"] == 5 and "pod_name" not in done
+    assert "every pod in this workspace" in done["next_step"] and not _calls(fake, "revoke_browser_sessions")
+
+
+async def test_a_pod_preview_confirmed_without_the_pod_signs_out_nothing(mcp_client, fake, with_key):
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    preview = _payload(await mcp_client.call_tool("revoke_browser_sessions", {"pod": POD}))
+    result, body = await _call(mcp_client, "revoke_browser_sessions", {"workspace": WS, "confirm": True,
+                                                                       "operation_id": preview["operation_id"]})
+    assert result.is_error and body["code"] == "invalid_argument"
+    assert not _calls(fake, "revoke_workspace_browser_sessions") and not _calls(fake, "revoke_browser_sessions")

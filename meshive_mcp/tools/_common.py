@@ -48,7 +48,7 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
            "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
            "send_host_message", "mark_host_messages_read", "set_port_lock", "set_port_preflight",
-           "revoke_access_key", "revoke_browser_sessions"}
+           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not

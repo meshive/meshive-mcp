@@ -90,6 +90,8 @@ unchanged, and the pod tools gain one argument.
 - `revoke_browser_sessions` signs out every browser session on a pod's locked ports after `confirm`: workspace
   members who opened them in a browser enter again through the console. Access keys keep working, and connections
   that are already open stay open.
+  With `all_pods=true` and `workspace` (and no `pod`) it signs out every pod of the workspace at once; that call
+  takes the workspace id when confirmed. A call without `pod` and without `all_pods` is refused.
 - New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
   `too_many_access_keys`, `access_key_not_found`.
 

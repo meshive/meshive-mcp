@@ -507,6 +507,11 @@ class FakeMeshive:
         return BrowserSessionsRevoked.from_dict({"podName": pod, "endpointCount": 2,
                                                  "revokedAt": "2026-11-16T08:00:00Z"})
 
+    async def revoke_workspace_browser_sessions(self, ws, **kw):
+        self._rec("revoke_workspace_browser_sessions", ws, **kw)
+        return BrowserSessionsRevoked.from_dict({"podName": None, "endpointCount": 5,
+                                                 "revokedAt": "2026-11-17T08:00:00Z"})
+
     async def list_access_keys(self, pod, ws, port):
         self._rec("list_access_keys", pod, ws, port)
         return [AccessKey.from_dict(k) for k in self.access_keys.get(port, [])]
