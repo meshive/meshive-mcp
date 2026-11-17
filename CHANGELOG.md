@@ -24,6 +24,26 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
   from the pod (for a GPU out-of-memory error it is a line the program logged), so the instructions list it as
   untrusted content. Only the `pods` tool shows them: list items leave the key out, and so do write previews and a
   pod from an SDK or server without it.
+- **Why a pod keeps ending or failed to be created.** With a `meshive` SDK and server that send them:
+  - `pods` list items carry `restart_count` and `last_exit` while the server says the last exit matters (in the
+    current run within the last 30 minutes, while the status is error, shortly before the system stopped the pod for failing repeatedly, or behind a
+    failed creation); other items leave both keys out. A single pod carries `restart_count` and `recent_exits`, whose
+    items add `current_run`, and no `last_exit`. Exits add `cause` (a fixed identifier such as `gpu_out_of_memory`)
+    and `summary` (the server's sentence); `message` stays what the program printed.
+  - A pod whose creation failed shows `creation_failure` (`cause`, `summary`, `output`, `exit_code`, `at`, `ref`)
+    alone, in place of `creation_failure_reason`, `last_exit` and `recent_exits`, so the program's line appears once.
+  - `logs` adds `previous`, the main container's last run that ended: `ended_at`, `exit_code`, `cause`, `summary`,
+    `output` and `text` (null when its output could no longer be read). A note from the server, such as where the
+    last run is, now stands in front of the untrusted-output warning instead of being replaced by it.
+  - `create_pod` returns the `pod_name` right away from servers that assign it, and its `next_step` says to poll
+    `pods` with that `pod_name`: it shows `creating` (with the create `transaction_id`) until the pod runs, and why if
+    the creation fails.
+  - A pod's display name also finds a pod that is being created or whose creation just failed: when the list has no
+    pod by that name, one more lookup by name is made (an SDK without it gives `not_found` as before).
+  - `transactions` adds `failure` (same fields) to a failed operation; its `detail` is the same summary.
+  - None of these fields, nor `creation_failure_reason`, reach a write preview. The instructions now mark every
+    `output` and `message` field as untrusted, and the `pods` description explains the fields in one sentence instead
+    of a paragraph.
 - **New tool: `send_feedback`.** Sends a bug report, an idea or a complaint to the Meshive team, as the console's
   Send feedback does. With `confirm=false` (default) it returns the exact report and sends nothing; it sends after
   the user agrees, with an `operation_id` like every other write. Its description tells the agent to offer it at

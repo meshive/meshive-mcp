@@ -9,6 +9,8 @@ The server stores no default (stateless). The model remembers it within the conv
 """
 from __future__ import annotations
 
+import functools
+import inspect
 import re
 from typing import Any, Awaitable, Callable, TypeVar
 
@@ -148,6 +150,8 @@ def needs_input(value: Any) -> bool:
 
 
 _POD_NAME_RE = re.compile(r"^[0-9a-f]{16}-\d+$")
+# Whether the installed SDK's list_pods takes `name` (a pod being created or whose creation failed, by display name).
+_LIST_PODS_BY_NAME = "name" in inspect.signature(AsyncMeshive.list_pods).parameters
 
 
 def _is_downloader(pod: Any) -> bool:
@@ -186,6 +190,12 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm
     candidates = [{"pod_name": p.pod_name, "name": p.user_alias, "status": p.status} for p in (hits or pods)
                   if not _is_downloader(p)]
     if not hits:
+        # The list has only pods that exist. A pod still being created, or whose creation failed a moment ago, is
+        # found by its name in a second lookup on servers and SDKs that support it.
+        if _LIST_PODS_BY_NAME:
+            named = await _read(functools.partial(client.list_pods, workspace, name=pod))
+            if len(named) == 1:
+                return named[0].pod_name
         raise tool_error("not_found", f"No pod named '{pod}' in the selected workspace.",
                          "Use one of the `pod_name` values listed here, or call the pods tool.", pods=candidates)
     raise tool_error("ambiguous_pod", f"Several pods are named '{pod}'.",

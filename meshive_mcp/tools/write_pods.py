@@ -499,10 +499,15 @@ def register(server: MCPServer) -> None:
         locks = _locks(created, kwargs)
         out.update(_ports.summary(locks))
         tx = created.transaction_id
-        out["next_step"] = (f"Pod '{name}' is being created" + (f" (transaction {tx})" if tx is not None else "") +
-                            ". It usually runs within a minute. Poll the pods tool (find it by name) for status and the "
-                            "exact billed price; use logs for its output.")
-        if tx is not None:
+        in_tx = f" (transaction {tx})" if tx is not None else ""
+        if created.pod_name:
+            # The server answers pods(pod=<pod_name>) from the first second: creating, then running or why it failed.
+            out["next_step"] = (f"Pod '{name}' (pod_name {created.pod_name}) is being created{in_tx}. Poll pods with "
+                                f"pod={created.pod_name}: it shows creating until it runs, and why if the create fails.")
+        else:
+            out["next_step"] = (f"Pod '{name}' is being created{in_tx}. It usually runs within a minute. Poll the pods "
+                                "tool (find it by name) for status and the exact billed price; use logs for its output.")
+        if tx is not None and not created.pod_name:
             # A failed create drops off the transactions list after a few minutes; the lookup by id has no time window.
             out["next_step"] += (f" If the pod doesn't appear or stays creating, call the transactions tool with "
                                  f"transaction_id={tx}: it shows the current step and why it failed.")

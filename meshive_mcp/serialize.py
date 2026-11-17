@@ -32,10 +32,14 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        "GrafanaCredentials": {"password"},
                                        "InstallCommand": {"command"},
                                        "AccessKeyCreated": {"access_key"},
-                                       # A pod's recent exits carry text from the pod; only the pods tool shows them
-                                       # (its description and the instructions mark them untrusted), never a write
-                                       # preview that serializes the whole Pod.
-                                       "Pod": {"recent_exits"}}
+                                       # A pod's exits and creation failure carry text from the pod (`message`,
+                                       # `output`, and the old `creation_failure_reason` that quotes it); only the pods
+                                       # tool shows them (the instructions mark those fields untrusted), never a write
+                                       # preview that serializes the whole Pod. The restart count goes with the last
+                                       # exit and the create transaction with a pod that has no record yet, so items
+                                       # carry none of them as a null.
+                                       "Pod": {"recent_exits", "last_exit", "restart_count", "creation_failure",
+                                               "creation_failure_reason", "transaction_id"}}
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}
