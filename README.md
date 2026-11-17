@@ -155,6 +155,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Files (Asset Hub) | `assets`, `upload_asset`, `finish_upload`, `import_asset`, `download_links`, `source_credentials` |
 | Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
+| Reporting to the Meshive team | `send_feedback` (a bug, an idea or a complaint; the agent asks you first) |
 
 What each tool does, and how confirmation and recovery work:
 [documentation](https://docs.meshive.ai/sdk-cli/mcp/).

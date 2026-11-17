@@ -37,7 +37,7 @@ _OWN_RETRY_ADVICE_CODES = {"endpoint_lock_unavailable", "port_lock_change_failed
                            "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable",
                            "insufficient_notice", "maintenance_overlap", "maintenance_state", "recipient_not_allowed",
                            "message_rejected", "listing_refused", "port_check_cooldown", "delete_in_progress",
-                           "credentials_not_available"}
+                           "credentials_not_available", "feedback_unavailable", "feedback_rate_limited"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key: the server keeps an operation record for them, so a retry with the same
 # operation_id gets the first answer back and operation_status can look the operation up.
@@ -48,7 +48,7 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
            "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
            "send_host_message", "mark_host_messages_read", "set_port_lock", "set_port_preflight",
-           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions"}
+           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions", "send_feedback"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
@@ -136,6 +136,11 @@ _REPLAYED_STEP = ("The server had already done this write for this operation_id 
                   "for a new action.")
 
 
+# Added to a server_error (an unexpected failure on Meshive's side): the agent may offer the user a report, once.
+_FEEDBACK_OFFER = (" If it still fails, you may ask the user once in this conversation whether to report it to Meshive "
+                   "with send_feedback (tool \"{tool}\", error_code \"server_error\"); send it only if they agree.")
+
+
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
                  operation_record: bool = True):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
@@ -176,6 +181,8 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                         unrecorded = not operation_record or operation.get("unrecorded")
                         result["next_step"] = (result.get("next_step", "") +
                                                (_UNRECORDED_RETRY if unrecorded else _RECORDED_RETRY))
+                if result.get("code") == "server_error" and name != "send_feedback":
+                    result["next_step"] = result.get("next_step", "") + _FEEDBACK_OFFER.format(tool=name)
                 return _bounded_result(result, is_error=True)
             finally:
                 if token is not None:

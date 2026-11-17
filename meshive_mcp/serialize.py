@@ -31,7 +31,11 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        "IpmiCredentials": {"password"},
                                        "GrafanaCredentials": {"password"},
                                        "InstallCommand": {"command"},
-                                       "AccessKeyCreated": {"access_key"}}
+                                       "AccessKeyCreated": {"access_key"},
+                                       # A pod's recent exits carry text from the pod; only the pods tool shows them
+                                       # (its description and the instructions mark them untrusted), never a write
+                                       # preview that serializes the whole Pod.
+                                       "Pod": {"recent_exits"}}
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}

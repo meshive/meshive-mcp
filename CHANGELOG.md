@@ -12,6 +12,21 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
   even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since
   when, the measured value and the alert level. The list is filled with any `meshive` SDK in the supported range; it
   is empty when the server doesn't send it yet.
+- **Why a pod stopped.** `pods` with a `pod` shows `recent_exits`: the times the pod's main container ended
+  abnormally, newest first (up to 5), with `at`, `reason`, `oom_kind` (`ram` when it went over its RAM limit, `vram`
+  when the GPU ran out of memory), `exit_code` and `message`. A clean exit isn't listed. A pod can show `running` while
+  its container keeps crashing and restarting, and the description now says to look here then. A `message` can come
+  from the pod (for a GPU out-of-memory error it is a line the program logged), so the instructions list it as
+  untrusted content. Only the `pods` tool shows them: list items leave the key out, and so do write previews and a
+  pod from an SDK or server without it.
+- **New tool: `send_feedback`.** Sends a bug report, an idea or a complaint to the Meshive team, as the console's
+  Send feedback does. With `confirm=false` (default) it returns the exact report and sends nothing; it sends after
+  the user agrees, with an `operation_id` like every other write. Its description tells the agent to offer it at
+  most once per conversation, when a tool fails unexpectedly or the user says something is broken, confusing or
+  missing; to keep secrets, environment values, log output and resource names out of the text; and to promise no
+  reward. A `server_error` now ends its `next_step` with that offer, and the instructions repeat the rule for clients
+  that keep them whole. New error codes: `feedback_unavailable` (the platform isn't taking reports, or the installed
+  `meshive` SDK predates `send_feedback`, which the preview already says) and `feedback_rate_limited`.
 
 ## v1.10.0
 
