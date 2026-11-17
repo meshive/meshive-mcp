@@ -495,6 +495,11 @@ class FakeMeshive:
             raw={"warnings": list(self.estimate_warnings)})
         if hasattr(estimate, "warnings"):     # an SDK that reads them; an older one leaves them in raw
             estimate.warnings = list(self.estimate_warnings)
+        if self.estimate_scratch_disk is not None:
+            estimate.raw["scratchDisk"] = self.estimate_scratch_disk
+            if hasattr(estimate, "scratch_disk"):
+                parsed = PodUpdateEstimate.from_dict({"scratchDisk": self.estimate_scratch_disk})
+                estimate.scratch_disk = parsed.scratch_disk
         estimate.port_locks = dict(self.port_locks)
         return estimate
 

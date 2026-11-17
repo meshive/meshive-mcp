@@ -35,7 +35,9 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 - **Scratch disk warnings in pod previews.** The previews of `create_pod`, `estimate_pod`, `update_pod` and
   `start_pod` add a top-level `warnings` list of `{code, message}` (most severe first, at most five) when they apply:
   `deletes_scratch_disk`, `move_deletes_scratch_disk`, `spot_scratch_erased` and `hides_files`. Each message is one
-  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`, a create
+  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`. A preview's
+  `estimate.scratch_disk` has `price_per_hour` only for the disks the request creates (it is left out for a disk the
+  pod keeps, which is not free) and `total_price_per_hour` for all of them when the server sends it. A create
   that no machine has disk for fails with `not_enough_disk`, and `watched_folders` reports `nested_volume` for a
   folder that overlaps one of your volumes.
 

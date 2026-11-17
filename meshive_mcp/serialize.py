@@ -99,6 +99,27 @@ def _with_hourly_display(value: Any) -> Any:
     return value
 
 
+def _estimate_scratch_disk(disk: Any, obj: Any) -> Any:
+    """A pod estimate's scratch disk. Its `price_per_hour` covers only the disks the request creates, so it is left
+    out when none is new, like `breakdown` leaves it out: a disk the pod keeps isn't free. `total_price_per_hour` is
+    what every disk costs per hour after the request, from servers that send it."""
+    if not isinstance(disk, dict):
+        return disk
+    disk = dict(disk)
+    total = disk.pop("total_price_per_hour", None)
+    if total is None:                       # an SDK that doesn't read it yet
+        body = getattr(obj, "raw", None)
+        raw = body.get("scratchDisk") if isinstance(body, dict) else None
+        total = raw.get("totalPricePerHourUsd") if isinstance(raw, dict) else None
+    if not disk.get("new_paths"):
+        disk.pop("price_per_hour", None)
+        disk.pop("price_per_hour_display", None)
+    if total is not None:
+        disk["total_price_per_hour"] = normalize_number(total) if isinstance(total, str) else total
+        disk["total_price_per_hour_display"] = money.hourly(total)
+    return disk
+
+
 def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
@@ -125,6 +146,8 @@ def to_dict(obj: Any) -> Any:
                 out[f"{f.name}_display"] = {str(k): money.hourly(v) for k, v in value.items()}
             elif (cls, f.name) in _HOURLY_ITEM_FIELDS:
                 out[f.name] = _with_hourly_display(out[f.name])
+                if f.name == "scratch_disk":
+                    out[f.name] = _estimate_scratch_disk(out[f.name], obj)
         # Secret connect values (ComfyUI's ACCESS_PASSWORD, ...) are hidden in every response — the start/stop/delete previews
         # carry the whole Pod too, so they're blocked here. Only the pods tool with show_secrets=true fills the values back in.
         if cls == "ConnectCredential" and getattr(obj, "is_secret", False):

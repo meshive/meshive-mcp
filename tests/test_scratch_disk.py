@@ -46,6 +46,27 @@ async def test_create_preview_carries_the_servers_warning_once(mcp_client, fake,
     assert prev["estimate"]["scratch_disk"]["new_paths"] == ["/workspace"]
 
 
+KEPT = {"paths": ["/workspace"], "newPaths": [], "initialGb": 20, "pricePerHourUsd": "0"}
+
+
+@needs_scratch_fields
+@pytest.mark.parametrize("args", [{"pod": POD, "env": {"A": "1"}}, {"pod": POD, "name": "renamed"}])
+async def test_update_preview_shows_no_zero_price_for_a_disk_the_pod_keeps(mcp_client, fake, with_key, args):
+    """price_per_hour covers only new disks, so a kept disk would read as "$0.000": it is left out, like breakdown."""
+    fake["setup"] = _setup(estimate_scratch_disk=KEPT)
+    disk = _payload(await mcp_client.call_tool("update_pod", args))["estimate"]["scratch_disk"]
+    assert disk == {"paths": ["/workspace"], "new_paths": [], "initial_gb": 20}
+
+
+@needs_scratch_fields
+async def test_update_preview_shows_what_the_kept_disk_costs_when_the_server_says(mcp_client, fake, with_key):
+    fake["setup"] = _setup(estimate_scratch_disk={**KEPT, "totalPricePerHourUsd": "0.00208333"})
+    prev = _payload(await mcp_client.call_tool("update_pod", {"pod": POD, "env": {"A": "1"}}))
+    disk = prev["estimate"]["scratch_disk"]
+    assert disk["total_price_per_hour"] == "0.00208333" and disk["total_price_per_hour_display"] == "$0.002"
+    assert "price_per_hour" not in disk and "price_per_hour_display" not in disk
+
+
 async def test_previews_without_warnings_have_no_warnings_key(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("create_pod", {"name": "p", "template_id": 457}))
     assert "warnings" not in prev and "warnings" not in prev["estimate"]
