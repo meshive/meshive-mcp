@@ -234,6 +234,12 @@ FAILED_TX = {"transactionId": 14765, "resourceName": "sts", "userAlias": "p", "a
                                    "detail": "command exceeds 4096 characters"}]}
 
 
+# What the server sends in a machine's diskWarnings: a stalled data disk and an almost-full system disk.
+DISK_WARNINGS = [{"kind": "stall", "device": "nvme1n1", "since": "2026-11-17T03:00:00+00:00", "value": 150.0,
+                  "threshold": 120.0},
+                 {"kind": "full", "device": "/", "since": "2026-11-17T01:00:00+00:00", "value": 92.4, "threshold": 90.0}]
+
+
 class FakeMeshive:
     """Only the AsyncMeshive read methods the tests use. Records calls."""
 
@@ -693,6 +699,7 @@ class FakeMeshive:
                                         "schedules": {"upcoming": [], "ongoing": None},
                                         "bootReport": {"portCheckResults": [{"port": 22, "ok": True}]},
                                         "networkWarnings": [{"code": "slow_upload", "message": "Upload is slow"}],
+                                        "diskWarnings": DISK_WARNINGS,
                                         "platformFee": 0.2, "promotionalFeeUntil": None})
 
     async def list_maintenance(self, machine_id):

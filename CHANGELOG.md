@@ -3,6 +3,16 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## Unreleased
+
+### What's new
+
+- **Disk warnings for hosts.** `machines` with a `machine` shows `disk_warnings`: a disk that stopped responding
+  (`stall`; new workloads are paused and the machine is unlisted until the host lists it again), writes that are slow
+  even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since
+  when, the measured value and the alert level. The list is filled with any `meshive` SDK in the supported range; it
+  is empty when the server doesn't send it yet.
+
 ## v1.10.0
 
 Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by

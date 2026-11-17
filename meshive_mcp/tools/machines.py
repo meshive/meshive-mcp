@@ -25,13 +25,23 @@ def register(server: MCPServer) -> None:
         `usage_rate` is 0..1). Their `workspace` ids are what send_host_message takes. It also shows `maintenance` (every
         window with its `id` and `status`: upcoming, overdue, in_progress, done or expired), the `schedules` summary,
         the diagnostics `boot_report` and `network_warnings`, and `fee` (`platform_fee` as a fraction, 0.2 = 20%, and
-        when a promotional fee ends).
+        when a promotional fee ends). `disk_warnings` lists disk problems as `kind`, `device`, `since`, `value` and
+        `threshold`: `stall` (the disk stopped responding, new workloads are paused and the machine is unlisted; the
+        host checks the disk, then lists the machine again), `slow` (`value` is ms per write while the disk is lightly loaded)
+        or `full` (the system disk `/`; `value` is percent used). `slow` and `full` leave the machine listed.
         Set `include_metrics` for a single machine's live CPU/RAM/GPU/network usage. In `metrics`, `ram_size` is bytes,
         the other sizes (`ram_allocated`, volume sizes, GPU `vram_size`) are MiB, and `network_receive`/`network_transmit`
         are bytes per second (x 8 / 1,000,000 for Mbps)."""
         async with meshive_client(ctx) as client:
             if machine is not None:
-                item = to_dict(await call(client.get_machine, machine))
+                detail = await call(client.get_machine, machine)
+                item = to_dict(detail)
+                if "disk_warnings" not in item:
+                    # An SDK release older than the field leaves it out; the server's answer still has it.
+                    raw = getattr(detail, "raw", None)
+                    sent = raw.get("diskWarnings") if isinstance(raw, dict) else None
+                    item["disk_warnings"] = to_dict([w for w in sent if isinstance(w, dict)] if isinstance(sent, list)
+                                                    else [])
                 item["fee"] = {"platform_fee": item.pop("platform_fee", None),
                                "promotional_fee_until": item.pop("promotional_fee_until", None)}
                 try:
