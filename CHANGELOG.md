@@ -7,6 +7,11 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 
 ### What's new
 
+- **`scale_serving` says when running replicas go away.** Lowering a serving's replica count or `max_replicas`,
+  or turning autoscale off, removes the replicas running above the new setting within about 30 seconds, and the
+  requests they are handling fail. The answer now carries `replicas_removed` and says how many of the running
+  replicas are being removed and how many the serving keeps; the tool description states the rule (autoscale off
+  holds `min_replicas`, autoscale on allows up to `max_replicas`). No confirmation step was added.
 - **Disk warnings for hosts.** `machines` with a `machine` shows `disk_warnings`: a disk that stopped responding
   (`stall`; new workloads are paused and the machine is unlisted until the host lists it again), writes that are slow
   even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since

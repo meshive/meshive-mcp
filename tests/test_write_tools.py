@@ -514,6 +514,55 @@ async def test_scale_serving_confirms_cap_raise_and_autoscale_on(mcp_client, fak
     assert done["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["price_cap_per_hour"] == 2
 
 
+def _serving_fixture(fake, **fields):
+    from conftest import Serving
+    current = Serving.from_dict({"id": 42, "namespaceName": WS, "modelName": "llama", "framework": "vllm", "status": "active",
+                                 "priceCapPerHour": "1.5", **fields})
+    async def get_serving(self, sid):
+        self._rec("get_serving", sid); return current
+    fake["setup"] = lambda inst: setattr(inst, "get_serving", get_serving.__get__(inst))
+
+
+async def test_scale_serving_says_how_many_running_replicas_are_removed(mcp_client, fake, with_key):
+    """Lowering needs no confirm, so the answer is where the agent learns that running replicas go away."""
+    call = {"operation_id": "test-operation-0001", "serving": 42}
+    # autoscale off, 3 running at a fixed count of 3 → fixed count 1: two are removed
+    _serving_fixture(fake, currentReplicas=3, minReplicas=3, maxReplicas=3, autoScaleEnabled=False)
+    fixed = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 1, "max_replicas": 1}))
+    assert fixed["action"] == "scale" and fixed["replicas_removed"] == 2
+    assert "2 of 3 running replicas are being removed" in fixed["next_step"] and "keeps 1" in fixed["next_step"]
+    assert "requests they were handling fail" in fixed["next_step"]
+    # autoscale off holds min: lowering only min (range 1-3) still removes down to 1
+    only_min = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 1}))
+    assert only_min["replicas_removed"] == 2
+    # autoscale on, scaled up to 4 of 1-4: turning autoscale off drops it to min
+    _serving_fixture(fake, currentReplicas=4, minReplicas=1, maxReplicas=4, autoScaleEnabled=True)
+    off = _payload(await mcp_client.call_tool("scale_serving", {**call, "autoscale": False}))
+    assert off["replicas_removed"] == 3 and _calls(fake, "scale_serving")[0][2]["autoscale"] is False
+    # autoscale on keeps up to max: max 2 removes two, max 4 → min 2 removes none
+    lower_max = _payload(await mcp_client.call_tool("scale_serving", {**call, "max_replicas": 2}))
+    assert lower_max["replicas_removed"] == 2 and "keeps 2" in lower_max["next_step"]
+    raise_min = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 2, "confirm": True}))
+    assert "replicas_removed" not in raise_min and raise_min["next_step"].startswith("Accepted. Poll the servings tool")
+
+
+async def test_scale_serving_without_removal_keeps_the_plain_answer(mcp_client, fake, with_key):
+    call = {"operation_id": "test-operation-0001", "serving": 42}
+    # a cap-only change, a lower max that still covers what is running, and a paused serving (nothing running)
+    _serving_fixture(fake, currentReplicas=2, minReplicas=1, maxReplicas=3, autoScaleEnabled=True)
+    for args in ({"price_cap_per_hour": 1}, {"max_replicas": 2}):
+        body = _payload(await mcp_client.call_tool("scale_serving", {**call, **args}))
+        assert body["action"] == "scale" and "replicas_removed" not in body, args
+        assert body["next_step"] == "Accepted. Poll the servings tool to see the new replica counts."
+    _serving_fixture(fake, currentReplicas=0, minReplicas=2, maxReplicas=2, autoScaleEnabled=False, paused=True)
+    paused = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 1, "max_replicas": 1}))
+    assert "replicas_removed" not in paused
+    # a legacy min of 0 never reads as "removes every replica": pausing is what stops them all
+    _serving_fixture(fake, currentReplicas=1, minReplicas=1, maxReplicas=1, autoScaleEnabled=False)
+    zero = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 0, "max_replicas": 1}))
+    assert "replicas_removed" not in zero
+
+
 async def test_logs_cursor_reads_external_task_increments(mcp_client, fake, with_key):
     body = _payload(await mcp_client.call_tool("logs", {"task": "task_9", "cursor": 12}))
     assert body["task_id"] == "task_9" and _calls(fake, "get_task_logs")[0][2] == {"tail": 200, "wait": None, "cursor": 12}
