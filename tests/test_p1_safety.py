@@ -67,7 +67,7 @@ async def test_moving_placements_require_separate_data_loss_consent(mcp_client, 
     args = {'pod': 'pod-2', 'placement': placement, 'confirm': True, 'operation_id': 'move-pod-0001'}
     blocked = payload(await mcp_client.call_tool('start_pod', args))
     assert blocked['confirmed'] is False and blocked['requires_data_loss_consent'] is True
-    assert 'permanently deleted' in blocked['question'] and not writes(fake, 'start_pod')
+    assert 'deletes its scratch disk' in blocked['question'] and not writes(fake, 'start_pod')
     result = payload(await mcp_client.call_tool('start_pod', {**args, 'allow_data_loss': True}))
     assert result['accepted'] is True
     assert writes(fake, 'start_pod')[0][2]['allow_data_loss'] is True

@@ -27,6 +27,20 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
   reward. A `server_error` now ends its `next_step` with that offer, and the instructions repeat the rule for clients
   that keep them whole. New error codes: `feedback_unavailable` (the platform isn't taking reports, or the installed
   `meshive` SDK predates `send_feedback`, which the preview already says) and `feedback_rate_limited`.
+- **Scratch disk warnings in pod previews.** The previews of `create_pod`, `estimate_pod`, `update_pod` and
+  `start_pod` add a top-level `warnings` list of `{code, message}` (most severe first, at most five) when they apply:
+  `deletes_scratch_disk`, `move_deletes_scratch_disk`, `spot_scratch_erased` and `hides_files`. Each message is one
+  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`, a create
+  that no machine has disk for fails with `not_enough_disk`, and `watched_folders` reports `nested_volume` for a
+  folder that overlaps one of your volumes.
+
+### Changed
+
+- **`data_loss_warning` holds only what a move deletes.** In `start_pod` and `update_pod` previews it is now the
+  move sentence naming the scratch disk (for example "Moving this pod deletes its scratch disk at /workspace and its
+  files."), without the consent instruction, which stays in the question. It is empty when nothing is deleted,
+  including a `start_pod` without an explicit placement. Tool descriptions say "scratch disk" instead of
+  "unpreserved workspace files".
 
 ## v1.10.0
 

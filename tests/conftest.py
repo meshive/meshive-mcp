@@ -162,11 +162,13 @@ def access_key_item(key_id: int, name: str, *, port: int = 8188, previous_until:
 
 def _pod(name: str, status: str = "running", *, downloader: bool = False, same_node_reason: str | None = None,
          unpreserved: bool | None = None, endpoints: list[dict] | None = None,
-         recent_exits: list[dict] | None = None) -> Pod:
+         recent_exits: list[dict] | None = None, scratch_disks: list[dict] | None = None) -> Pod:
     if endpoints is None:
         endpoints = [{"userAlias": "ComfyUI", "containerPort": 8188, "portType": "connect",
                       "externalUrl": f"https://{name}.meshive.ai", "isReady": True}]
-    return Pod.from_dict({"podName": name, "namespaceName": "0123456789abcdef", "userAlias": "" if downloader else name,
+    extra = {} if scratch_disks is None else {"scratchDisks": scratch_disks}
+    return Pod.from_dict({**extra, "podName": name, "namespaceName": "0123456789abcdef",
+                          "userAlias": "" if downloader else name,
                           "status": status, "rentalType": "demand", "pricePerHour": "0E-8" if downloader else "0.5",
                           "isMaintenance": False, "createdAt": NOW.isoformat(), "isDownloader": downloader,
                           "sameNodeUnavailableReason": same_node_reason, "hasUnpreservedWorkspace": unpreserved,
@@ -256,6 +258,11 @@ class FakeMeshive:
         self.raise_on: dict[str, BaseException] = {}
         self.same_node_reason: str | None = None
         self.unpreserved_workspace: bool | None = None
+        # get_pod's scratchDisks as the API sends them (None = a server that doesn't list them).
+        self.scratch_disks: list[dict] | None = None
+        # The warnings and scratch disk the server attaches to a pod estimate (create or edit).
+        self.estimate_warnings: list[dict] = []
+        self.estimate_scratch_disk: dict | None = None
         # The placement the server reports for a start without one (None = an older server that doesn't report it).
         self.start_placement: str | None = None
         self.pod_running = True             # estimate_pod_update: a running pod restarts on edit
@@ -323,7 +330,8 @@ class FakeMeshive:
     async def get_pod(self, pod, workspace):
         self._rec("get_pod", pod, workspace)
         return _pod(pod, same_node_reason=self.same_node_reason, unpreserved=self.unpreserved_workspace,
-                    endpoints=self.endpoints, recent_exits=self.recent_exits)
+                    endpoints=self.endpoints, recent_exits=self.recent_exits,
+                    scratch_disks=self.scratch_disks)
 
     async def list_models(self, workspace):
         self._rec("list_models", workspace)
@@ -429,6 +437,8 @@ class FakeMeshive:
         body = self.LOCAL_ESTIMATE if kw.get("local_volumes") else self.ESTIMATE
         if kw.get("model_set"):
             body = {**body, "modelSet": {**self.MODEL_SET_SUMMARY, "slug": kw["model_set"]}}
+        if self.estimate_warnings or self.estimate_scratch_disk:
+            body = {**body, "warnings": self.estimate_warnings, "scratchDisk": self.estimate_scratch_disk}
         estimate = PodEstimate.from_dict(body)
         estimate.port_locks = dict(self.port_locks)
         return estimate
@@ -482,7 +492,9 @@ class FakeMeshive:
             price_per_hour="0.5" if same_price else ("1.013889" if local else "1"), current_price_per_hour="0.5",
             breakdown={} if same_price else ({"gpu": "1", "local_storage": "0.013889"} if local else {"gpu": "1"}),
             resources={"gpu_model": "RTX 3060", "gpu_count": 2}, note="The pod is rebuilt with the new settings.",
-            raw={})
+            raw={"warnings": list(self.estimate_warnings)})
+        if hasattr(estimate, "warnings"):     # an SDK that reads them; an older one leaves them in raw
+            estimate.warnings = list(self.estimate_warnings)
         estimate.port_locks = dict(self.port_locks)
         return estimate
 

@@ -77,7 +77,7 @@ call operation_status with that ID and the original operation_lookup method/path
 not completion; pending/unknown require reconciliation. not_found alone never authorizes a new ID.
 
 Moving pods: start_pod with placement=any_node or wait_any_node can move the pod to another machine, which \
-permanently deletes unpreserved workspace files. confirm=true needs consent to resume billing; \
+deletes any scratch disk it has. confirm=true needs consent to resume billing; \
 allow_data_loss=true needs separate explicit consent to this pod's move. Without placement the server picks; \
 data_loss_consent_required means retry with its placement, allow_data_loss=true and that separate consent. When the machine can't fit an edit, \
 update_pod returns node_migration_required: ask the user before calling again with allow_node_migration=true, which \

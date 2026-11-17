@@ -282,6 +282,80 @@ def _locks(answer: Any, args: dict[str, Any]) -> _ports.Locks:
                        ports=args.get("ports"), template_ports=args.get("template_ports"))
 
 
+# Warning codes in the order a preview lists them, most severe first. The server sends all but
+# move_deletes_scratch_disk, which only this server knows to add (the estimate can't tell whether the pod will move).
+_WARNING_ORDER = ("deletes_scratch_disk", "move_deletes_scratch_disk", "spot_scratch_erased", "hides_files")
+_MAX_WARNINGS = 5
+
+
+def _clip_path(path: str) -> str:
+    """A path as the server's warnings write it: one longer than 28 characters keeps its last 27 after '…'."""
+    return path if len(path) <= 28 else "…" + path[-27:]
+
+
+def _move_message(path: str | None) -> str:
+    where = f" at {_clip_path(path)}" if path else ""
+    return f"Moving this pod deletes its scratch disk{where} and its files."
+
+
+def _server_warnings(est: Any) -> list[dict[str, str]]:
+    """The short warnings the server attached to an estimate ([] from a server without them)."""
+    items = getattr(est, "warnings", None)
+    if items is None:
+        items = (getattr(est, "raw", None) or {}).get("warnings")
+    return [{"code": str(w.get("code") or ""), "message": str(w["message"])}
+            for w in items or [] if isinstance(w, dict) and w.get("message")]
+
+
+def _scratch_paths(pod: Any) -> list[str] | None:
+    """The paths of a pod's scratch disks, or None from a server that doesn't list them."""
+    disks = getattr(pod, "scratch_disks", None)
+    if disks is None:
+        disks = (getattr(pod, "raw", None) or {}).get("scratchDisks")
+    if not isinstance(disks, list):
+        return None
+    return [str(d.get("path")) for d in disks if isinstance(d, dict) and d.get("path")]
+
+
+def _move_warnings(pod: Any, already: list[dict[str, str]]) -> list[dict[str, str]]:
+    """For a pod whose move needs data-loss consent: what the move deletes, one entry per scratch disk, leaving out a
+    disk that `already` says the edit deletes. Without the paths (an older server) one entry says it without one."""
+    deleted = {w["message"] for w in already if w["code"] == "deletes_scratch_disk"}
+    paths = _scratch_paths(pod)
+    if paths is None:
+        return [] if deleted else [{"code": "move_deletes_scratch_disk", "message": _move_message(None)}]
+    return [{"code": "move_deletes_scratch_disk", "message": _move_message(path)} for path in paths
+            if f"Deletes the scratch disk at {_clip_path(path)} and its files." not in deleted]
+
+
+def _ordered(warnings: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Most severe first; at most _MAX_WARNINGS, dropping hides_files first."""
+    rank = {code: i for i, code in enumerate(_WARNING_ORDER)}
+    out = sorted(warnings, key=lambda w: rank.get(w["code"], len(rank)))
+    while len(out) > _MAX_WARNINGS:
+        hidden = [i for i, w in enumerate(out) if w["code"] == "hides_files"]
+        out.pop(hidden[-1] if hidden else -1)
+    return out
+
+
+def _with_warnings(out: dict[str, Any], warnings: list[dict[str, str]]) -> dict[str, Any]:
+    """Put `warnings` at the top of a response (left out when there are none) and keep it out of the nested
+    estimate, so there is one list to show."""
+    estimate = out.get("estimate")
+    if isinstance(estimate, dict):
+        estimate.pop("warnings", None)
+    if warnings:
+        out["warnings"] = warnings
+    else:
+        out.pop("warnings", None)
+    return out
+
+
+def _said(warnings: list[dict[str, str]]) -> str:
+    """The warnings as sentences for a preview's question."""
+    return "".join(f" {w['message']}" for w in warnings)
+
+
 # A create with a model set waits for its files, so the call itself may outlast the client's timeout.
 _SLOW_CREATE = (" If the create call times out, don't create the pod again: check operation_status with this "
                 "operation_id and the pods tool first.")
@@ -350,9 +424,13 @@ def register(server: MCPServer) -> None:
         out["workspace"] = ws
         if _model_set(est) is not None:
             out["model_set"] = _model_set(est)
+        warnings = _ordered(_server_warnings(est))
+        _with_warnings(out, warnings)
         locks = _locks(est, {"lock_public_ports": lock_public_ports, "ports": ports, "template_ports": template_ports})
         out.update(_ports.summary(locks))
-        out["next_step"] = ("Show the price per hour and hardware to the user." + _local_storage_note(est) +
+        shown = ("Show the price per hour, hardware and each warnings message" if warnings
+                 else "Show the price per hour and hardware")
+        out["next_step"] = (shown + " to the user." + _local_storage_note(est) +
                             _model_set_note(est) + _ports.preview_note(locks, creating=True) +
                             " Create the pod only after they agree, by calling create_pod with the same arguments and "
                             "confirm=true.")
@@ -410,9 +488,11 @@ def register(server: MCPServer) -> None:
                 payload = {"estimate": to_dict(est), "workspace": ws, "name": name, **_ports.summary(locks)}
                 if _model_set(est) is not None:
                     payload["model_set"] = _model_set(est)
+                warnings = _ordered(_server_warnings(est))
+                _with_warnings(payload, warnings)
                 return _storage_preview("create_pod", payload,
                                f"Create pod '{name}' at {money.hourly(est.price_per_hour)}/hour?" + _local_storage_note(est)
-                               + _model_set_note(est) + _ports.preview_note(locks, creating=True)
+                               + _said(warnings) + _model_set_note(est) + _ports.preview_note(locks, creating=True)
                                + (_SLOW_CREATE if _model_set(est) is not None or hf_token_id is not None else ""), kwargs)
             created = await call(client.create_pod, name, template_id, workspace=ws, **kwargs)
         out = to_dict(created)
@@ -463,10 +543,10 @@ def register(server: MCPServer) -> None:
         "wait_same_node" waits until that machine has room and then starts it there; "any_node" moves it to another
         machine now; "wait_any_node" waits until any machine has room and starts it there. A waiting pod shows as
         `waiting` in the pods tool.
-        any_node and wait_any_node can move the pod: unpreserved workspace files are then permanently deleted and
+        any_node and wait_any_node can move the pod: any scratch disk it has is then permanently deleted and
         attached local storage stays on the old machine. For those two, set allow_data_loss=true only after separate
         explicit consent to that permanent loss for this pod and placement. allow_data_loss is only sent with an
-        explicit placement: when the server's own pick would move a pod with unpreserved files, the call fails with
+        explicit placement: when the server's own pick would move a pod with a scratch disk, the call fails with
         data_loss_consent_required and names that placement. Asynchronous — poll pods for `running`."""
         choice = (placement or "").strip().lower() or None
         async with meshive_client(ctx) as client:
@@ -475,34 +555,35 @@ def register(server: MCPServer) -> None:
                 return ws
             pod = await resolve_pod(client, ws, pod, confirm=confirm)
             current = await call(client.get_pod, pod, ws)
-            # Both placements that may land on another machine delete unpreserved workspace files (the server asks the same).
+            # Both placements that may land on another machine delete the scratch disk (the server asks the same).
             loss = choice in _MOVING_PLACEMENTS and current.has_unpreserved_workspace is not False
             if not confirm or (loss and not allow_data_loss):
+                warnings: list[dict[str, str]] = []
                 if choice is None:
-                    # The server picks the placement, so whether the pod moves is only known from its answer; a move
-                    # that would lose files comes back as data_loss_consent_required with the placement it picked.
-                    warning = (" If the server's pick moves the pod to another machine, its unpreserved workspace files "
-                               "would be permanently deleted, so the start is refused with data_loss_consent_required "
-                               "naming that placement; it then needs separate explicit consent before calling again with "
-                               "that placement and allow_data_loss=true."
-                               if current.has_unpreserved_workspace is not False else "")
+                    # The server picks the placement, so whether the pod moves is only known from its answer: a move
+                    # that deletes a scratch disk comes back as data_loss_consent_required with the placement it picked.
                     where = (" The server picks the placement the console would; it may wait until a machine has room "
                              "and then start by itself."
                              + (" allow_data_loss is not sent without an explicit placement." if allow_data_loss else ""))
                 else:
-                    warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to another "
-                               "node. Obtain separate explicit consent and pass allow_data_loss=true." if loss else "")
+                    if loss:
+                        # A pod whose only scratch disk is an old one waiting for cleanup lists none, but the
+                        # move still needs consent: say so without a path.
+                        warnings = _ordered(_move_warnings(current, [])) or [
+                            {"code": "move_deletes_scratch_disk", "message": _move_message(None)}]
                     where = ((" It waits until a machine has room and then starts by itself."
                               if choice in _WAITING_PLACEMENTS else "")
                              + _same_node_note(choice, current.same_node_unavailable_reason))
-                return bind_pod(preview("start_pod", {"pod": to_dict(current), "workspace": ws, "placement": choice,
-                                                      # null: not known until the server picks the placement.
-                                                      "requires_data_loss_consent": None if choice is None else loss,
-                                                      "data_loss_warning": warning},
-                                        f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes "
-                                        f"at {money.hourly(current.price_per_hour)}/hour compute plus "
-                                        f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + warning),
-                                pod)
+                consent = " Obtain separate explicit consent and pass allow_data_loss=true." if loss else ""
+                return bind_pod(_with_warnings(preview("start_pod", {
+                    "pod": to_dict(current), "workspace": ws, "placement": choice,
+                    # null: not known until the server picks the placement.
+                    "requires_data_loss_consent": None if choice is None else loss,
+                    "data_loss_warning": _said(warnings).strip()},
+                    f"Start pod '{current.user_alias or pod}' ({current.status})? Billing resumes "
+                    f"at {money.hourly(current.price_per_hour)}/hour compute plus "
+                    f"{money.hourly(current.storage_rate_per_hour)}/hour storage." + where + _said(warnings) + consent),
+                    warnings), pod)
             # Consent is for a known move, so it goes only with an explicit placement.
             result = await call(client.start_pod, pod, ws, placement=choice,
                                 allow_data_loss=allow_data_loss if choice is not None else False)
@@ -584,7 +665,7 @@ def register(server: MCPServer) -> None:
         `env` sets or adds variables (`secret_keys` names the secret ones) and `remove_env` removes variables the user added. `ports` opens new ports, `template_ports` renames, renumbers or exposes/hides current ports ([{"port": 8188, "name": "ui", "new_port": 8189, "external": false}]) and `remove_ports` closes ports the user added. Template variables and ports can't be removed. `command` replaces the start command ("" = back to the template's).
         Port locks: a port this edit newly exposes over HTTPS (an external port in `ports`, a port set to "external": true) is locked, so only signed-in workspace members and requests with the port's access key get through; a new template's ports follow that template (`open_by_template` in the preview). `lock_public_ports=false`, or "locked": false on its item, leaves it open to anyone who knows the URL: only when the user explicitly asks. A port that is exposed already keeps its lock; set_port_lock changes it without a restart. The preview lists `locked_ports` and `open_ports`.
         Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Names work on previews; confirm with the returned ids. Spot pods can't have local storage, so detach it to switch to spot.
-        If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes unpreserved workspace files: when the pod has any, allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
+        If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes any scratch disk the pod has; then allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
         If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
         `enable_folder_saving=true` adds the uploader to an older pod that has none (watched_folders shows editable false with reason no_sidecar), so its folders can be watched; it needs storage on the pod and restarts a running pod once.
         `max_price_per_hour` refuses the edit when the new estimate is above it."""
@@ -602,8 +683,9 @@ def register(server: MCPServer) -> None:
                 return ws
             pod = await resolve_pod(client, ws, pod, confirm=confirm)
             changes = await _storage_arguments(client, ws, changes, confirm=confirm)
-            # A move deletes unpreserved workspace files, so it needs the same separate consent as start_pod any_node.
+            # A move deletes the scratch disk, so it needs the same separate consent as start_pod any_node.
             loss = False
+            current = None
             if allow_node_migration:
                 current = await call(client.get_pod, pod, ws)
                 loss = current.has_unpreserved_workspace is not False
@@ -611,6 +693,15 @@ def register(server: MCPServer) -> None:
                 # The consent flags don't change the estimate; without them the server prices the edit instead of
                 # refusing it for consent, and the consent question is asked here.
                 est = await _edit(client.estimate_pod_update, pod, ws, changes)
+                warnings = _server_warnings(est)
+                moving: list[dict[str, str]] = []
+                if allow_node_migration and loss:
+                    moving = _move_warnings(current, warnings)
+                    # Every scratch disk is already deleted by the edit itself (deletes_scratch_disk), or the pod
+                    # has none it keeps: the move deletes nothing more, so there is nothing to consent to.
+                    if not moving and _scratch_paths(current) is not None:
+                        loss = False
+            if not confirm or (loss and not allow_data_loss):
                 label = est.name or pod
                 question = f"Change pod '{label}': {'; '.join(est.changes) if est.changes else 'no visible change'}?"
                 question += price_change(est)
@@ -626,19 +717,18 @@ def register(server: MCPServer) -> None:
                 else:
                     question += " The pod isn't running; it uses the new settings at its next start."
                 question += _local_storage_note(est) + _ports.preview_note(locks, creating=False)
-                warning = ""
                 if allow_node_migration:
                     question += " If its machine can't fit the change, the pod moves to another machine."
-                    if loss:
-                        warning = (" Unpreserved workspace files will be permanently deleted if the pod moves to "
-                                   "another machine. Obtain separate explicit consent and pass allow_data_loss=true.")
                 elif allow_data_loss:
                     question += " allow_data_loss is only sent together with allow_node_migration."
-                return _storage_preview("update_pod", {"pod": pod, "workspace": ws, "estimate": to_dict(est),
-                                              **_ports.summary(locks),
-                                              "allow_node_migration": allow_node_migration,
-                                              "requires_data_loss_consent": loss, "data_loss_warning": warning},
-                               question + warning, changes, pod_name=pod)
+                warnings = _ordered(warnings + moving)
+                consent = " Obtain separate explicit consent and pass allow_data_loss=true." if loss else ""
+                moved = [w for w in warnings if w["code"] == "move_deletes_scratch_disk"]
+                return _storage_preview("update_pod", _with_warnings({
+                    "pod": pod, "workspace": ws, "estimate": to_dict(est), **_ports.summary(locks),
+                    "allow_node_migration": allow_node_migration, "requires_data_loss_consent": loss,
+                    "data_loss_warning": _said(moved).strip()}, warnings),
+                    question + _said(warnings) + consent, changes, pod_name=pod)
             result = await _edit(client.update_pod, pod, ws, changes, allow_node_migration=allow_node_migration,
                                  allow_data_loss=allow_data_loss if allow_node_migration else False)
         out = to_dict(result)
@@ -672,7 +762,7 @@ def register(server: MCPServer) -> None:
     @meshive_tool(server, "watched_folders", title="Show Watched Folders", annotations=READ_ONLY)
     async def watched_folders(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Show a pod's watched folders: folders whose new files are uploaded as Asset Hub assets.
-        Each folder has `origin` (template or user), `enabled`, its include patterns and `blocked_reason` (network_storage = on network storage, never watched).
+        Each folder has `origin` (template or user), `enabled`, its include patterns and `blocked_reason` (network_storage = on network storage, nested_volume = overlaps your volume; never watched).
         `revision` is what set_watched_folders needs as `expected_version`; `editable` false (with a reason) means it can't be changed now.
         Reason no_sidecar means the pod has no uploader: when `can_enable_saving` is true, update_pod with enable_folder_saving=true adds it (one restart); otherwise the pod first needs storage (update_pod `volumes`/`local_volumes`)."""
         async with meshive_client(ctx) as client:

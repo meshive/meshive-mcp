@@ -65,6 +65,9 @@ _USD_FIELDS: dict[str, set[str]] = {
 }
 # A pod estimate breakdown is a set of hourly amounts like {"gpu": "0.068", ...} — the console's Receipt shows 3 decimals per line too.
 _HOURLY_DICT_FIELDS = {("PodEstimate", "breakdown"), ("PodUpdateEstimate", "breakdown")}
+# Fields holding a dict, or a list of dicts, with an hourly `price_per_hour` of their own: the scratch disks of a pod and
+# of a pod estimate.
+_HOURLY_ITEM_FIELDS = {("Pod", "scratch_disks"), ("PodEstimate", "scratch_disk"), ("PodUpdateEstimate", "scratch_disk")}
 # Only numeric strings with a decimal point or exponent are touched. Integer strings like "457" may be ids, so they stay as-is.
 _DECIMAL_STR = re.compile(r"^-?(\d+\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)$")
 
@@ -83,6 +86,17 @@ def normalize_number(value: str) -> str:
         return "0"
     fixed = format(d, "f")
     return fixed.rstrip("0").rstrip(".") if "." in fixed else fixed
+
+
+def _with_hourly_display(value: Any) -> Any:
+    """Adds `price_per_hour_display` to a dict (or to each dict of a list) that has a `price_per_hour`."""
+    if isinstance(value, list):
+        return [_with_hourly_display(v) for v in value]
+    if isinstance(value, dict) and "price_per_hour" in value:
+        raw = value["price_per_hour"]
+        value = {**value, "price_per_hour": normalize_number(raw) if isinstance(raw, str) else raw,
+                 "price_per_hour_display": money.hourly(raw)}
+    return value
 
 
 def to_dict(obj: Any) -> Any:
@@ -109,6 +123,8 @@ def to_dict(obj: Any) -> Any:
                 out[f.name] = {str(k): normalize_number(v) if isinstance(v, str) else to_dict(v)
                                for k, v in value.items()}
                 out[f"{f.name}_display"] = {str(k): money.hourly(v) for k, v in value.items()}
+            elif (cls, f.name) in _HOURLY_ITEM_FIELDS:
+                out[f.name] = _with_hourly_display(out[f.name])
         # Secret connect values (ComfyUI's ACCESS_PASSWORD, ...) are hidden in every response — the start/stop/delete previews
         # carry the whole Pod too, so they're blocked here. Only the pods tool with show_secrets=true fills the values back in.
         if cls == "ConnectCredential" and getattr(obj, "is_secret", False):

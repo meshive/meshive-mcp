@@ -166,10 +166,10 @@ _CONFLICT_CODES = {
     "price unavailable": ("price_unavailable", "The server cannot quote this capped request. Keep the user's cap; "
                            "do not remove or increase it without their explicit consent."),
     # start_pod: the placement (the one sent, or the one the server picked when none was sent) moves a pod that has
-    # unpreserved workspace files. Nothing was started; detail.placement names the move to consent to.
+    # a scratch disk. Nothing was started; detail.placement names the move to consent to.
     "data loss consent required": ("data_loss_consent_required",
                                    "Nothing was started. Starting this pod with the `placement` in this error moves it "
-                                   "to another machine and permanently deletes its unpreserved workspace files. Show "
+                                   "to another machine and permanently deletes its scratch disk. Show "
                                    "the user that warning for this pod and placement and get separate explicit consent "
                                    "to the loss. Only then call start_pod again with placement set to that `placement`, "
                                    "allow_data_loss=true, confirm=true and the same operation_id. Without that consent "
@@ -210,10 +210,10 @@ _CONFLICT_CODES = {
     # update_pod: the pod's machine can't fit the edit. Nothing changed; moving it needs the user's agreement.
     "node migration required": ("node_migration_required",
                                 "Nothing was changed. The pod's machine can't fit this change, so the pod would have to "
-                                "move to another machine, which permanently deletes its unpreserved workspace files. "
+                                "move to another machine. "
                                 "Tell the user why and ask whether to move it. Only if they agree, call update_pod again "
                                 "with allow_node_migration=true, confirm=true and the same operation_id; its preview "
-                                "says whether the move also needs separate consent to the file loss "
+                                "says whether the move deletes a scratch disk and needs separate consent "
                                 "(allow_data_loss=true). Otherwise suggest a smaller change."),
     # update_pod: attached local storage keeps the pod on its machine, and that machine can't fit the edit.
     "cannot change resources": ("cannot_change_resources",
@@ -259,7 +259,7 @@ NEXT_STEP_LISTING_REFUSED = ("Nothing was changed. Tell the user the reason in t
 # update_pod's own data-loss refusal carries no placement (start_pod's does): the move would come from
 # allow_node_migration.
 _DATA_LOSS_EDIT_STEP = ("Nothing was changed. If this edit moves the pod to another machine (allow_node_migration), its "
-                        "unpreserved workspace files are permanently deleted. Show the user that warning for this pod and "
+                        "scratch disk is permanently deleted. Show the user that warning for this pod and "
                         "get separate explicit consent to the loss. Only then call update_pod again with the same "
                         "arguments plus allow_data_loss=true, confirm=true and the same operation_id. Without that "
                         "consent, call it without allow_node_migration instead.")
@@ -306,6 +306,9 @@ _BAD_REQUEST_CODES = {
                                                      "in `env` and list secret ones in `secret_keys`."),
     "duplicate mount path": ("duplicate_mount_path", "Two volumes use the same mount_path. Give every entry of `volumes` "
                                                      "and `local_volumes` its own path."),
+    # create: no machine has free disk for the new local storage and the scratch disk; the message says which.
+    "not enough disk": ("not_enough_disk", "Nothing was created. Show the message to the user and ask whether to use "
+                                           "smaller local_volumes or try again later."),
     "storage required": ("storage_required", "This template needs a persistent volume. Attach network storage in "
                                              "`volumes` or create local storage in `local_volumes`; ask the user which."),
     # Pods and tasks are refused while a new workspace is still `creating`; the detail route has no status, so the list is

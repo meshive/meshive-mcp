@@ -213,11 +213,12 @@ async def test_start_pod_preview_hides_secrets_and_says_why_same_node_waits(mcp_
 
 async def test_start_pod_without_placement_lets_the_server_pick(mcp_client, fake, with_key):
     """No placement: the server picks what the console would. The tool can't know in advance whether that moves the pod,
-    so the preview says the server asks for consent itself, and allow_data_loss isn't sent without a known placement."""
+    so the preview warns of no move (the server asks for consent itself when its pick moves the pod), and
+    allow_data_loss isn't sent without a known placement."""
     prev = _payload(await mcp_client.call_tool("start_pod", {"pod": "pod-2"}))
     assert prev["confirmed"] is False and prev["placement"] is None and prev["requires_data_loss_consent"] is None
     assert "The server picks the placement the console would" in prev["question"]
-    assert "data_loss_consent_required" in prev["data_loss_warning"] and prev["data_loss_warning"] in prev["question"]
+    assert prev["data_loss_warning"] == "" and "warnings" not in prev and "scratch disk" not in prev["question"]
     assert not _calls(fake, "start_pod")
 
     fake["setup"] = lambda inst: setattr(inst, "unpreserved_workspace", False)      # nothing to lose: no warning
