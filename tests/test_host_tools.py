@@ -1,10 +1,11 @@
 """Host tools — machine details, history, messages, maintenance, listing, retries, removal, logins and install commands."""
+import dataclasses
 import json
 
 import pytest
 from meshive.exceptions import ConflictError, MeshiveAPIError, NotFoundError, PermissionDeniedError
 
-from conftest import (HOST_GRAFANA_PASSWORD, HOST_IPMI_PASSWORD, HOST_SSH_PASSWORD, INSTALL_TOKEN, MACHINE_ID)
+from conftest import (DISK_WARNINGS, HOST_GRAFANA_PASSWORD, HOST_IPMI_PASSWORD, HOST_SSH_PASSWORD, INSTALL_TOKEN, MACHINE_ID)
 
 pytestmark = pytest.mark.anyio
 
@@ -52,6 +53,35 @@ async def test_machine_detail_shows_clients_maintenance_diagnostics_and_fee(mcp_
     assert item["schedules"] == {"upcoming": [], "ongoing": None}
     assert item["earning_hourly_display"] == "$1.25" and "raw" not in item
     assert ("list_maintenance", (MACHINE_ID,), {}) in fake["last"].calls
+    assert item["disk_warnings"] == DISK_WARNINGS
+
+
+def _detail_without_disk_field(detail):
+    """The same detail as an SDK release from before disk_warnings builds it: no such field, raw intact."""
+    fields = [(f.name, f.type, f) for f in dataclasses.fields(detail) if f.name != "disk_warnings"]
+    older = dataclasses.make_dataclass("MachineDetail", fields)
+    return older(**{name: getattr(detail, name) for name, _, _ in fields})
+
+
+@pytest.mark.parametrize("sent, expected", [
+    (DISK_WARNINGS, DISK_WARNINGS),
+    (None, []),
+    ("bad", []),
+    (["bad", {"kind": "slow", "device": "nvme0n1", "value": 31.2}], [{"kind": "slow", "device": "nvme0n1", "value": 31.2}]),
+])
+async def test_machine_detail_reads_disk_warnings_with_an_older_sdk(mcp_client, fake, with_key, sent, expected):
+    def setup(inst):
+        get_machine = inst.get_machine
+
+        async def older(machine_id):
+            detail = await get_machine(machine_id)
+            detail.raw = {**detail.raw, "diskWarnings": sent}
+            return _detail_without_disk_field(detail)
+        inst.get_machine = older
+    fake["setup"] = setup
+    item = _payload(await mcp_client.call_tool("machines", {"machine": MACHINE_ID}))["machine"]
+    assert item["disk_warnings"] == expected and "raw" not in item
+    assert item["network_warnings"][0]["code"] == "slow_upload" and item["fee"]["platform_fee"] == 0.2
 
 
 async def test_machine_list_items_carry_unread_messages(mcp_client, fake, with_key):

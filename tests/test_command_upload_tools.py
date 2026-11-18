@@ -77,7 +77,7 @@ async def test_run_command_description_limits_what_to_run(mcp_client):
 async def test_instructions_name_command_output_as_untrusted():
     from meshive_mcp.server import INSTRUCTIONS
     section = next(s for s in INSTRUCTIONS.split("\n\n") if s.startswith("Untrusted content:"))
-    assert "`run_command` and `command_status` return what the user's container printed" in section
+    assert "`run_command`, `command_status`," in section and "return what the user's container printed" in section
 
 
 async def test_upload_asset_returns_links_and_next_step(mcp_client, fake, with_key):

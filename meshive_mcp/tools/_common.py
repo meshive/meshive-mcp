@@ -25,14 +25,19 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # checked against the list or changed, and a refused workspace delete is checked again without confirm or left alone.
 # Host refusals are fixed and asked about again (new times, a recipient from the machine's clients, the reason the
 # machine can't be listed, the window's state), waited out (a port check), or not retried (a removal in progress, a
-# login the machine doesn't have).
-_OWN_RETRY_ADVICE_CODES = {"name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
+# login the machine doesn't have). A request for a locked port that the server can't lock goes back to the user, who
+# may change it; a failed lock change is repaired port by port, not by sending the edit again; and an access key call
+# without a clear answer, or one whose answer lost the value, is followed by the key list and the user's decision,
+# because calling again issues another key value.
+_OWN_RETRY_ADVICE_CODES = {"endpoint_lock_unavailable", "port_lock_change_failed", "access_key_outcome_unknown",
+                           "access_key_value_missing",
+                           "name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
                            "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
                            "hf_token_rejected", "workspace_not_empty", "workspace_not_deletable",
                            "insufficient_notice", "maintenance_overlap", "maintenance_state", "recipient_not_allowed",
                            "message_rejected", "listing_refused", "port_check_cooldown", "delete_in_progress",
-                           "credentials_not_available"}
+                           "credentials_not_available", "feedback_unavailable", "feedback_rate_limited"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key: the server keeps an operation record for them, so a retry with the same
 # operation_id gets the first answer back and operation_status can look the operation up.
@@ -42,13 +47,16 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "create_workspace", "update_workspace", "delete_workspace",
            "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
            "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
-           "send_host_message", "mark_host_messages_read"}
+           "send_host_message", "mark_host_messages_read", "set_port_lock", "set_port_preflight",
+           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions", "send_feedback"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
 # keep as a replayable record. retry_port_check has no operation record either; its cooldown keeps it from repeating.
+# create_access_key and roll_access_key answer with a key's value, which the server must not keep either: every call
+# issues another value, and the SDK doesn't send one again after a timeout.
 _UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "issue_install_command",
-               "retry_port_check",
+               "retry_port_check", "create_access_key", "roll_access_key",
                # A command run in a pod and the steps of a file upload: the server keeps no operation record of them
                # (it would hold the command's output or the upload links), so calling again runs or starts it again.
                "run_command", "start_asset_upload", "complete_asset_upload", "abort_asset_upload"}
@@ -91,6 +99,17 @@ def preview(kind: str, payload: dict[str, Any], question: str) -> dict[str, Any]
     return {"confirmed": False, "action": kind, **payload, "question": question, "next_step": CONFIRM_STEP}
 
 
+def bind_pod(out: dict[str, Any], pod_name: str, *, retries: bool = True) -> dict[str, Any]:
+    """A confirmation goes by id: a display name can move to another pod between the preview and the confirmation.
+    retries=False for a call that is never sent again after an unclear outcome (an access key's value is issued once
+    per call), whose preview mustn't mention retrying."""
+    out["pod_name"] = pod_name
+    use = "for confirmation and every retry" if retries else "for the confirmation"
+    out["next_step"] += (f" Set `pod` to the returned `pod_name` ({pod_name}) {use}; display names can change or be "
+                         "reused.")
+    return out
+
+
 def price_change(est: Any) -> str:
     """Sentence with the hourly price before and after an edit, from a pod or storage update estimate."""
     after = money.hourly(est.price_per_hour)
@@ -115,6 +134,11 @@ _UNRECORDED_RETRY = (" The server keeps no operation record of this call, so a r
 _REPLAYED_STEP = ("The server had already done this write for this operation_id (an earlier call, or an automatic "
                   "retry of this one) and returned that answer; nothing was done again. Use a new operation_id only "
                   "for a new action.")
+
+
+# Added to a server_error (an unexpected failure on Meshive's side): the agent may offer the user a report, once.
+_FEEDBACK_OFFER = (" If it still fails, you may ask the user once in this conversation whether to report it to Meshive "
+                   "with send_feedback (tool \"{tool}\", error_code \"server_error\"); send it only if they agree.")
 
 
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
@@ -157,6 +181,8 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                         unrecorded = not operation_record or operation.get("unrecorded")
                         result["next_step"] = (result.get("next_step", "") +
                                                (_UNRECORDED_RETRY if unrecorded else _RECORDED_RETRY))
+                if result.get("code") == "server_error" and name != "send_feedback":
+                    result["next_step"] = result.get("next_step", "") + _FEEDBACK_OFFER.format(tool=name)
                 return _bounded_result(result, is_error=True)
             finally:
                 if token is not None:

@@ -9,6 +9,8 @@ The server stores no default (stateless). The model remembers it within the conv
 """
 from __future__ import annotations
 
+import functools
+import inspect
 import re
 from typing import Any, Awaitable, Callable, TypeVar
 
@@ -148,6 +150,8 @@ def needs_input(value: Any) -> bool:
 
 
 _POD_NAME_RE = re.compile(r"^[0-9a-f]{16}-\d+$")
+# Whether the installed SDK's list_pods takes `name` (a pod being created or whose creation failed, by display name).
+_LIST_PODS_BY_NAME = "name" in inspect.signature(AsyncMeshive.list_pods).parameters
 
 
 def _is_downloader(pod: Any) -> bool:
@@ -155,9 +159,12 @@ def _is_downloader(pod: Any) -> bool:
     return bool(getattr(pod, "raw", {}).get("isDownloader"))
 
 
-async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
+async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm: bool = False) -> str:
     """If `pod` is a pod_name (16 hex + "-N") it's used as-is; otherwise it's treated as a label (user_alias) and looked up in the list.
-    Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again."""
+    Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again.
+
+    With confirm=True a display name is refused: between a preview and its confirmation the name can move to another
+    pod (renamed, or deleted and taken by a new pod), and the confirmed write must reach the pod the user saw."""
     pod = (pod or "").strip()
     if not pod:
         # An empty string passed as a label matched the **system downloader pod**, whose user_alias is empty, so stop/delete/logs
@@ -166,6 +173,16 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
     if _POD_NAME_RE.match(pod):
         return pod
     pods = await _read(client.list_pods, workspace)
+    if confirm:
+        # Exact ids in another format (older servers) still confirm; a display name never does.
+        if any(p.pod_name == pod for p in pods):
+            return pod
+        # Previewing again by name could reach another pod with a question that reads the same, so the user's yes
+        # isn't carried over to a new preview.
+        raise tool_error("invalid_argument", "confirm=true needs the pod's pod_name, not its display name.",
+                         "Nothing was sent. Call again with `pod` set to the `pod_name` returned by the preview the "
+                         "user agreed to, keeping the operation_id and the other arguments. If you don't have that "
+                         "pod_name, preview again and ask the user again: the name may belong to another pod now.")
     # Downloaders are left out of label matching too — they were already left out of the candidate list, only matching was off.
     hits = [p for p in pods if not _is_downloader(p) and name_key(p.user_alias) == name_key(pod)]
     if len(hits) == 1:
@@ -173,6 +190,12 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str) -> str:
     candidates = [{"pod_name": p.pod_name, "name": p.user_alias, "status": p.status} for p in (hits or pods)
                   if not _is_downloader(p)]
     if not hits:
+        # The list has only pods that exist. A pod still being created, or whose creation failed a moment ago, is
+        # found by its name in a second lookup on servers and SDKs that support it.
+        if _LIST_PODS_BY_NAME:
+            named = await _read(functools.partial(client.list_pods, workspace, name=pod))
+            if len(named) == 1:
+                return named[0].pod_name
         raise tool_error("not_found", f"No pod named '{pod}' in the selected workspace.",
                          "Use one of the `pod_name` values listed here, or call the pods tool.", pods=candidates)
     raise tool_error("ambiguous_pod", f"Several pods are named '{pod}'.",

@@ -38,9 +38,11 @@ async def test_update_pod_preview_shows_changes_price_and_restart(mcp_client, fa
     assert est["current_price_per_hour_display"] == "$0.500" and est["price_per_hour_display"] == "$1.000"
     assert est["breakdown_display"] == {"gpu": "$1.000"} and est["restarts"] is True
     assert body["requires_data_loss_consent"] is False and body["data_loss_warning"] == ""
-    # Only what changes is sent; the consent flags are not part of the estimate.
+    # Only what changes is sent; the consent flags are not part of the estimate. lock_public_ports always goes along:
+    # it changes nothing by itself and decides the lock of a port the edit newly exposes.
     (_, args, kw), = _calls(fake, "estimate_pod_update")
-    assert args == (POD, WS) and kw == {"gpu_count": 2, "env": {"HF_TOKEN": "hf_secret_1"}, "secret_keys": ["HF_TOKEN"]}
+    assert args == (POD, WS) and kw == {"gpu_count": 2, "env": {"HF_TOKEN": "hf_secret_1"}, "secret_keys": ["HF_TOKEN"],
+                                        "lock_public_ports": True}
     assert not _calls(fake, "update_pod") and not _calls(fake, "get_pod")
     assert "hf_secret_1" not in result.content[0].text          # values the agent passed are never echoed back
 
@@ -66,7 +68,7 @@ async def test_update_pod_confirm_sends_the_edit_with_the_operation_id(mcp_clien
 async def test_update_pod_enable_folder_saving_is_sent_only_when_asked(mcp_client, fake, with_key):
     await mcp_client.call_tool("update_pod", {"pod": POD, "enable_folder_saving": True})
     (_, args, kw), = _calls(fake, "estimate_pod_update")
-    assert args == (POD, WS) and kw == {"enable_folder_saving": True}
+    assert args == (POD, WS) and kw == {"enable_folder_saving": True, "lock_public_ports": True}
     await mcp_client.call_tool("update_pod", {"pod": POD, "vcpu": 16, "enable_folder_saving": False})
     assert "enable_folder_saving" not in _calls(fake, "estimate_pod_update")[-1][2]
 
@@ -102,12 +104,16 @@ async def test_update_pod_preview_prices_new_local_storage(mcp_client, fake, wit
 
 
 async def test_update_pod_node_migration_needs_separate_data_loss_consent(mcp_client, fake, with_key):
-    """allow_node_migration may move the pod, which deletes unpreserved workspace files — the same gate as start_pod
-    any_node: confirm=true alone isn't enough while the pod may have such files."""
+    """allow_node_migration may move the pod, which deletes its scratch disk — the same gate as start_pod
+    any_node: confirm=true alone isn't enough while the pod may have one."""
     args = {"pod": POD, "gpu_count": 4, "allow_node_migration": True, "confirm": True, "operation_id": "edit-move-0001"}
     blocked = _payload(await mcp_client.call_tool("update_pod", args))
     assert blocked["confirmed"] is False and blocked["requires_data_loss_consent"] is True
-    assert "permanently deleted" in blocked["question"] and "allow_data_loss=true" in blocked["data_loss_warning"]
+    # A server that doesn't list the pod's scratch disks: the warning without a path.
+    assert blocked["data_loss_warning"] == "Moving this pod deletes its scratch disk and its files."
+    assert blocked["warnings"] == [{"code": "move_deletes_scratch_disk", "message": blocked["data_loss_warning"]}]
+    assert blocked["question"].endswith(" Moving this pod deletes its scratch disk and its files. Obtain separate "
+                                        "explicit consent and pass allow_data_loss=true.")
     assert "the pod moves to another machine" in blocked["question"]
     assert _calls(fake, "get_pod") and not _calls(fake, "update_pod")
     # The estimate is asked without the consent flags, so the server prices the edit instead of refusing it.

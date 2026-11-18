@@ -14,6 +14,16 @@ from ..workspace import needs_input, resolve
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
 
 
+def _replicas_kept(current: Any, min_replicas: int | None, max_replicas: int | None, autoscale: bool | None) -> int:
+    """How many replicas a serving keeps once a scale change is applied. The API removes running replicas above
+    this number: with autoscale off it holds `min_replicas`, with autoscale on it allows up to `max_replicas`,
+    and it never goes below one (pausing is what stops them all)."""
+    auto = current.autoscale if autoscale is None else autoscale
+    new_min = current.min_replicas if min_replicas is None else min_replicas
+    new_max = current.max_replicas if max_replicas is None else max_replicas
+    return max(max(new_max, new_min) if auto else new_min, 1)
+
+
 def register(server: MCPServer) -> None:
     # --- Serving -------------------------------------------------------------------
 
@@ -95,26 +105,36 @@ def register(server: MCPServer) -> None:
         Any change that can raise the hourly cost — a larger replica range, turning autoscale on, or a higher per-replica
         price cap — with confirm=false (default) only returns the current state and the requested change and changes
         nothing; call again with confirm=true after the user agreed. Lowering the range, turning autoscale off, or
-        lowering the cap applies immediately."""
+        lowering the cap applies immediately. Replicas running above the new setting are removed within about 30
+        seconds and the requests they are handling fail: with autoscale off the serving keeps `min_replicas`, with
+        autoscale on up to `max_replicas`. When that happens the answer has `replicas_removed`; if the serving is in
+        use, tell the user before lowering it."""
         requested = {k: v for k, v in dict(min_replicas=min_replicas, max_replicas=max_replicas, autoscale=autoscale,
                                             price_cap_per_hour=price_cap_per_hour).items() if v is not None}
         async with meshive_client(ctx) as client:
-            if not confirm:
-                # Confirm only changes that can raise cost — decided by the SDK's `Serving.scale_raises_cost` (same rule as the CLI).
-                current = await call(client.get_serving, serving)
-                if current.scale_raises_cost(**requested):
-                    new_min = current.min_replicas if min_replicas is None else min_replicas
-                    new_max = current.max_replicas if max_replicas is None else max_replicas
-                    cap = (f", cap {money.hourly(price_cap_per_hour)}/hour per replica" if price_cap_per_hour is not None
-                           else "")
-                    return preview("scale_serving", {"serving": to_dict(current), "requested": requested},
-                                   f"Scale serving #{serving} from {current.min_replicas}-{current.max_replicas} to "
-                                   f"{new_min}-{new_max} replicas{cap}"
-                                   f"{', autoscale on' if autoscale else ''}? Its possible hourly cost goes up.")
+            current = await call(client.get_serving, serving)
+            # Confirm only changes that can raise cost — decided by the SDK's `Serving.scale_raises_cost` (same rule as the CLI).
+            if not confirm and current.scale_raises_cost(**requested):
+                new_min = current.min_replicas if min_replicas is None else min_replicas
+                new_max = current.max_replicas if max_replicas is None else max_replicas
+                cap = (f", cap {money.hourly(price_cap_per_hour)}/hour per replica" if price_cap_per_hour is not None
+                       else "")
+                return preview("scale_serving", {"serving": to_dict(current), "requested": requested},
+                               f"Scale serving #{serving} from {current.min_replicas}-{current.max_replicas} to "
+                               f"{new_min}-{new_max} replicas{cap}"
+                               f"{', autoscale on' if autoscale else ''}? Its possible hourly cost goes up.")
             result = await call(client.scale_serving, serving, min_replicas=min_replicas, max_replicas=max_replicas,
                                 autoscale=autoscale, price_cap_per_hour=price_cap_per_hour)
         out = to_dict(result)
-        out["next_step"] = "Accepted. Poll the servings tool to see the new replica counts."
+        running = current.current_replicas or 0
+        kept = _replicas_kept(current, min_replicas, max_replicas, autoscale)
+        if running > kept:
+            out["replicas_removed"] = running - kept
+            out["next_step"] = (f"Accepted. {running - kept} of {running} running replicas are being removed (the serving "
+                                f"keeps {kept}); requests they were handling fail. Tell the user, then poll the servings "
+                                "tool to see the new replica counts.")
+        else:
+            out["next_step"] = "Accepted. Poll the servings tool to see the new replica counts."
         return out
 
     @meshive_tool(server, "pause_serving", title="Pause or Resume Serving", annotations=MUTATE)

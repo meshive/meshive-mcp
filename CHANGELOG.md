@@ -3,6 +3,177 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## v1.10.0
+
+Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by
+default (a template port that its template sets open is the exception). A locked port lets through workspace members
+signed in to the console and programs that send one of the port's access keys; every other request gets 401. Built
+on the `meshive` Python SDK 1.10, which this release needs. There are 7 new tools; existing tool names are
+unchanged, and the pod tools gain one argument.
+
+This release also shows why a pod keeps restarting or failed to be created, lists disk warnings for hosts and the
+scratch disks a pod create, edit or move affects, lets you send feedback to the Meshive team, and says when lowering
+a serving's replicas stops running ones.
+
+### Changed
+
+- **New public ports are locked by default.** `create_pod`, `estimate_pod` and `update_pod` take
+  `lock_public_ports` (default `true`). A new pod's exposed ports are created locked, and so is a port an edit newly
+  exposes (a new external port, an internal port set to external). A port that is public already keeps the lock it
+  has. Before this release these ports were open to anyone who knew the URL, so a script that calls a new pod's URL
+  without a key now gets 401: give it an access key, or ask for the port to be unlocked.
+- **A port the template sets open is the one exception, and the user is asked about it.** A template's author can
+  set one of its ports to open, and such a port is then created open with plain arguments too (also when an edit
+  moves a pod to that template). The preview lists it under `open_by_template`, says that it is open because of the
+  template and not because the user asked, names the argument that locks it (`"locked": true` on its
+  `template_ports` item) and tells the agent to ask the user which they want.
+- **Opening a port is spelled out.** `lock_public_ports=false`, or `"locked": false` on an item of `ports` or
+  `template_ports`, leaves a port open. The preview then lists it under `open_ports` and warns that anyone who knows
+  the URL can reach the app, and the argument descriptions tell the agent to pass it only when the user explicitly
+  asks. Previews and results list `locked_ports` too, with one line on how to connect.
+- **A lock the server can't give is never replaced by an open port.** When the platform has locking turned off, or
+  the API server predates port locks, the pod tools fail with `endpoint_lock_unavailable` (`reason` `disabled` or
+  `unsupported`) and nothing is created or changed. Its `next_step` sends the choice back to the user: wait, keep
+  the port internal, or ask for open ports, which the agent then previews first. An edit that only locks ports the
+  pod already exposes has no such choice: its refusal says that the ports stay as they are and to try again later.
+- **A locked port is shown as one.** Every endpoint in `pods` has `access`: `internal`, `locked` or `unlocked`, with
+  `locked` (the lock chosen; `lock_state` says whether it is in effect yet), `lock_decided_at`, `access_key_count`
+  and `allow_preflight`. A response with a locked port carries `access_note`, and the
+  `pods`, `restart_pod` and `run_command` descriptions and the server instructions say the same: a 401 from a locked
+  port (a browser is sent to the console to sign in) is the lock working, not a fault, so the pod is not to be
+  restarted, edited or deleted for it. To call the app for its own work the agent uses `run_command` against
+  `http://localhost:<port>` inside the pod.
+- `update_pod` says that an edit which only changes port locks is applied within seconds without a restart, when
+  the server's answer says so (no restart, no transaction). If the server could not change a lock that an edit asked
+  for, the error is `port_lock_change_failed` with the `ports`, and the agent is told to check and set those ports
+  instead of sending the edit again.
+- The server instructions have a short `Locked ports` section inside the first 4096 characters (a 401 from a locked
+  port is the lock working), name the access key tools under `Secrets`, `set_port_lock` among the `confirm`
+  exceptions (with `set_port_preflight` when turning it off), and `create_access_key` and `roll_access_key` as the
+  exception to looking a write up with
+  `operation_status`. To make room, the notes on paged lists and encrypted storage relocking moved behind the cut,
+  where a longer `Port access` section also sits; each list response and the `connect_storage` tool say the same
+  where it applies.
+
+- **A lock choice that is not in effect yet is shown.** A lock or unlock takes a few seconds to reach every route of
+  the port. Each endpoint in `pods` has `lock_state` (`locked`, `locking`, `unlocked` or `unlocking`; null from a
+  server that doesn't say), and `set_port_lock` answers with `state` and one line of advice: until a locking port's
+  `lock_state` is `locked` it can still be reached without a key, and until an unlocking port's is `unlocked`
+  requests may still get 401. The `pods` and `set_port_lock` descriptions and the server instructions say so too
+  (behind the first 4096 characters).
+- **Expired access keys stay in the list for 30 days.** `access_keys` marks each key with `expired`, and
+  `roll_access_key` accepts an expired key: its preview says there is no overlap (the old value stopped working when
+  it expired) and the new value starts a fresh lifetime. `access_key_not_found` now says that a key that expired more
+  than 30 days ago is gone. Needs a Meshive API server that lists expired keys; an older one omits them.
+
+- **`data_loss_warning` holds only what a move deletes.** In `start_pod` and `update_pod` previews it is now the
+  move sentence naming the scratch disk (for example "Moving this pod deletes its scratch disk at /workspace and its
+  files."), without the consent instruction, which stays in the question. It is empty when nothing is deleted,
+  including a `start_pod` without an explicit placement. Tool descriptions say "scratch disk" instead of
+  "unpreserved workspace files".
+
+### New
+
+- `set_port_lock` locks or unlocks one exposed port without restarting the pod. Locking needs no `confirm`.
+  Unlocking does: the preview says that anyone who knows the URL can then reach the app and that the port's access
+  keys are kept.
+- `access_keys` lists the access keys of one port, or of every exposed port of a pod, with each port's `access`. A
+  port that was made internal while it held keys is listed too, so that those keys can be found and revoked. A key's
+  value is never listed, only its first characters.
+- `create_access_key` creates a key for a locked port (30, 90 or 365 days, or no expiry) and `roll_access_key`
+  replaces a key's value while the old one keeps working for an hour, a day, a week or not at all. Both take
+  `confirm`, and both treat the value like an SSH password: it is returned once, as `access_key` in the confirmed
+  answer, only when the user asked for it; the agent is told to hand it to that user and never to use it or put it in
+  files, commits, commands or other tools. The server keeps no operation record of these calls. Every call issues
+  another value and none is resent after a timeout, so a call without a clear answer fails with
+  `access_key_outcome_unknown` and tells the agent to read `access_keys` before doing anything else; their previews
+  say the same for a call that ends on the agent's side, where the usual rule of reusing the operation ID doesn't
+  apply.
+- `revoke_access_key` revokes a key after `confirm`; its value stops working within seconds.
+- `access_keys` shows when each key was last used (`last_used_at`, null when it hasn't been used). It is updated every
+  few minutes, so it can lag a little; the description says so. It helps find keys nobody uses any more.
+- `set_port_preflight` lets CORS preflight requests (`OPTIONS`) to a locked port reach the app without a key, for a
+  web page on another site that calls the port from a browser; every other request still needs a key, and the app's
+  own CORS settings decide which sites may call it. Turning it on takes `confirm`, and the preview says that a key put
+  in a web page is visible to everyone who opens that page. Turning it off applies at once. Each endpoint in `pods`
+  shows the setting as `allow_preflight`.
+- `revoke_browser_sessions` signs out every browser session on a pod's locked ports after `confirm`: workspace
+  members who opened them in a browser enter again through the console. Access keys keep working, and connections
+  that are already open stay open.
+  With `all_pods=true` and `workspace` (and no `pod`) it signs out every pod of the workspace at once; that call
+  takes the workspace id when confirmed. A call without `pod` and without `all_pods` is refused.
+- New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
+  `too_many_access_keys`, `access_key_not_found`.
+
+- **`scale_serving` says when running replicas go away.** Lowering a serving's replica count or `max_replicas`,
+  or turning autoscale off, removes the replicas running above the new setting within about 30 seconds, and the
+  requests they are handling fail. The answer now carries `replicas_removed` and says how many of the running
+  replicas are being removed and how many the serving keeps; the tool description states the rule (autoscale off
+  holds `min_replicas`, autoscale on allows up to `max_replicas`). No confirmation step was added.
+- **Disk warnings for hosts.** `machines` with a `machine` shows `disk_warnings`: a disk that stopped responding
+  (`stall`; new workloads are paused and the machine is unlisted until the host lists it again), writes that are slow
+  even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since
+  when, the measured value and the alert level. The list is filled with any `meshive` SDK in the supported range; it
+  is empty when the server doesn't send it yet.
+- **Why a pod stopped.** `pods` with a `pod` shows `recent_exits`: the times the pod's main container ended
+  abnormally, newest first (up to 5), with `at`, `reason`, `oom_kind` (`ram` when it went over its RAM limit, `vram`
+  when the GPU ran out of memory), `exit_code` and `message`. A clean exit is listed only when the pod restarted after it. A pod can show `running` while
+  its container keeps crashing and restarting, and the description now says to look here then. A `message` can come
+  from the pod (for a GPU out-of-memory error it is a line the program logged), so the instructions list it as
+  untrusted content. Only the `pods` tool shows them: list items leave the key out, and so do write previews and a
+  pod from an SDK or server without it.
+- **Why a pod keeps ending or failed to be created.** With a `meshive` SDK and server that send them:
+  - `pods` list items carry `restart_count` and `last_exit` while the server says the last exit matters (in the
+    current run within the last 30 minutes, while the status is error, shortly before the system stopped the pod for failing repeatedly, or behind a
+    failed creation); other items leave both keys out. A single pod carries `restart_count` and `recent_exits`, whose
+    items add `current_run`, and no `last_exit`. Exits add `cause` (a fixed identifier such as `gpu_out_of_memory`)
+    and `summary` (the server's sentence); `message` stays what the program printed.
+  - A pod whose creation failed shows `creation_failure` (`cause`, `summary`, `output`, `exit_code`, `at`, `ref`)
+    alone, in place of `creation_failure_reason`, `last_exit` and `recent_exits`, so the program's line appears once.
+  - `logs` adds `previous`, the main container's last run that ended: `ended_at`, `exit_code`, `cause`, `summary`,
+    `output` and `text` (null when its output could no longer be read). A note from the server, such as where the
+    last run is, now stands in front of the untrusted-output warning instead of being replaced by it.
+  - `create_pod` returns the `pod_name` right away from servers that assign it, and its `next_step` says to poll
+    `pods` with that `pod_name`: it shows `creating` (with the create `transaction_id`) until the pod runs, and why if
+    the creation fails.
+  - A pod's display name also finds a pod that is being created or whose creation just failed: when the list has no
+    pod by that name, one more lookup by name is made (an SDK without it gives `not_found` as before).
+  - `transactions` adds `failure` (same fields) to a failed operation; its `detail` is the same summary.
+  - None of these fields, nor `creation_failure_reason`, reach a write preview. The instructions now mark every
+    `output` and `message` field as untrusted, and the `pods` description explains the fields in one sentence instead
+    of a paragraph.
+- **New tool: `send_feedback`.** Sends a bug report, an idea or a complaint to the Meshive team, as the console's
+  Send feedback does. With `confirm=false` (default) it returns the exact report and sends nothing; it sends after
+  the user agrees, with an `operation_id` like every other write. Its description tells the agent to offer it at
+  most once per conversation, when a tool fails unexpectedly or the user says something is broken, confusing or
+  missing; to keep secrets, environment values, log output and resource names out of the text; and to promise no
+  reward. A `server_error` now ends its `next_step` with that offer, and the instructions repeat the rule for clients
+  that keep them whole. New error codes: `feedback_unavailable` (the platform isn't taking reports, or the installed
+  `meshive` SDK predates `send_feedback`, which the preview already says) and `feedback_rate_limited`.
+- **Scratch disk warnings in pod previews.** The previews of `create_pod`, `estimate_pod`, `update_pod` and
+  `start_pod` add a top-level `warnings` list of `{code, message}` (most severe first, at most five) when they apply:
+  `deletes_scratch_disk`, `move_deletes_scratch_disk`, `spot_scratch_erased` and `hides_files`. Each message is one
+  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`. A preview's
+  `estimate.scratch_disk` has `price_per_hour` only for the disks the request creates (it is left out for a disk the
+  pod keeps, which is not free) and `total_price_per_hour` for all of them when the server sends it. A create
+  that no machine has disk for fails with `not_enough_disk`, and `watched_folders` reports `nested_volume` for a
+  folder that overlaps one of your volumes.
+
+### Fixed
+
+- **A confirmed pod change reaches the pod the user saw.** `start_pod`, `delete_pod`, `update_pod` and
+  `set_watched_folders` refuse a display name with `confirm=true` (`invalid_argument`, nothing is sent). Before, the
+  confirmation looked the name up again, so if the pod was renamed, or deleted and its name taken by another pod,
+  between the preview and the confirmation, the change was made to that other pod. The previews return `pod_name` and
+  say to confirm with it, as storage previews already do. The new `set_port_lock` (unlocking),
+  `set_port_preflight` (turning it on), `revoke_browser_sessions`, `create_access_key`, `roll_access_key` and
+  `revoke_access_key` confirm the same way, so a port can't be opened, a key issued or browsers signed out for a pod
+  the user didn't see. Display names still work on previews, for locking a port, for turning preflight requests off,
+  and in the other pod tools.
+- **`delete_pod` names the local storage it deletes.** The preview question names each local volume listed in
+  `delete_local_storages`, with its size, and the pod's other local volumes, which are kept and stay billed. Before,
+  the volumes to delete appeared only as ids outside the question.
+
 ## v1.9.0
 
 An agent can now run commands in a user's running pod and upload files from the user's computer to Asset Hub, so it

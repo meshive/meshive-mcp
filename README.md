@@ -113,6 +113,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 - *"Give me download links for the outputs of my last task."*
 - *"Schedule maintenance on my GPU machine for Saturday night, and tell me who gets notified."*
 - *"What did my API keys change this week, and was anything refused?"*
+- *"Who can reach my-pod's web UI from outside? Make an access key for my script."*
 
 ## You stay in control
 
@@ -129,6 +130,13 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 - **Passwords go only to you.** Pod logins and SSH passwords for pods and storage stay hidden unless you ask for
   them. Revealing a hosted machine's login or getting an install command for a new machine also needs your go-ahead,
   and the account owner is emailed each time.
+- **Public ports start locked.** A port a new pod exposes over HTTPS is created locked: it lets through workspace
+  members signed in to the console and programs that send one of the port's access keys, and answers everyone else
+  with 401. The agent opens a port to anyone who knows its URL only when you ask for that, after showing you which
+  ports would be open. One kind of port starts open without your asking: a port that its template sets open. The
+  agent is told to point it out before the pod is created and to ask whether you want it locked. An access key is
+  created only when you ask, its value is shown to you once, and the agent is
+  told not to use it or write it down; for its own work in a pod it calls the app from inside the pod instead.
 - **Your key isn't stored.** The server keeps no state: your key travels with each request and is passed on to the
   Meshive API.
 
@@ -140,12 +148,14 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Workspaces | `workspaces`, `create_workspace`, `update_workspace`, `delete_workspace` |
 | GPUs, CPUs and templates | `gpus` (also works without a key), `cpus`, `templates`, `model_sets` |
 | Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `run_command`, `command_status`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
+| Port locks and access keys | `set_port_lock`, `set_port_preflight`, `revoke_browser_sessions`, `access_keys`, `create_access_key`, `roll_access_key`, `revoke_access_key` |
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task` |
 | Files (Asset Hub) | `assets`, `upload_asset`, `finish_upload`, `import_asset`, `download_links`, `source_credentials` |
 | Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
+| Reporting to the Meshive team | `send_feedback` (a bug, an idea or a complaint; the agent asks you first) |
 
 What each tool does, and how confirmation and recovery work:
 [documentation](https://docs.meshive.ai/sdk-cli/mcp/).
@@ -163,6 +173,8 @@ common ones:
 | `unknown_workspace` | The workspace ID or name doesn't match one of yours. The agent can list them with `workspaces`. |
 | `workspace_not_empty` | A key can only delete an empty workspace. The agent tells you what is left. Clear it, or delete the workspace yourself in the console, which removes what's in it for good. |
 | `insufficient_credit` | Top up credit in the [console](https://console.meshive.ai). |
+| A pod's URL answers 401, or sends your browser to the console | The port is locked, which is the default for new pods. Sign in to the console as a workspace member, or have your program send one of the port's access keys as `Authorization: Bearer <key>`. Ask the agent for a key, or to unlock the port. |
+| `endpoint_lock_unavailable` | Ports can't be locked right now, so nothing was created or changed. Try again later, or tell the agent that you want the port open to anyone who knows its URL. |
 | `rate_limited` | Too many calls in a short time. The agent waits the number of seconds it was told, then tries again. |
 | The agent doesn't see any Meshive tools | Check that the server is listed and connected (`claude mcp list` in Claude Code), then start a new session. |
 
