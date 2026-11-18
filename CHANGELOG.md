@@ -3,72 +3,6 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
-## Unreleased
-
-### What's new
-
-- **`scale_serving` says when running replicas go away.** Lowering a serving's replica count or `max_replicas`,
-  or turning autoscale off, removes the replicas running above the new setting within about 30 seconds, and the
-  requests they are handling fail. The answer now carries `replicas_removed` and says how many of the running
-  replicas are being removed and how many the serving keeps; the tool description states the rule (autoscale off
-  holds `min_replicas`, autoscale on allows up to `max_replicas`). No confirmation step was added.
-- **Disk warnings for hosts.** `machines` with a `machine` shows `disk_warnings`: a disk that stopped responding
-  (`stall`; new workloads are paused and the machine is unlisted until the host lists it again), writes that are slow
-  even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since
-  when, the measured value and the alert level. The list is filled with any `meshive` SDK in the supported range; it
-  is empty when the server doesn't send it yet.
-- **Why a pod stopped.** `pods` with a `pod` shows `recent_exits`: the times the pod's main container ended
-  abnormally, newest first (up to 5), with `at`, `reason`, `oom_kind` (`ram` when it went over its RAM limit, `vram`
-  when the GPU ran out of memory), `exit_code` and `message`. A clean exit isn't listed. A pod can show `running` while
-  its container keeps crashing and restarting, and the description now says to look here then. A `message` can come
-  from the pod (for a GPU out-of-memory error it is a line the program logged), so the instructions list it as
-  untrusted content. Only the `pods` tool shows them: list items leave the key out, and so do write previews and a
-  pod from an SDK or server without it.
-- **Why a pod keeps ending or failed to be created.** With a `meshive` SDK and server that send them:
-  - `pods` list items carry `restart_count` and `last_exit` while the server says the last exit matters (in the
-    current run within the last 30 minutes, while the status is error, shortly before the system stopped the pod for failing repeatedly, or behind a
-    failed creation); other items leave both keys out. A single pod carries `restart_count` and `recent_exits`, whose
-    items add `current_run`, and no `last_exit`. Exits add `cause` (a fixed identifier such as `gpu_out_of_memory`)
-    and `summary` (the server's sentence); `message` stays what the program printed.
-  - A pod whose creation failed shows `creation_failure` (`cause`, `summary`, `output`, `exit_code`, `at`, `ref`)
-    alone, in place of `creation_failure_reason`, `last_exit` and `recent_exits`, so the program's line appears once.
-  - `logs` adds `previous`, the main container's last run that ended: `ended_at`, `exit_code`, `cause`, `summary`,
-    `output` and `text` (null when its output could no longer be read). A note from the server, such as where the
-    last run is, now stands in front of the untrusted-output warning instead of being replaced by it.
-  - `create_pod` returns the `pod_name` right away from servers that assign it, and its `next_step` says to poll
-    `pods` with that `pod_name`: it shows `creating` (with the create `transaction_id`) until the pod runs, and why if
-    the creation fails.
-  - A pod's display name also finds a pod that is being created or whose creation just failed: when the list has no
-    pod by that name, one more lookup by name is made (an SDK without it gives `not_found` as before).
-  - `transactions` adds `failure` (same fields) to a failed operation; its `detail` is the same summary.
-  - None of these fields, nor `creation_failure_reason`, reach a write preview. The instructions now mark every
-    `output` and `message` field as untrusted, and the `pods` description explains the fields in one sentence instead
-    of a paragraph.
-- **New tool: `send_feedback`.** Sends a bug report, an idea or a complaint to the Meshive team, as the console's
-  Send feedback does. With `confirm=false` (default) it returns the exact report and sends nothing; it sends after
-  the user agrees, with an `operation_id` like every other write. Its description tells the agent to offer it at
-  most once per conversation, when a tool fails unexpectedly or the user says something is broken, confusing or
-  missing; to keep secrets, environment values, log output and resource names out of the text; and to promise no
-  reward. A `server_error` now ends its `next_step` with that offer, and the instructions repeat the rule for clients
-  that keep them whole. New error codes: `feedback_unavailable` (the platform isn't taking reports, or the installed
-  `meshive` SDK predates `send_feedback`, which the preview already says) and `feedback_rate_limited`.
-- **Scratch disk warnings in pod previews.** The previews of `create_pod`, `estimate_pod`, `update_pod` and
-  `start_pod` add a top-level `warnings` list of `{code, message}` (most severe first, at most five) when they apply:
-  `deletes_scratch_disk`, `move_deletes_scratch_disk`, `spot_scratch_erased` and `hides_files`. Each message is one
-  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`. A preview's
-  `estimate.scratch_disk` has `price_per_hour` only for the disks the request creates (it is left out for a disk the
-  pod keeps, which is not free) and `total_price_per_hour` for all of them when the server sends it. A create
-  that no machine has disk for fails with `not_enough_disk`, and `watched_folders` reports `nested_volume` for a
-  folder that overlaps one of your volumes.
-
-### Changed
-
-- **`data_loss_warning` holds only what a move deletes.** In `start_pod` and `update_pod` previews it is now the
-  move sentence naming the scratch disk (for example "Moving this pod deletes its scratch disk at /workspace and its
-  files."), without the consent instruction, which stays in the question. It is empty when nothing is deleted,
-  including a `start_pod` without an explicit placement. Tool descriptions say "scratch disk" instead of
-  "unpreserved workspace files".
-
 ## v1.10.0
 
 Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by
@@ -76,6 +10,10 @@ default (a template port that its template sets open is the exception). A locked
 signed in to the console and programs that send one of the port's access keys; every other request gets 401. Built
 on the `meshive` Python SDK 1.10, which this release needs. There are 7 new tools; existing tool names are
 unchanged, and the pod tools gain one argument.
+
+This release also shows why a pod keeps restarting or failed to be created, lists disk warnings for hosts and the
+scratch disks a pod create, edit or move affects, lets you send feedback to the Meshive team, and says when lowering
+a serving's replicas stops running ones.
 
 ### Changed
 
@@ -128,6 +66,12 @@ unchanged, and the pod tools gain one argument.
   it expired) and the new value starts a fresh lifetime. `access_key_not_found` now says that a key that expired more
   than 30 days ago is gone. Needs a Meshive API server that lists expired keys; an older one omits them.
 
+- **`data_loss_warning` holds only what a move deletes.** In `start_pod` and `update_pod` previews it is now the
+  move sentence naming the scratch disk (for example "Moving this pod deletes its scratch disk at /workspace and its
+  files."), without the consent instruction, which stays in the question. It is empty when nothing is deleted,
+  including a `start_pod` without an explicit placement. Tool descriptions say "scratch disk" instead of
+  "unpreserved workspace files".
+
 ### New
 
 - `set_port_lock` locks or unlocks one exposed port without restarting the pod. Locking needs no `confirm`.
@@ -160,6 +104,60 @@ unchanged, and the pod tools gain one argument.
   takes the workspace id when confirmed. A call without `pod` and without `all_pods` is refused.
 - New error codes with their own `next_step`: `port_not_public`, `port_not_locked`, `port_not_found`,
   `too_many_access_keys`, `access_key_not_found`.
+
+- **`scale_serving` says when running replicas go away.** Lowering a serving's replica count or `max_replicas`,
+  or turning autoscale off, removes the replicas running above the new setting within about 30 seconds, and the
+  requests they are handling fail. The answer now carries `replicas_removed` and says how many of the running
+  replicas are being removed and how many the serving keeps; the tool description states the rule (autoscale off
+  holds `min_replicas`, autoscale on allows up to `max_replicas`). No confirmation step was added.
+- **Disk warnings for hosts.** `machines` with a `machine` shows `disk_warnings`: a disk that stopped responding
+  (`stall`; new workloads are paused and the machine is unlisted until the host lists it again), writes that are slow
+  even when the disk is lightly loaded (`slow`), or an almost-full system disk (`full`), each with its device, since
+  when, the measured value and the alert level. The list is filled with any `meshive` SDK in the supported range; it
+  is empty when the server doesn't send it yet.
+- **Why a pod stopped.** `pods` with a `pod` shows `recent_exits`: the times the pod's main container ended
+  abnormally, newest first (up to 5), with `at`, `reason`, `oom_kind` (`ram` when it went over its RAM limit, `vram`
+  when the GPU ran out of memory), `exit_code` and `message`. A clean exit is listed only when the pod restarted after it. A pod can show `running` while
+  its container keeps crashing and restarting, and the description now says to look here then. A `message` can come
+  from the pod (for a GPU out-of-memory error it is a line the program logged), so the instructions list it as
+  untrusted content. Only the `pods` tool shows them: list items leave the key out, and so do write previews and a
+  pod from an SDK or server without it.
+- **Why a pod keeps ending or failed to be created.** With a `meshive` SDK and server that send them:
+  - `pods` list items carry `restart_count` and `last_exit` while the server says the last exit matters (in the
+    current run within the last 30 minutes, while the status is error, shortly before the system stopped the pod for failing repeatedly, or behind a
+    failed creation); other items leave both keys out. A single pod carries `restart_count` and `recent_exits`, whose
+    items add `current_run`, and no `last_exit`. Exits add `cause` (a fixed identifier such as `gpu_out_of_memory`)
+    and `summary` (the server's sentence); `message` stays what the program printed.
+  - A pod whose creation failed shows `creation_failure` (`cause`, `summary`, `output`, `exit_code`, `at`, `ref`)
+    alone, in place of `creation_failure_reason`, `last_exit` and `recent_exits`, so the program's line appears once.
+  - `logs` adds `previous`, the main container's last run that ended: `ended_at`, `exit_code`, `cause`, `summary`,
+    `output` and `text` (null when its output could no longer be read). A note from the server, such as where the
+    last run is, now stands in front of the untrusted-output warning instead of being replaced by it.
+  - `create_pod` returns the `pod_name` right away from servers that assign it, and its `next_step` says to poll
+    `pods` with that `pod_name`: it shows `creating` (with the create `transaction_id`) until the pod runs, and why if
+    the creation fails.
+  - A pod's display name also finds a pod that is being created or whose creation just failed: when the list has no
+    pod by that name, one more lookup by name is made (an SDK without it gives `not_found` as before).
+  - `transactions` adds `failure` (same fields) to a failed operation; its `detail` is the same summary.
+  - None of these fields, nor `creation_failure_reason`, reach a write preview. The instructions now mark every
+    `output` and `message` field as untrusted, and the `pods` description explains the fields in one sentence instead
+    of a paragraph.
+- **New tool: `send_feedback`.** Sends a bug report, an idea or a complaint to the Meshive team, as the console's
+  Send feedback does. With `confirm=false` (default) it returns the exact report and sends nothing; it sends after
+  the user agrees, with an `operation_id` like every other write. Its description tells the agent to offer it at
+  most once per conversation, when a tool fails unexpectedly or the user says something is broken, confusing or
+  missing; to keep secrets, environment values, log output and resource names out of the text; and to promise no
+  reward. A `server_error` now ends its `next_step` with that offer, and the instructions repeat the rule for clients
+  that keep them whole. New error codes: `feedback_unavailable` (the platform isn't taking reports, or the installed
+  `meshive` SDK predates `send_feedback`, which the preview already says) and `feedback_rate_limited`.
+- **Scratch disk warnings in pod previews.** The previews of `create_pod`, `estimate_pod`, `update_pod` and
+  `start_pod` add a top-level `warnings` list of `{code, message}` (most severe first, at most five) when they apply:
+  `deletes_scratch_disk`, `move_deletes_scratch_disk`, `spot_scratch_erased` and `hides_files`. Each message is one
+  short sentence to show the user as is. Pods list their `scratch_disks` with a `price_per_hour_display`. A preview's
+  `estimate.scratch_disk` has `price_per_hour` only for the disks the request creates (it is left out for a disk the
+  pod keeps, which is not free) and `total_price_per_hour` for all of them when the server sends it. A create
+  that no machine has disk for fails with `not_enough_disk`, and `watched_folders` reports `nested_volume` for a
+  folder that overlaps one of your volumes.
 
 ### Fixed
 
