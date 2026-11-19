@@ -546,14 +546,33 @@ async def test_scale_serving_says_how_many_running_replicas_are_removed(mcp_clie
     assert "replicas_removed" not in raise_min and raise_min["next_step"].startswith("Accepted. Poll the servings tool")
 
 
+async def test_scale_serving_lower_cap_says_running_replicas_keep_their_rate(mcp_client, fake, with_key):
+    """A lower cap removes nothing and moves nothing, so the answer says the running replicas keep their rates."""
+    call = {"operation_id": "test-operation-0001", "serving": 42}
+    _serving_fixture(fake, currentReplicas=2, minReplicas=1, maxReplicas=3, autoScaleEnabled=True)
+    lower = _payload(await mcp_client.call_tool("scale_serving", {**call, "price_cap_per_hour": 1}))
+    assert lower["action"] == "scale" and "replicas_removed" not in lower
+    assert lower["next_step"].startswith("Accepted. Poll the servings tool to see the new replica counts.")
+    assert "applies to replicas started from now on" in lower["next_step"]
+    assert "keep their GPUs and the hourly rates they started with" in lower["next_step"]
+    # the same cap, or a raised one (confirmed), says nothing about it
+    for args in ({"price_cap_per_hour": 1.5}, {"price_cap_per_hour": 2, "confirm": True}):
+        body = _payload(await mcp_client.call_tool("scale_serving", {**call, **args}))
+        assert body["next_step"] == "Accepted. Poll the servings tool to see the new replica counts.", args
+    # a lower cap together with removed replicas keeps both notes
+    _serving_fixture(fake, currentReplicas=3, minReplicas=1, maxReplicas=3, autoScaleEnabled=True)
+    both = _payload(await mcp_client.call_tool("scale_serving", {**call, "max_replicas": 1, "price_cap_per_hour": 1}))
+    assert both["replicas_removed"] == 2 and "requests they were handling fail" in both["next_step"]
+    assert "applies to replicas started from now on" in both["next_step"]
+
+
 async def test_scale_serving_without_removal_keeps_the_plain_answer(mcp_client, fake, with_key):
     call = {"operation_id": "test-operation-0001", "serving": 42}
-    # a cap-only change, a lower max that still covers what is running, and a paused serving (nothing running)
+    # a lower max that still covers what is running, and a paused serving (nothing running)
     _serving_fixture(fake, currentReplicas=2, minReplicas=1, maxReplicas=3, autoScaleEnabled=True)
-    for args in ({"price_cap_per_hour": 1}, {"max_replicas": 2}):
-        body = _payload(await mcp_client.call_tool("scale_serving", {**call, **args}))
-        assert body["action"] == "scale" and "replicas_removed" not in body, args
-        assert body["next_step"] == "Accepted. Poll the servings tool to see the new replica counts."
+    body = _payload(await mcp_client.call_tool("scale_serving", {**call, "max_replicas": 2}))
+    assert body["action"] == "scale" and "replicas_removed" not in body
+    assert body["next_step"] == "Accepted. Poll the servings tool to see the new replica counts."
     _serving_fixture(fake, currentReplicas=0, minReplicas=2, maxReplicas=2, autoScaleEnabled=False, paused=True)
     paused = _payload(await mcp_client.call_tool("scale_serving", {**call, "min_replicas": 1, "max_replicas": 1}))
     assert "replicas_removed" not in paused

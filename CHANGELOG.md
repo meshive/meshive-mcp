@@ -3,6 +3,17 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## Unreleased
+
+### Fixed
+
+- **Lowering a serving's price cap is described as it works.** The `scale_serving` description said that lowering
+  the cap applies immediately and that replicas above the new setting are removed, which read as if replicas above
+  the cap were stopped or moved. A lower cap only applies to replicas started afterwards: running replicas keep the
+  GPU and the hourly rate they started with, so the cost can stay above the new cap. The answer to a call that
+  lowers the cap now says so, and the description says that only a smaller replica range or turning autoscale off
+  removes running replicas.
+
 ## v1.10.0
 
 Ports that a pod exposes over HTTPS can be locked, and pods created through this server now get them locked by

@@ -104,11 +104,13 @@ def register(server: MCPServer) -> None:
         """Change a serving's replica range, autoscaling, or per-replica price cap. Pass only the fields to change.
         Any change that can raise the hourly cost — a larger replica range, turning autoscale on, or a higher per-replica
         price cap — with confirm=false (default) only returns the current state and the requested change and changes
-        nothing; call again with confirm=true after the user agreed. Lowering the range, turning autoscale off, or
-        lowering the cap applies immediately. Replicas running above the new setting are removed within about 30
-        seconds and the requests they are handling fail: with autoscale off the serving keeps `min_replicas`, with
-        autoscale on up to `max_replicas`. When that happens the answer has `replicas_removed`; if the serving is in
-        use, tell the user before lowering it."""
+        nothing; call again with confirm=true after the user agreed. Lowering the range or turning autoscale off
+        applies immediately: replicas beyond the new range are removed within about 30 seconds and the requests they
+        are handling fail — with autoscale off the serving keeps `min_replicas`, with autoscale on up to
+        `max_replicas`. When that happens the answer has `replicas_removed`; if the serving is in use, tell the user
+        before lowering it. Lowering the cap only applies to replicas started afterwards: running replicas are neither
+        moved nor removed, and they keep the GPU and the hourly rate they started with, which can be above the new
+        cap."""
         requested = {k: v for k, v in dict(min_replicas=min_replicas, max_replicas=max_replicas, autoscale=autoscale,
                                             price_cap_per_hour=price_cap_per_hour).items() if v is not None}
         async with meshive_client(ctx) as client:
@@ -135,6 +137,12 @@ def register(server: MCPServer) -> None:
                                 "tool to see the new replica counts.")
         else:
             out["next_step"] = "Accepted. Poll the servings tool to see the new replica counts."
+        if (price_cap_per_hour is not None and current.price_cap_per_hour is not None
+                and Decimal(str(price_cap_per_hour)) < Decimal(str(current.price_cap_per_hour))):
+            # A lower cap only filters where new replicas go; running replicas keep their GPU and stored rate.
+            out["next_step"] += (" The lower price cap applies to replicas started from now on; running replicas keep "
+                                 "their GPUs and the hourly rates they started with, so tell the user the cost may stay "
+                                 "above the new cap until they stop.")
         return out
 
     @meshive_tool(server, "pause_serving", title="Pause or Resume Serving", annotations=MUTATE)
