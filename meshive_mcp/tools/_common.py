@@ -13,7 +13,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
-from .. import money
+from .. import money, oauth, oauth_confirm
+from ..auth import api_key
 from ..errors import translate, tool_error
 
 T = TypeVar("T")
@@ -215,21 +216,33 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
         CONDITIONAL_CONFIRM.add(name)
 
     def decorator(fn: Callable[..., Awaitable[dict[str, Any]]]):
+        signature = inspect.signature(fn)
+
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any):
             token = None
             op = None
             operation = {}
             try:
+                bound = signature.bind(*args, **kwargs)
+                oauth_call = (api_key(bound.arguments["ctx"]) or "").startswith("mshoa_") if "ctx" in bound.arguments else False
                 if not annotations.read_only_hint:
-                    supplied = inspect.signature(fn).bind(*args, **kwargs).arguments.get("operation_id")
+                    supplied = bound.arguments.get("operation_id")
                     op = supplied or str(uuid.uuid4())
                     if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", op):
                         raise tool_error("invalid_operation_id", "operation_id must be 8-128 characters of [A-Za-z0-9._:-].",
                                          "Use the operation_id returned by the preview, or generate a UUID before the first call.")
                     operation = {"id": op, "supplied": bool(supplied)}
                     token = _operation.set(operation)
-                result = await fn(*args, **kwargs)
+                if (op and "confirm" in signature.parameters and name not in oauth.CONSOLE
+                        and oauth_call):
+                    result = await oauth_confirm.run(fn, name, bound, op)
+                else:
+                    result = await fn(*args, **kwargs)
+            except oauth.ConsoleConfirmation as pending:
+                return _bounded_result({**pending.result,
+                    "next_step": "Open the Meshive console link to review the target and receive the result privately. "
+                                 "Do not repeat the operation if the browser response is lost."})
             except ToolError as exc:
                 try:
                     result = json.loads(str(exc))
@@ -245,7 +258,7 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                                                (_UNRECORDED_RETRY if unrecorded else _RECORDED_RETRY))
                 if result.get("code") == "server_error" and name != "send_feedback":
                     result["next_step"] = result.get("next_step", "") + _FEEDBACK_OFFER.format(tool=name)
-                return _bounded_result(result, is_error=True)
+                return _bounded_result(oauth.public_result(result) if oauth_call else result, is_error=True)
             finally:
                 if token is not None:
                     _operation.reset(token)
@@ -259,13 +272,13 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                 if result.get("confirmed") is False:
                     result["next_step"] += (" Reuse this operation_id for confirmation and every retry."
                                             if operation_record else " Reuse this operation_id for the confirmation.")
-            return _bounded_result(result)
+            return _bounded_result(oauth.public_result(result) if oauth_call else result)
 
         if not annotations.read_only_hint:
             if operation_record:
                 note = _RECORDED_NOTE
             else:
-                takes_confirm = "confirm" in inspect.signature(fn).parameters
+                takes_confirm = "confirm" in signature.parameters
                 note = _UNRECORDED_NOTE.format("confirmed " if takes_confirm else "")
             wrapper.__doc__ = (wrapper.__doc__ or "") + note
         # Several tools share the common annotation constants, so the title goes only on the copy.

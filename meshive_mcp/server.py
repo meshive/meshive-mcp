@@ -328,6 +328,9 @@ class AdmitRequests:
                 if not refusal:
                     rpc = pydantic_core.from_json(body)
                     refusal = await oauth.admit(request, rpc)
+            if (not refusal and not settings.oauth_resource and any(
+                    h.lower().startswith(("bearer mshoa_", "bearer mshod_")) for h in Headers(scope=scope).getlist("authorization"))):
+                refusal = _error(401, -32001, "The OAuth connection is unavailable.", {"Cache-Control": "no-store"})
             if refusal:
                 await refusal(scope, receive, send)
             elif isinstance(rpc, dict) and rpc.get("method") == "tools/list":
@@ -358,9 +361,11 @@ class ArgumentLimitedServer(MCPServer):
             elif isinstance(value, list):
                 pending.extend(value)
         selected = oauth.current_tool.set(name)
+        action = oauth.action_inputs.set((oauth.console_only(name, parsed), parsed.get("operation_id")))
         try:
             return await super().call_tool(name, arguments, context)
         finally:
+            oauth.action_inputs.reset(action)
             oauth.current_tool.reset(selected)
 
 

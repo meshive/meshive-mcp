@@ -28,6 +28,8 @@ def private(monkeypatch):
             if token == "mshoa_unavailable":
                 return httpx.Response(503)
             return httpx.Response(200, json={"scope": "read" if token.endswith("reader") else "read write"})
+        if "/previews/" in request.url.path:
+            return httpx.Response(200, json={"bindings": {}})
         if request.url.path.endswith("/exchange"):
             return httpx.Response(200, json={"credential": "mshod_bound"})
         if request.url.path.endswith(("/api-keys", "/platform-notices")):
@@ -105,3 +107,48 @@ async def test_enabled_public_catalog_manual_key_and_invalid_manual_key(private,
                             json=_rpc("tools/call", {"name": "account", "arguments": {}}))
         assert r.status_code == status
     assert fake["last"].key == manual and not private
+
+
+async def test_disabled_oauth_keeps_public_and_manual_service_but_rejects_issued_tokens(http, monkeypatch, fake):
+    from meshive_mcp.tools import gpus
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(settings, "oauth_resource", "")
+    monkeypatch.setattr(gpus, "_catalog_body", AsyncMock(return_value={"gpu_pod_prices": []}))
+    for token, expected in [(None, 200), ("mshoa_old", 401), ("mshod_old", 401)]:
+        r = await http.post("/mcp", headers={**HEADERS, **({"Authorization": "Bearer " + token} if token else {})},
+                            json=_rpc("tools/call", {"name": "gpus", "arguments": {}}))
+        assert r.status_code == expected
+    r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer meshive_manual"},
+                        json=_rpc("tools/call", {"name": "account", "arguments": {}}))
+    assert r.status_code == 200 and not r.json()["result"].get("isError")
+
+
+@pytest.mark.parametrize("step", ["part-urls", "complete", "abort"])
+async def test_collection_upload_capability_forwarded_only_to_bound_request(private, step):
+    import json
+    calls = []
+    token = "local-upload-capability"
+    target = "/v1/sdk/assets/asset-a/uploads/batch-b/" + step
+    async def service(request):
+        calls.append(request)
+        if request.url.path.endswith("/exchange"):
+            packet = json.loads(request.content)
+            assert packet["upload_token_hash"] == hashlib.sha256(token.encode()).hexdigest()
+            assert token.encode() not in request.content
+            return httpx.Response(200, json={"credential": "mshod_bound"})
+        assert request.url.path == target and request.headers["X-Asset-Upload-Token"] == token
+        return httpx.Response(200, json={})
+    async with httpx.AsyncClient(base_url=settings.oauth_internal_url, transport=httpx.MockTransport(service)) as backend:
+        transport = oauth.DelegatedTransport(backend, "mshoa_reader", "finish_upload")
+        from meshive import AsyncMeshive
+        sdk = AsyncMeshive("delegated", base_url=settings.oauth_internal_url, transport=transport, max_retries=0)
+        try:
+            if step == "part-urls":
+                await sdk.asset_file_upload_part_urls("asset-a", "batch-b", token, "file-test", [1])
+            elif step == "complete":
+                await sdk.complete_asset_file_upload("asset-a", "batch-b", token)
+            else:
+                await sdk.abort_asset_file_upload("asset-a", "batch-b", token)
+        finally:
+            await sdk.close()
+    assert len(calls) == 2

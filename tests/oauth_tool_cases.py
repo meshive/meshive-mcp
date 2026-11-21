@@ -83,7 +83,7 @@ CASES = (
     read("source_credentials", "list_hf_tokens", ADMIN, delivery="metadata", workspace=WS),
     read("tasks", "list_tasks", MEMBER, workspace=WS),
     read("estimate_task", "estimate_task", MEMBER, name="demo", workspace=WS, script="print(1)"),
-    read("operation_status", "get_operation", ACCOUNT, method="POST", path="/v1/sdk/pods", **OP),
+    read("operation_status", "get_operation", ACCOUNT, method="POST", path="/pods", **OP),
     write("register_model", "register_model", ADMIN, "register a model", workspace=WS, huggingface_repo="example/model", **OP),
     write("delete_model", "delete_model", ADMIN, "delete a model registration", workspace=WS, registration_id=12, **YES),
     write("deploy_serving", "deploy_serving", ADMIN, "deploy billable replicas", workspace=WS,
