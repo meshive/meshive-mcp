@@ -78,6 +78,7 @@ def state(monkeypatch):
          "endpoints": [_endpoint(5), _endpoint(6, url=SLACK, enabled=False, disabledReason="too many failures")],
          "deliveries": [_delivery(i) for i in range(1, 4)],
          "keys": [_key(3), _key(4, isMine=False, createdBy="other@example.com")],
+         "more_event_types": ["task.succeeded", "task.failed"],
          "test": {"delivered": True, "status_code": 200, "error": None, "platform": "generic", "signed": True,
                   "sample_payload": {"event": "webhook.test"}}}
 
@@ -108,7 +109,8 @@ def state(monkeypatch):
     async def list_webhook_event_types(self):
         self._rec("list_webhook_event_types")
         return [WebhookEventType.from_dict({"type": "request.succeeded", "description": "A request succeeded.",
-                                            "sample_payload": {"status": "succeeded"}})]
+                                            "sample_payload": {"status": "succeeded"}})] + [
+            WebhookEventType.from_dict({"type": t}) for t in s["more_event_types"]]
 
     async def create_webhook(self, ws, url, event_types, **kw):
         self._rec("create_webhook", ws, url, event_types, **kw)
@@ -286,8 +288,8 @@ async def test_deliveries_have_no_body_unless_one_is_asked_for(mcp_client, fake,
 
 async def test_events_need_no_workspace(mcp_client, fake, with_key, state):
     body = _payload(await mcp_client.call_tool("webhooks", {"kind": "events"}))
-    assert body["items"] == [{"type": "request.succeeded", "description": "A request succeeded.",
-                              "sample_payload": {"status": "succeeded"}}]
+    assert body["items"][0] == {"type": "request.succeeded", "description": "A request succeeded.",
+                                "sample_payload": {"status": "succeeded"}}
     assert not _calls(fake, "list_workspaces")
 
 
@@ -390,7 +392,7 @@ async def test_a_disabled_endpoint_cant_be_tested(mcp_client, fake, with_key, st
 async def test_save_refusals(mcp_client, fake, with_key, state, title, code):
     _raise(fake, "create_webhook", _api_error(MeshiveAPIError, 400, title))
     body = _payload(await mcp_client.call_tool("save_webhook", {
-        "url": "http://h.example.com/x", "event_types": ["nope"], "confirm": True, "operation_id": OP}))
+        "url": "https://h.example.com/x", "event_types": ["nope"], "confirm": True, "operation_id": OP}))
     assert body["code"] == code
     if code == "invalid_argument":
         assert 'webhooks(kind="events")' in body["next_step"]
@@ -558,3 +560,84 @@ async def test_rolling_an_expired_key_points_at_a_new_key(mcp_client, fake, with
                                                                       "operation_id": OP}))
     assert body["code"] == "inference_key_expired" and "create_inference_key" in body["next_step"]
     assert "retry runs it again" not in body["next_step"]
+
+
+# --- previews refuse what the save can only refuse; history after a delete; expiry; where results are kept ----------
+
+async def test_save_preview_refuses_an_event_type_the_catalog_does_not_have(mcp_client, fake, with_key, state):
+    """An event type that isn't in webhooks(kind="events") can only be refused by the save, so the preview refuses it
+    instead of asking the user to approve it."""
+    body = _payload(await mcp_client.call_tool("save_webhook", {
+        "url": "https://hooks.example.com/in", "event_types": ["request.succeeded", "no.such.event"]}))
+    assert body["code"] == "invalid_argument" and "no.such.event" in body["message"]
+    assert 'webhooks(kind="events")' in body["next_step"] and "confirmed" not in body
+    assert not _calls(fake, "create_webhook")
+    # Adding an unknown type to an existing endpoint is refused the same way.
+    body = _payload(await mcp_client.call_tool("save_webhook", {"webhook": 5, "event_types": ["no.such.event"]}))
+    assert body["code"] == "invalid_argument" and not _calls(fake, "update_webhook")
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_a_url_that_is_not_https_is_refused_before_any_call(mcp_client, fake, with_key, state, confirm):
+    """The server only takes https URLs; the tool says so before a preview asks for a save that can't happen."""
+    body = _payload(await mcp_client.call_tool("save_webhook", {
+        "url": "http://hooks.example.com/in", "event_types": ["request.succeeded"], "confirm": confirm,
+        "operation_id": OP}))
+    assert body["code"] == "invalid_webhook_url" and "https" in body["message"]
+    assert "last" not in fake or not fake["last"].calls
+
+
+async def test_delete_answer_says_the_kept_deliveries_lose_their_webhook_id(mcp_client, fake, with_key, state):
+    """Kept deliveries of a deleted endpoint have no webhook_id, so filtering by the old id finds none of them."""
+    body = _payload(await mcp_client.call_tool("delete_webhook", {"webhook": 5, "confirm": True,
+                                                                  "operation_id": OP}))
+    assert "webhook_id" in body["next_step"] and "request_id" in body["next_step"]
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["delete_webhook"]
+    assert "webhook_id" in desc
+
+
+async def test_a_repeated_delete_of_a_deleted_endpoint_says_it_is_already_deleted(mcp_client, fake, with_key, state):
+    """A retry of a delete that already went through finds no endpoint: the answer says it is already deleted and
+    that operation_status shows it, and nothing is sent."""
+    body = _payload(await mcp_client.call_tool("delete_webhook", {"webhook": 99, "confirm": True,
+                                                                  "operation_id": OP}))
+    assert body["code"] == "webhook_not_found" and not _calls(fake, "delete_webhook")
+    assert "already deleted" in body["next_step"] and "operation_status" in body["next_step"]
+
+
+async def test_inference_keys_say_which_keys_have_expired(mcp_client, fake, with_key, state):
+    """`status` comes from the server and stays "active" after a key's expiry passed; `expired` says it."""
+    state["keys"] = [_key(3, expiresAt="2020-01-01T00:00:00Z"), _key(4, expiresAt="2999-01-01T00:00:00Z"), _key(5)]
+    body = _payload(await mcp_client.call_tool("inference_keys", {}))
+    by_id = {k["key_id"]: k for k in body["items"]}
+    assert by_id[3]["status"] == "active" and by_id[3]["expired"] is True
+    assert by_id[4]["expired"] is False and by_id[5]["expired"] is False
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["inference_keys"]
+    assert "`expired`" in desc
+
+
+async def test_requests_kept_in_meshive_storage_show_no_internal_bucket(mcp_client, fake, with_key, state):
+    """A result Meshive keeps is shown as Meshive storage, without the platform's own bucket name or provider code;
+    a result in the user's own bucket keeps that bucket's name."""
+    state["requests"] = [_request(1, outputBucket="platform-internal-bucket", storageProvider="meshive_r2"),
+                         _request(2, outputBucket="users-own-bucket", storageProvider="user_s3")]
+    state["request"] = _request(1, status="succeeded", outputBucket="platform-internal-bucket",
+                                storageProvider="meshive_r2")
+    body = _payload(await mcp_client.call_tool("inference_requests", {}))
+    managed, own = body["items"]
+    assert managed["output_bucket"] == "Meshive storage" and own["output_bucket"] == "users-own-bucket"
+    one = _payload(await mcp_client.call_tool("inference_requests", {"request_id": "req_1"}))
+    assert one["request"]["output_bucket"] == "Meshive storage"
+    for text in (json.dumps(body), json.dumps(one)):
+        assert "platform-internal-bucket" not in text and "meshive_r2" not in text
+
+
+async def test_older_requests_without_a_storage_provider_show_meshive_storage(mcp_client, fake, with_key, state):
+    """An older request has no storage provider recorded; Meshive kept its result, so it shows as Meshive storage.
+    A request with no output yet keeps a null output_bucket."""
+    state["requests"] = [_request(1, outputBucket="platform-internal-bucket", storageProvider=None),
+                         _request(2, outputBucket=None, storageProvider=None)]
+    body = _payload(await mcp_client.call_tool("inference_requests", {}))
+    legacy, empty = body["items"]
+    assert legacy["output_bucket"] == "Meshive storage" and empty["output_bucket"] is None
+    assert "platform-internal-bucket" not in json.dumps(body)

@@ -54,7 +54,9 @@ def _host_threads(messages: list[Any]) -> list[dict[str, Any]]:
             t["unread"] += 1
         for r in (*m.related_pods, *m.related_pvs):
             alias = r.get("userAlias")
-            if alias and alias not in t["about"]:
+            # A few names: each message carries every resource the workspace had on the machine (thousands on a
+            # busy one).
+            if alias and alias not in t["about"] and len(t["about"]) < 5:
                 t["about"].append(alias)
         if m.created_at is not None and (t["last_message_at"] is None
                                          or m.created_at.timestamp() > t["last_message_at"].timestamp()):

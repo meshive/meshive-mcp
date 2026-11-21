@@ -29,7 +29,7 @@ def _raise(fake, method, exc):
 
 
 async def _create_storage(mcp_client, **over):
-    return _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 5, "confirm": True,
+    return _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True,
                                                                   "operation_id": OP, **over}))
 
 
@@ -52,9 +52,35 @@ async def test_an_open_outcome_keeps_the_retry_advice(mcp_client, fake, with_key
     assert TAIL in body["next_step"], body["code"]
 
 
+async def test_an_open_outcome_is_worded_for_any_write(mcp_client, fake, with_key):
+    """The server's words for an operation still pending name a task or transaction and a "key", which most writes
+    (an account rename, say) don't have and an agent can read as an API key; its internal record id means nothing to
+    the agent. The answer has its own words and leaves the record id out."""
+    message = ("This operation is pending or needs reconciliation. It will not be executed again. Check the recorded "
+               "task/transaction; do not submit a new key.")
+    _raise(fake, "create_storage", ConflictError(409, message, title="Operation Outcome Unknown", raw={"detail": {
+        "title": "Operation Outcome Unknown", "message": message, "operationRecordId": "a" * 64,
+        "transactionId": None, "taskId": None}}))
+    body = await _create_storage(mcp_client)
+    assert body["code"] == "operation_outcome_unknown"
+    assert "operationRecordId" not in body and "a" * 64 not in json.dumps(body)
+    for text in (body["message"], body["next_step"]):
+        assert "task/transaction" not in text and "new key" not in text
+    assert "operation_status" in body["next_step"] and "new operation_id" in body["next_step"]
+
+
+def test_a_bucket_folder_asset_has_no_download_links():
+    """download_links on an asset that links a folder of the user's bucket: no argument gives it links, so the answer
+    has its own code and says to read the objects from the bucket instead of retrying."""
+    body = json.loads(str(translate(_api_error(MeshiveAPIError, 400, "Reference Asset Not Downloadable"))))
+    assert body["code"] == "reference_asset_not_downloadable"
+    assert "bucket" in body["next_step"] and "don't retry" in body["next_step"]
+    assert "retry once" not in body["next_step"]
+
+
 async def test_nothing_sent_means_no_retry_advice(mcp_client, fake, with_key):
     # No operation_id on a confirmed write: nothing was sent.
-    body = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 5, "confirm": True}))
+    body = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True}))
     assert body["code"] == "operation_id_required" and TAIL not in body["next_step"]
     assert body["operation_id"]                      # it still hands the agent an id to use
     # A preview that fails on a read sends no write either.

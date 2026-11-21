@@ -619,6 +619,19 @@ async def test_assets_pod_filter_ignored_by_an_older_server_is_refused(mcp_clien
     assert "MUST reuse" not in body["next_step"] and "source.pod_name" in body["next_step"]
 
 
+@pytest.mark.parametrize("tool, args, field", [
+    ("asset_files", {"kind": "output", "pod": "deleted-trainer"}, "source_pod_name"),
+    ("assets", {"pod": "deleted-trainer"}, "source.pod_name")])
+async def test_a_pod_name_no_pod_has_points_at_the_deleted_pods_pod_name(mcp_client, fake, with_key, files_fake,
+                                                                         tool, args, field):
+    """The pods tool doesn't list deleted pods, so a deleted pod's display name finds nothing. The answer says how such
+    a pod is found: by the pod_name its files or assets carry."""
+    result = await mcp_client.call_tool(tool, args)
+    body = _payload(result)
+    assert result.is_error and body["code"] == "not_found"
+    assert "deleted pod" in body["next_step"] and field in body["next_step"]
+
+
 async def test_assets_pod_filter_describes_how_a_deleted_pod_is_named(mcp_client):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("assets", "asset_files"):

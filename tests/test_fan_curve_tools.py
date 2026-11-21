@@ -180,8 +180,9 @@ async def test_set_fan_curve_preview_shows_current_and_new_curve_and_client_pods
                                                                  "points": CUSTOM}))
     assert body["confirmed"] is False and body["action"] == "set_fan_curve" and body["operation_id"]
     assert body["machine"] == MACHINE_ID and body["machine_name"] == "gpu-box"
-    assert body["current"] == {"mode": "default", "effective_points": [[40, 30], [70, 60], [85, 100]], "revision": 3}
-    assert body["after"] == {"mode": "custom", "effective_points": CUSTOM}
+    assert body["current"] == {"mode": "default", "effective_points": [[40, 30], [70, 60], [85, 100]],
+                               "custom_points": None, "revision": 3}
+    assert body["after"] == {"mode": "custom", "effective_points": CUSTOM, "custom_points": CUSTOM}
     # Two client pods run (a workload and a serving replica); stopped and terminated ones don't count.
     assert body["running_client_pods"] == 2 and body["machine_online"] is True
     assert body["warnings"] == ["Running GPUs hotter than the default curve can throttle the pods on it."]
@@ -195,7 +196,8 @@ async def test_set_fan_curve_preview_shows_current_and_new_curve_and_client_pods
 async def test_set_fan_curve_driver_preview_warns_that_meshive_stops_controlling(mcp_client, fake, with_key, fan_fake):
     fan_fake["agent_reachable"] = False
     body = _payload(await mcp_client.call_tool("set_fan_curve", {"machine": MACHINE_ID, "mode": "driver"}))
-    assert body["after"] == {"mode": "driver", "effective_points": []} and body["machine_online"] is False
+    assert body["after"] == {"mode": "driver", "effective_points": [], "custom_points": None}
+    assert body["machine_online"] is False
     assert body["warnings"] == ["Meshive stops controlling these fans; the NVIDIA driver or the host's own tool "
                                 "takes over.", "The machine is offline; it picks up the curve when it reconnects."]
     assert "to driver (the NVIDIA driver controls the fans)?" in body["question"]
@@ -219,10 +221,30 @@ async def test_set_fan_curve_invalid_curve_fails_at_preview(mcp_client, fake, wi
     assert not _calls(fake, "set_fan_curve")
 
 
-async def test_set_fan_curve_custom_without_points_is_refused(mcp_client, fake, with_key, fan_fake):
-    body = _payload(await mcp_client.call_tool("set_fan_curve", {"machine": MACHINE_ID, "mode": "custom"}))
-    assert body["code"] == "invalid_argument" and "points" in body["message"]
-    assert not _calls(fake, "set_fan_curve")
+@pytest.mark.parametrize("args", [{"mode": "custom"}, {"mode": "custom", "points": [[40, 30, 1], [80, 100, 1]]}])
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_set_fan_curve_custom_without_points_or_with_bad_points_is_an_invalid_curve(mcp_client, fake, with_key,
+                                                                                         fan_fake, args, confirm):
+    """A custom curve without points and points that aren't (temperature, fan %) pairs answer invalid_fan_curve,
+    like every other bad curve."""
+    body = _payload(await mcp_client.call_tool("set_fan_curve", {"machine": MACHINE_ID, **args, "confirm": confirm,
+                                                                 "operation_id": OP}))
+    assert body["code"] == "invalid_fan_curve" and "point" in body["message"]
+    assert "preview again" in body["next_step"] and "MUST reuse" not in body["next_step"]
+    assert not _calls(fake, "set_fan_curve") or confirm
+
+
+async def test_set_fan_curve_preview_says_points_replace_the_saved_custom_curve(mcp_client, fake, with_key, fan_fake):
+    """Points given with another mode are saved as the custom curve: the preview shows the saved custom points
+    before and after and says they are replaced."""
+    fan_fake["curve"]["customPoints"] = _wire([[30, 60], [70, 100]])
+    body = _payload(await mcp_client.call_tool("set_fan_curve", {"machine": MACHINE_ID, "mode": "default",
+                                                                 "points": CUSTOM}))
+    assert body["current"]["custom_points"] == [[30, 60], [70, 100]] and body["after"]["custom_points"] == CUSTOM
+    assert "saved custom curve" in body["question"] and "30 °C 60%" in body["question"]
+    # Without points the saved custom curve stays, and the question says nothing about it.
+    body = _payload(await mcp_client.call_tool("set_fan_curve", {"machine": MACHINE_ID, "mode": "default"}))
+    assert body["after"]["custom_points"] == [[30, 60], [70, 100]] and "saved custom curve" not in body["question"]
 
 
 async def test_set_fan_curve_on_cpu_machine_is_not_gpu_machine(mcp_client, fake, with_key, fan_fake):

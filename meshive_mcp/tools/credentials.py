@@ -86,6 +86,20 @@ def _assets(count: int) -> str:
     return "1 asset" if count == 1 else f"{count} assets"
 
 
+async def _removed_bucket(client: Any, credential_id: int, ws: str) -> dict[str, Any] | None:
+    """The answer for a bucket connection that is already removed, or None. Removing it again is accepted and does
+    nothing, so there is nothing to ask the user."""
+    rows = await credential_call(client.list_storage_credentials, ws, include_deleted=True)
+    found = next((c for c in rows if c.credential_id == credential_id and c.deleted_at is not None), None)
+    if found is None:
+        return None
+    return {"kind": "bucket", "credential_id": credential_id, "label": found.label, "workspace": ws,
+            "deleted": True, "already_removed": True, "deleted_at": found.deleted_at.isoformat(),
+            "next_step": "This bucket connection is already removed; there is nothing to do. It has to be added again "
+                         "in the console to be used for new work.",
+            "note": _NAMES_NOTE}
+
+
 async def _bucket_preview(client: Any, credential_id: int, ws: str) -> tuple[dict[str, Any], str]:
     check = await credential_call(client.check_storage_credential_delete, credential_id, ws)
     payload: dict[str, Any] = {
@@ -147,11 +161,14 @@ def register(server: MCPServer) -> None:
             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a saved credential of a workspace, only when the user asks: a Hugging Face token (`hf_token`), a CivitAI key (`civitai_key`), a container registry login (`registry_login`) or a bucket connection (`bucket`). It needs the admin or billing role.
         With confirm=false (default) it deletes nothing and returns what uses the credential: the assets linked with a token or key and the pods using them, the templates, pods and tasks of a registry login, or for a bucket the assets registered from it and whether task outputs go there by default. Show that to the user; call again with the workspace id and confirm=true after they agreed.
-        A deleted token, key or login can't be brought back, and the server doesn't stop you while something uses it: those assets, templates or pods stop working until the user saves a new one in the console. Removing a bucket connection deletes nothing in the bucket and lets uploads already running finish; if task outputs went there by default, they go back to Meshive storage, which is billed. It has to be added again in the console to be used for new work."""
+        A deleted token, key or login can't be brought back, and the server doesn't stop you while something uses it: those assets, templates or pods stop working until the user saves a new one in the console. Removing a bucket connection deletes nothing in the bucket and lets uploads already running finish; if task outputs went there by default, they go back to Meshive storage, which is billed. It has to be added again in the console to be used for new work. A bucket connection that is already removed answers `already_removed` without a preview: there is nothing to do."""
         async with meshive_client(ctx) as client:
             ws = await resolve_target(client, workspace, confirm=confirm)
             if not confirm:
                 if kind == "bucket":
+                    removed = await _removed_bucket(client, credential_id, ws)
+                    if removed is not None:
+                        return removed
                     payload, question = await _bucket_preview(client, credential_id, ws)
                 else:
                     payload, question = await _token_preview(client, kind, credential_id, ws)

@@ -6,6 +6,8 @@ An entry's `message` is what the container printed, so it goes out only with the
 from __future__ import annotations
 
 import json
+import re
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -38,6 +40,20 @@ async def _history_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
             raise
         cause = exc.__cause__
         raise tool_error("forbidden", getattr(cause, "message", None) or "Forbidden.", _FORBIDDEN_STEP) from cause
+
+
+def _check_bound(value: str | None, name: str) -> None:
+    """A timeline bound the SDK takes: YYYY-MM-DD or an ISO 8601 time. Checked here so that a bad one is refused by
+    this tool's argument name; the string itself is passed on unchanged."""
+    if value is None:
+        return
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            date.fromisoformat(value)
+        else:
+            datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        raise invalid_argument(f"`{name}` must be a date in YYYY-MM-DD or an ISO 8601 time.") from None
 
 
 def _event(e: Any) -> dict[str, Any]:
@@ -99,6 +115,8 @@ def register(server: MCPServer) -> None:
                 raise invalid_argument("`unread_only` applies to the alerts list, without `pod`.")
             if (since or until) and not include_timeline:
                 raise invalid_argument("`since` and `until` bound the timeline: set include_timeline=true with them.")
+            for name, value in (("since", since), ("until", until)):
+                _check_bound(value, name)
         async with meshive_client(ctx) as client:
             if pod is None:
                 targets = await resolve_many(client, workspace)

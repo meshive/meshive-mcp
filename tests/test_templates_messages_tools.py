@@ -221,6 +221,16 @@ async def test_renter_host_messages_list_both_directions_newest_first(mcp_client
     assert [m["id"] for m in one["items"]] == [3]
 
 
+async def test_renter_host_messages_name_a_few_resources_and_count_them(mcp_client, fake, with_key, misc):
+    """A message about many resources names at most five of them and counts them all, as in host mode."""
+    misc["messages"] = [_message(1, "host", "mac-9", False, "2026-11-20T09:00:00Z",
+                                 pods=tuple(f"run{n}" for n in range(40)))]
+    body = _payload(await mcp_client.call_tool("host_messages", {"workspace": WS}))
+    row = body["items"][0]
+    assert row["about"] == [f"run{n}" for n in range(5)] and row["pods"] == [f"run{n}-sts-0" for n in range(5)]
+    assert row["pod_count"] == 40 and row["volume_count"] == 0
+
+
 async def test_renter_mark_read(mcp_client, fake, with_key, misc):
     body = _payload(await mcp_client.call_tool("mark_host_messages_read", {"workspace": WS, "message_ids": [1, 3],
                                                                           "operation_id": OP}))

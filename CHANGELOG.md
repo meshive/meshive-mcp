@@ -107,7 +107,8 @@ maintenance and access pod, and a template's full spec.
 - `inference_requests` lists a workspace's inference requests (the queued jobs that async calls to a serving create),
   newest first, filtered by `status` and `modality`, or shows one by `request_id` with `download_urls` for a succeeded
   request's outputs (about an hour each). Each request has who sent it, the inference key it used, where its result
-  is stored, `error_code` and `error_message` (marked as untrusted) and `cancelable`. Only the newest 200 are read;
+  is stored (`output_bucket` is "Meshive storage" for a result Meshive keeps, or the name of the user's own bucket;
+  no storage provider code), `error_code` and `error_message` (marked as untrusted) and `cancelable`. Only the newest 200 are read;
   the list says `truncated` when it hit that.
 - `cancel_inference_request` cancels a queued request. It needs no `confirm` (nothing ran, and its reserved credit is
   refunded). A request that isn't queued fails with `request_not_cancellable`, an unknown id with `request_not_found`.
@@ -119,11 +120,16 @@ maintenance and access pod, and a template's full spec.
   (`send_test=true`). Creating one, changing its URL, adding event types or turning it back on takes `confirm`;
   renaming, removing event types, turning it off or only testing doesn't. A Slack or Discord URL, or a URL with a
   user name or password, is refused before anything is sent (`secret_url_not_accepted`): those are secrets the user
-  adds in the console. Other new errors: `invalid_webhook_url`, `webhook_disabled`, `webhook_not_found`, and `delivery_not_found` for an
-  unknown `delivery_id`.
-- `delete_webhook` deletes a webhook endpoint and takes `confirm`; its delivery history stays.
+  adds in the console. A URL that isn't https fails with `invalid_webhook_url` before anything is sent, and a preview
+  refuses event types the event catalog doesn't list (`invalid_argument`). Other new errors: `webhook_disabled`,
+  `webhook_not_found`, and `delivery_not_found` for an unknown `delivery_id`.
+- `delete_webhook` deletes a webhook endpoint and takes `confirm`; its delivery history stays, without a
+  `webhook_id` (read it unfiltered or by `request_id`). A repeated confirmed call for an endpoint that is gone fails
+  with `webhook_not_found`, whose next_step says a retry of a delete that went through finds it already deleted and
+  `operation_status` shows it.
 - `inference_keys` lists a workspace's inference API keys (never their values): your own, or every key of the
-  workspace for an admin or billing member, with who made each one.
+  workspace for an admin or billing member, with who made each one. `expired` says whether a key's `expires_at` has
+  passed; the server's `status` doesn't reflect expiry.
 - `create_inference_key` and `roll_inference_key` create a key or replace one's value and take `confirm`. The value
   is in the confirmed answer only (`inference_key`), like a port access key's. A key doesn't expire unless
   `expires_in_days` is given, and it keeps working after the Meshive API key used to make it is revoked or expires;
@@ -142,15 +148,18 @@ maintenance and access pod, and a template's full spec.
   or key and the pods using them, the templates, pods and tasks of a registry login, or a bucket's registered assets,
   running pods and tasks and whether task outputs go there by default (then with the Meshive storage price they go
   back to). Removing a bucket connection deletes nothing in the bucket; files registered from it stay readable by
-  pods and tasks. An id that isn't there fails with `credential_not_found`.
+  pods and tasks. An id that isn't there fails with `credential_not_found`; a bucket connection that is already
+  removed answers `already_removed: true` without a preview (removing it again would do nothing).
 - `set_default_output_bucket` chooses where a workspace's task outputs go by default: a verified `bucket_id` from
   `buckets`, or `"managed"` (Meshive storage, whose price the preview names). It takes `confirm`; `workspace` is
-  required and must be the id on confirm. A call that changes nothing answers `changed: false` without a preview; an
+  required and must be the id on confirm. A call that changes nothing answers `changed: false` without a preview (a
+  confirmed one then sends nothing); an
   unverified bucket fails with `bucket_not_verified` before the preview.
 - `pod_history` shows a pod's history like the console's State history tab, newest first: the container exits the
   system detected (`cause`, a fixed `summary`, `oom_kind` ram or vram) and the actions taken on it (`action`,
   `action_status`, `action_log`); `kind` "system" or "action" keeps one. `include_timeline` adds how long the pod was
-  running, waiting and terminated in a `since`/`until` window. Without `pod` it lists recent alerts across the
+  running, waiting and terminated in a `since`/`until` window (a bound that isn't a date or an ISO 8601 time fails
+  with `invalid_argument` naming it). Without `pod` it lists recent alerts across the
   workspace's pods, or every workspace the user manages with `workspace="all"` (`unread_only`; the newest 200,
   `truncated`). It needs the admin or billing role (`forbidden` says that `pods` still shows the last exits). Each
   entry's `message` is what the container printed and is marked as untrusted.
@@ -165,9 +174,10 @@ maintenance and access pod, and a template's full spec.
 - `set_fan_curve` sets a hosted GPU machine's fan curve, like the console's Fan curve tab: `mode` "default"
   (Meshive's curve), "custom" (`points`, [temperature °C, fan %] pairs) or "driver" (the NVIDIA driver controls
   the fans). It takes `confirm`: the preview has the server check the curve and shows the current and the new
-  curve, how many client pods run on the machine and warnings (a driver curve, a custom curve, an offline
-  machine); a curve the server refuses fails there with `invalid_fan_curve`, and a machine without GPUs with
-  `not_gpu_machine`. A saved curve the machine couldn't take at once answers `applied: false`: it picks it up
+  curve (with the saved custom points: `points` given with another mode replace them, and the question says so), how
+  many client pods run on the machine and warnings (a driver curve, a custom curve, an offline machine); a curve the
+  server refuses fails there with `invalid_fan_curve`, as do a custom curve without points and points that aren't
+  pairs, and a machine without GPUs with `not_gpu_machine`. A saved curve the machine couldn't take at once answers `applied: false`: it picks it up
   within about 5 minutes or when it reconnects.
 
 ### Changed
@@ -196,7 +206,8 @@ maintenance and access pod, and a template's full spec.
 - `asset_files` with an asset linked from a bucket folder (assets `reference.mode` "prefix") lists the bucket
   objects under it one folder level at a time (`prefix` = a folder inside the asset; items `key`, `path`,
   `size_bytes`, `last_modified`, `ext`; `folders`; an opaque cursor). `paths`, `media_kind` and `file_type` are
-  refused there.
+  refused there. A folder whose bucket connection was removed fails with `credential_not_found` (the user adds the
+  connection again in the console), and its cursor passed with another asset with `invalid_argument`.
 - `import_asset` takes `source="bucket:<bucket_id>/<folder>"`: without `paths` the folder is linked as one asset that
   can be browsed and copied from but can't be a pod's or task's `input_assets` itself; with `paths` (object keys from
   `buckets`, up to 500) and `name`, just those files, as an asset that can. Nothing is copied and it needs no `confirm`. New errors: `bucket_objects_not_found`,
@@ -330,6 +341,11 @@ maintenance and access pod, and a template's full spec.
 - `host_messages` takes `workspace`: the messages between that workspace and the hosts of the machines it uses
   (`direction` "in" from the host), with `about` and `pods`. `mark_host_messages_read` takes `workspace` instead of
   `machine` for them; `machine` is no longer a required argument.
+- **`host_messages` rows no longer carry `related_pods` and `related_pvs`** in host mode: the server attaches every
+  pod and volume the workspace has had on the machine to each message, so on a busy machine even a page of five
+  passed the response limit. Rows in both modes name at most 5 of them (`about` display names, `pods`) and count all
+  of them (`pod_count`, `volume_count`); the `workspaces` detail's `host_threads` and the `send_host_message` preview
+  name at most 5 too.
 - `account` adds `platform_notices` (incidents and maintenance the Meshive team announced, with the services they
   affect and `user_guidance`) and `platform_incident_active`, only while there are any. The `server_error` and
   `temporarily_unavailable` next_step points to them.
@@ -396,15 +412,23 @@ maintenance and access pod, and a template's full spec.
   with `operation_status` first. A write the server keeps no operation record of (`run_command`, `ssh_access`,
   `connect_storage`, the upload steps and the like) no longer points at `operation_status` after a timeout or 5xx.
 - A confirmed create that no machine can take any more ("No available cluster") is `no_capacity`, not
-  `invalid_request`; `download_links` on a linked asset is `linked_asset_not_downloadable`.
+  `invalid_request`; `download_links` on a linked asset is `linked_asset_not_downloadable`, and on an asset linked
+  from a bucket folder `reference_asset_not_downloadable` (read its objects from the bucket).
+- `operation_outcome_unknown` (an earlier call with the operation_id still pending or unclear) has its own message
+  and `next_step` for every write tool: the server's words named a task or transaction and a "key", which most
+  writes don't have. The server's internal `operationRecordId` is no longer passed on.
+- `create_storage` refuses a `size_gb` below 10 before sending anything, naming `size_gb` (before: the server's
+  `sizeGb` text as `invalid_request`).
 - `delete_template` and `save_template` on an official template answer `official_template` (also on confirm, where
   the server answers like a missing id); `templates(template=<custom id>)` without `workspace` says to pass it.
 - `export_asset` to Hugging Face checks `hf_token_id` against the workspace's saved tokens in the preview.
 - `asset_files` kind views carry `source_pod_name`, which the `pod` filter takes back (a deleted pod's display name
-  doesn't find it).
+  doesn't find it). A `pod` that finds no pod, in `assets` and `asset_files`, says in its `not_found` next_step to
+  pass a deleted pod's pod_name from its rows (`source.pod_name`, `source_pod_name`).
 - `deploy_serving` takes `output_bucket="managed"` like `scale_serving` and the task tools; the `deploy_serving` and
   `scale_serving` previews refuse turning sharing on for a model that can't share idle capacity
-  (`sharing_not_available`) instead of asking for consent.
+  (`sharing_not_available`) instead of asking for consent, looking the model up in the workspace's registrations and
+  in the official catalog.
 - `detect_model(asset=...)` answers `status: "unsupported"` with a `detail` for an asset with no model weights.
 - `update_pod remove_input_assets` says that an asset added while the pod ran may leave its files in the pod until
   it is re-created (the preview adds that `remove_pod_asset` deletes them now, before the edit), and `remove_pod_asset` / `pods include_assets` describe

@@ -187,6 +187,34 @@ async def test_asset_files_prefix_needs_a_bucket_folder_asset(mcp_client, fake, 
     assert no_asset.is_error and _payload(no_asset)["code"] == "invalid_argument"
 
 
+@pytest.mark.parametrize("args", [{"asset": "asset_ref"}, {"asset": "asset_ref", "prefix": "sub/"}])
+async def test_asset_files_of_a_bucket_folder_whose_connection_was_removed(mcp_client, fake, with_key, settings_fake,
+                                                                           args):
+    """Browsing a linked folder needs its bucket connection. Once that is removed no argument helps and a retry fails
+    the same way: the answer says so, as import_asset's copy out of the same folder does."""
+    _raise(fake, "browse_reference_objects", _api_error(
+        MeshiveAPIError, 400, "Storage Credential Missing",
+        "The storage credential for this reference asset is no longer available."))
+    result = await mcp_client.call_tool("asset_files", args)
+    body = _payload(result)
+    assert result.is_error and body["code"] == "credential_not_found"
+    assert "console" in body["next_step"] and "don't retry" in body["next_step"]
+    assert "retry once" not in body["next_step"]
+
+
+async def test_a_folder_listing_cursor_given_with_another_asset(mcp_client, fake, with_key, settings_fake):
+    """A folder-listing cursor carries no asset, so one passed with an asset that has its own files reaches the server,
+    which refuses it. The answer says the cursor belongs to another asset's listing."""
+    _raise(fake, "browse_reference_objects", _api_error(
+        MeshiveAPIError, 400, "Not A Reference Asset",
+        "Partial fetch applies only to reference assets registered from a bucket prefix."))
+    result = await mcp_client.call_tool("asset_files", {"asset": "asset_plain", "cursor": "r:eyJ0IjoieCIsInAiOiIifQ"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "invalid_argument"
+    assert "cursor" in body["message"] and "Partial fetch" not in body["message"]
+    assert "retry once" not in body["next_step"]
+
+
 # --- import_asset from a bucket ----------------------------------------------------------------------------------------
 
 async def test_import_asset_links_a_bucket_folder_without_confirm(mcp_client, fake, with_key, settings_fake):
@@ -353,6 +381,23 @@ async def test_delete_credential_bucket_names_the_price_only_for_the_default_out
     assert "price_per_gb_month" not in plain
 
 
+async def test_delete_credential_on_a_bucket_connection_already_removed(mcp_client, fake, with_key, settings_fake):
+    """The server accepts removing a connection that is already removed and does nothing, so there is nothing to ask
+    the user to approve: the preview says it is already removed, like delete_asset on a deleted asset."""
+    settings_fake["credentials"].append({"id": 9, "label": "old bucket", "provider": "aws_s3", "bucket": "old",
+                                         "deletedAt": "2026-10-02T00:00:00Z"})
+    body = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 9,
+                                                                     "workspace": WS}))
+    assert "confirmed" not in body and "question" not in body
+    assert body["already_removed"] is True and body["credential_id"] == 9
+    assert "nothing to do" in body["next_step"]
+    assert not _calls(fake, "check_storage_credential_delete")
+    # A connection that is still there keeps its preview.
+    live = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 7,
+                                                                     "workspace": WS}))
+    assert live["confirmed"] is False and "already_removed" not in live
+
+
 @pytest.mark.parametrize("error, code", [
     (_api_error(NotFoundError, 404, "Credential Not Found"), "credential_not_found"),
     (PermissionDeniedError(403, "Only workspace admins and billing members can do this."), "forbidden"),
@@ -385,6 +430,19 @@ async def test_set_default_output_bucket_to_meshive_storage_names_the_price(mcp_
     assert _calls(fake, "set_asset_storage_setting")[0] == (
         "set_asset_storage_setting", (WS, None), {"idempotency_key": body["operation_id"]})
     assert done["changed"] is True and done["default_output_bucket"]["destination"] == "managed"
+
+
+@pytest.mark.parametrize("target", [7, "managed"])
+async def test_set_default_output_bucket_confirm_says_when_nothing_changed(mcp_client, fake, with_key, settings_fake,
+                                                                           target):
+    """A confirmed call for the destination that is already set reports changed false, as its preview does."""
+    if target == "managed":
+        settings_fake["setting"] = {"storageCredentialId": None}
+    body = _payload(await mcp_client.call_tool("set_default_output_bucket", {
+        "workspace": WS, "output_bucket": target, "confirm": True, "operation_id": OP}))
+    assert body["changed"] is False
+    assert body["default_output_bucket"]["destination"] == ("managed" if target == "managed" else "bucket")
+    assert not _calls(fake, "set_asset_storage_setting")
 
 
 async def test_set_default_output_bucket_refuses_an_unverified_bucket(mcp_client, fake, with_key, settings_fake):

@@ -42,7 +42,7 @@ def _raise(fake, method, exc):
 @pytest.mark.parametrize("tool,method,args", [
     ("save_template", "update_template", {"template_id": 31, "workspace": WS, "name": "x"}),
     ("delete_template", "delete_template", {"template_id": 31, "workspace": WS, "confirm": True}),
-    ("create_storage", "create_storage", {"name": "data", "size_gb": 5, "confirm": True}),
+    ("create_storage", "create_storage", {"name": "data", "size_gb": 10, "confirm": True}),
 ])
 async def test_a_reused_operation_id_points_at_operation_status(mcp_client, fake, with_key, misc, tool, method, args):
     _raise(fake, method, _reused())
@@ -68,7 +68,7 @@ async def test_an_unrecorded_write_that_timed_out_doesnt_point_at_operation_stat
 
 async def test_a_recorded_write_that_timed_out_still_points_at_operation_status(mcp_client, fake, with_key):
     _raise(fake, "create_storage", httpx.ReadTimeout("timed out"))
-    body = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 5, "confirm": True,
+    body = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "confirm": True,
                                                                   "operation_id": OP}))
     assert "operation_status" in body["next_step"] and TAIL in body["next_step"]
 

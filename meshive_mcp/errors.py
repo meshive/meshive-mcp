@@ -169,8 +169,11 @@ def invalid_argument(message: str, **extra: Any) -> ToolError:
 # The kind of 409 is told apart by the server's detail.title. Extra info (availability, pricePerHourUsd,
 # linkedPods, available, resourceBreakdownComplete) is carried in detail as-is and passed on to the model.
 _CONFLICT_CODES = {
-    "operation outcome unknown": ("operation_outcome_unknown", "Check operation_status and the recorded task/transaction. "
-                                   "The request will not execute again; pending/unknown records require reconciliation."),
+    "operation outcome unknown": ("operation_outcome_unknown",
+                                  "Nothing was run again. Call operation_status with this operation_id and the original "
+                                  "operation_lookup to see the operation's state, and check the result with the "
+                                  "matching list tool; a pending or unknown state needs reconciliation with the user. "
+                                  "Don't call again with a new operation_id for the same action."),
     "price unavailable": ("price_unavailable", "The server cannot quote this capped request. Keep the user's cap; "
                            "do not remove or increase it without their explicit consent."),
     # start_pod: the placement (the one sent, or the one the server picked when none was sent) moves a pod that has
@@ -263,11 +266,17 @@ _CONFLICT_CODES = {
                                            "its state with the machines tool."),
 }
 
+_OUTCOME_UNKNOWN_MESSAGE = ("An earlier call with this operation_id is still pending or its outcome is unknown, so "
+                            "this call didn't run it again.")
+
 _MAINTENANCE_STATE = ("Nothing was changed: the maintenance window or the machine isn't in a state that allows this (the "
                       "message says why). Check the window's `status` in the machines tool (a machine's "
                       "`maintenance`): edit or cancel a window that hasn't started, extend or end one in progress. A "
                       "window starts by itself within about a minute of its start time. Then use the action that fits, "
                       "if the user still wants it.")
+# set_fan_curve, on the server's refusal of a curve and on the SDK's own check of its arguments.
+NEXT_STEP_INVALID_FAN_CURVE = ("Nothing was saved. Fix the points as the message says (see `fan_curve.limits` in "
+                               "machines include_fan=true) and preview again.")
 # set_machine_listing, on the server's refusal and on its own check before listing.
 NEXT_STEP_LISTING_REFUSED = ("Nothing was changed. Tell the user the reason in the message: it usually needs a fix on the "
                              "machine or in the console first (prices, hardware, ports, boot or the machine's state). "
@@ -307,6 +316,12 @@ _BAD_REQUEST_CODES = {
                                       "This asset is linked from its source (its `source` in the assets tool), so "
                                       "Meshive keeps no copy to link to. Download the files from that source instead; "
                                       "don't retry download_links for it."),
+    # download_links on an asset that links a folder of the user's own bucket: its objects stay there.
+    "reference asset not downloadable": ("reference_asset_not_downloadable",
+                                         "This asset links a folder of the user's own bucket, so Meshive keeps no copy "
+                                         "to link to. Read the objects from that bucket (asset_files lists them), or "
+                                         "copy the ones needed into Meshive storage with import_asset; don't retry "
+                                         "download_links for it."),
     "local storage not attachable": ("local_storage_not_attachable",
                                      "That storage is local to one machine, and a new pod can only attach network "
                                      "storage. Attach network storage in `volumes`, or create new local storage with the "
@@ -480,9 +495,7 @@ _BAD_REQUEST_CODES = {
                             "before sending it."),
     # machines include_fan, set_fan_curve.
     "not a gpu machine": ("not_gpu_machine", "Fan curves exist only for GPU machines. Don't retry."),
-    "invalid fan curve": ("invalid_fan_curve",
-                          "Nothing was saved. Fix the points as the message says (see `fan_curve.limits` in machines "
-                          "include_fan=true) and preview again."),
+    "invalid fan curve": ("invalid_fan_curve", NEXT_STEP_INVALID_FAN_CURVE),
     # --- port locks and access keys ---
     "not a public endpoint": ("port_not_public", NEXT_STEP_PORT_NOT_PUBLIC),
     "endpoint not locked": ("port_not_locked", NEXT_STEP_PORT_NOT_LOCKED),
@@ -798,10 +811,16 @@ def _conflict(exc: ConflictError) -> ToolError:
     code, next_step = _CONFLICT_CODES.get(title, ("conflict", "Check the current state with the matching list tool "
                                                               "before retrying."))
     extras = _detail_extras(exc)
+    message = exc.message or exc.title or "Conflict."
     if code == "data_loss_consent_required" and "placement" not in extras:
         # Only start_pod names a placement; without one the refusal comes from update_pod's allow_node_migration.
         next_step = _DATA_LOSS_EDIT_STEP
-    return tool_error(code, exc.message or exc.title or "Conflict.", next_step, **extras)
+    if code == "operation_outcome_unknown":
+        # The server's words name a task or transaction and a "key", which most writes don't have; its record id is
+        # internal. The operation_id is what the agent knows the operation by.
+        message = _OUTCOME_UNKNOWN_MESSAGE
+        extras.pop("operationRecordId", None)
+    return tool_error(code, message, next_step, **extras)
 
 
 def _bad_request(exc: MeshiveAPIError) -> ToolError:

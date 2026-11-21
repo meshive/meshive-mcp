@@ -161,12 +161,16 @@ def _is_downloader(pod: Any) -> bool:
     return bool(getattr(pod, "raw", {}).get("isDownloader"))
 
 
-async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm: bool = False) -> str:
+async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm: bool = False,
+                      not_found_step: str = "") -> str:
     """If `pod` is a pod_name (16 hex + "-N") it's used as-is; otherwise it's treated as a label (user_alias) and looked up in the list.
     Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again.
 
     With confirm=True a display name is refused: between a preview and its confirmation the name can move to another
-    pod (renamed, or deleted and taken by a new pod), and the confirmed write must reach the pod the user saw."""
+    pod (renamed, or deleted and taken by a new pod), and the confirmed write must reach the pod the user saw.
+
+    `not_found_step` is added to the next_step of a name that matches no pod (a filter that also finds deleted pods
+    says how to name one)."""
     pod = (pod or "").strip()
     if not pod:
         # An empty string passed as a label matched the **system downloader pod**, whose user_alias is empty, so stop/delete/logs
@@ -199,7 +203,8 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm
             if len(named) == 1:
                 return named[0].pod_name
         raise tool_error("not_found", f"No pod named '{pod}' in the selected workspace.",
-                         "Use one of the `pod_name` values listed here, or call the pods tool.", pods=candidates)
+                         " ".join(filter(None, ("Use one of the `pod_name` values listed here, or call the pods tool.",
+                                                not_found_step))), pods=candidates)
     raise tool_error("ambiguous_pod", f"Several pods are named '{pod}'.",
                      "Ask the user which one and call again with its `pod_name`.", pods=candidates)
 

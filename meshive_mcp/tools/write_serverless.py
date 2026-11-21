@@ -79,14 +79,19 @@ def _check_bucket_arg(output_bucket: Any) -> None:
 
 async def _sharing_refusal(client: Any, ws: str | None, registration_id: int | None, what: str) -> None:
     """Refuse turning sharing on for a model that can't share idle capacity, before the user is asked to agree to
-    terms the server would then refuse ("Sharing Not Available"). A model the list doesn't show is left to the server."""
+    terms the server would then refuse ("Sharing Not Available"). The model is looked up in the workspace's own
+    registrations, then in the official catalog; a model neither list shows is left to the server."""
     if not ws or registration_id is None:
         return
-    try:
-        models = await call(client.list_models, ws)
-    except ToolError:
-        return
-    model = next((m for m in models if m.registration_id == registration_id), None)
+    model = None
+    for read in (lambda: call(client.list_models, ws), lambda: call(client.list_official_models)):
+        try:
+            models = await read()
+        except ToolError:
+            continue
+        model = next((m for m in models if m.registration_id == registration_id), None)
+        if model is not None:
+            break
     if model is not None and not model.can_share_idle_capacity:
         raise tool_error("sharing_not_available",
                          f"{what} can't share idle capacity: sharing is only for official text models served with "

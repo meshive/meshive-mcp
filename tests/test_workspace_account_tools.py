@@ -172,6 +172,18 @@ async def test_pod_history_adds_the_timeline_for_a_window(mcp_client, fake, with
     assert body["timeline"]["total_running_seconds"] == 3600 and body["timeline"]["segments"][0]["state"] == "Running"
 
 
+@pytest.mark.parametrize("bound", ["since", "until"])
+async def test_pod_history_names_the_bad_timeline_bound_by_its_argument(mcp_client, fake, with_key, account_fake,
+                                                                        bound):
+    """A `since` or `until` that isn't a date or a time is refused naming that argument, before anything is read."""
+    result = await mcp_client.call_tool("pod_history", {"workspace": WS, "pod": POD, "include_timeline": True,
+                                                        bound: "yesterday"})
+    body = _payload(result)
+    assert result.is_error and body["code"] == "invalid_argument"
+    assert f"`{bound}`" in body["message"] and "start" not in body["message"] and "end " not in body["message"]
+    assert not _calls(fake, "get_pod_timeline") and not _calls(fake, "get_pod_history")
+
+
 async def test_pod_history_lists_alerts_without_a_pod(mcp_client, fake, with_key, account_fake):
     body = _payload(await mcp_client.call_tool("pod_history", {"workspace": "all", "unread_only": True}))
     assert _calls(fake, "list_pod_alerts")[0][1:] == ((None,), {"unread_only": True, "limit": 200})

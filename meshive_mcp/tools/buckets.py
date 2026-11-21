@@ -147,11 +147,17 @@ def register(server: MCPServer) -> None:
                 'A verified `bucket_id` from buckets, or "managed" for Meshive storage.'))],
             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Choose where the outputs of a workspace's tasks are saved by default: Meshive storage ("managed", billed per GiB-month) or one of its connected buckets (a verified `bucket_id` from buckets). Tasks that don't pass `output_bucket` use this default. It needs the admin or billing role. Running tasks, console uploads and pod watched folders are not affected.
-        With confirm=false (default) it shows the current and new destination; call again with the workspace id and confirm=true after the user agreed. If nothing would change it says so (`changed` false) without a preview."""
+        With confirm=false (default) it shows the current and new destination; call again with the workspace id and confirm=true after the user agreed. If nothing would change it says so (`changed` false) without a preview, and a confirmed call then sends nothing."""
         new_id = None if output_bucket == "managed" else output_bucket
         async with meshive_client(ctx) as client:
             ws = await resolve_target(client, workspace, confirm=confirm)
             if confirm:
+                current = await _setting_call(client.get_asset_storage_setting, ws)
+                if current.credential_id == new_id:
+                    # Like the preview: nothing to change, so nothing is sent. (A retry of a confirmed call that went
+                    # through lands here too; the destination is the one asked for either way.)
+                    return {"changed": False, "workspace": ws, "default_output_bucket": _destination(current),
+                            "next_step": "Task outputs already go there by default, so this call changed nothing."}
                 done = await _setting_call(client.set_asset_storage_setting, ws, new_id)
                 return {"changed": True, "workspace": ws, "default_output_bucket": _destination(done),
                         "next_step": "Saved. New tasks in this workspace that don't pass `output_bucket` send their "
