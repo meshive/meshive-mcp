@@ -499,10 +499,11 @@ async def test_removing_an_input_asset_doesnt_promise_its_files_are_gone(mcp_cli
     assert "may leave its files" not in plain["question"]
 
 
-async def test_remove_pod_asset_description_doesnt_treat_origin_as_a_guarantee(mcp_client):
+async def test_remove_pod_asset_description_says_how_configuration_rows_are_removed(mcp_client):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     desc = " ".join(tools["remove_pod_asset"].description.split())
-    assert "`origin` tells how the row was placed, not a guarantee" in desc and "`effect`" in desc
+    assert "Rows with `origin` deploy are part of the pod's configuration" in desc
+    assert "update_pod remove_input_assets" in desc and "`effect`" in desc
 
 
 @pytest.mark.parametrize("size,text", [(1412, "1.4 KiB"), (300, "300 bytes"), (5 * 2 ** 20, "5 MiB"),

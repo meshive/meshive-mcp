@@ -431,8 +431,7 @@ maintenance and access pod, and a template's full spec.
   in the official catalog.
 - `detect_model(asset=...)` answers `status: "unsupported"` with a `detail` for an asset with no model weights.
 - `update_pod remove_input_assets` says that an asset added while the pod ran may leave its files in the pod until
-  it is re-created (the preview adds that `remove_pod_asset` deletes them now, before the edit), and `remove_pod_asset` / `pods include_assets` describe
-  `origin` as how a row was placed, not a guarantee. Sizes in preview questions are never "0 MiB".
+  it is re-created (the preview adds that `remove_pod_asset` deletes them now, before the edit). Sizes in preview questions are never "0 MiB".
 - The `finish_upload` description says that a repeated finish returns the same success; only cancelling a finished
   add of files answers `upload_already_completed`. Delete previews round `monthly_storage_saving` to 6 decimals.
 - `delete_webhook` checks on confirm that the endpoint is in `workspace` (the server deletes by id alone);
