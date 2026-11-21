@@ -582,3 +582,39 @@ async def test_missing_bearer_is_tool_error_not_http_401(http, fake):
     assert r.status_code == 200
     payload = r.json()["result"]
     assert payload["isError"] and json.loads(payload["content"][0]["text"])["code"] == "no_api_key"
+
+
+async def test_public_gpu_prices_and_private_availability_share_one_endpoint(http, fake, monkeypatch):
+    from meshive_mcp.tools import gpus
+
+    requests = []
+
+    def catalog(request):
+        requests.append(request)
+        return httpx.Response(200, json={"gpu_pod_prices": [
+            {"model": "GPU A", "vram": 32, "demand_price": "0.60", "spot_price": "0.30"},
+            {"model": "GPU B", "vram": 12, "demand_price": "0.10", "spot_price": "0.05"},
+        ]})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(gpus.httpx, "AsyncClient", lambda **kw: client(transport=httpx.MockTransport(catalog), **kw))
+
+    async def call(arguments, headers=HEADERS):
+        r = await http.post("/mcp", headers=headers, json=_rpc("tools/call", {"name": "gpus", "arguments": arguments}))
+        assert r.status_code == 200, r.text
+        return json.loads(r.json()["result"]["content"][0]["text"])
+
+    demand = await call({})
+    spot = await call({"rental_type": "spot", "min_vram_gb": 16})
+    assert not demand["authenticated"] and not spot["authenticated"]
+    assert [i["price_per_hour"] for i in demand["items"]] == ["0.60", "0.10"]
+    assert [(i["gpu_model"], i["price_per_hour"]) for i in spot["items"]] == [("GPU A", "0.30")]
+    assert all(i["availability"] == "unknown" for i in demand["items"] + spot["items"])
+    assert (await call({"rental_type": "task"}))["code"] == "no_api_key"
+    assert "last" not in fake
+
+    live = await call({}, {**HEADERS, "Authorization": "Bearer meshive_" + "a" * 64})
+    assert live["authenticated"] and live["items"][0]["max_gpus_per_pod"] == 2
+    assert [name for name, _, _ in fake["last"].calls if name != "close"] == ["list_gpus"]
+    request, = requests
+    assert request.url.path == "/v1/landing/pricing-catalog" and "authorization" not in request.headers
