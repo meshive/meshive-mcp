@@ -6,13 +6,29 @@ Manage your [Meshive](https://meshive.ai) GPUs from Claude Code, Codex, Cursor, 
 MCP-capable agent, in plain language. Ask which GPUs are available, launch and stop pods, run serverless tasks,
 serve models, read logs and check your spending.
 
-We host it at **`https://mcp.meshive.ai/mcp`**. There is nothing to install: add the URL and your API key to your
-agent.
+Use **`https://mcp.meshive.ai/mcp`** for public GPU prices, access with a Meshive API key, and OAuth sign-in when enabled on the server.
 
 [Documentation](https://docs.meshive.ai/sdk-cli/mcp/) · [Console](https://console.meshive.ai) ·
 [Python SDK & CLI](https://github.com/meshive/meshive-python)
 
 ## Quick start
+
+### Sign in from an agent
+
+Add the remote URL without a header to check on-demand and spot GPU prices. On an OAuth-enabled deployment, asking for your pods starts sign-in. Review the callback host and signed-in account in the Meshive console. Keep Read for lookups and select Write if you want the app to manage resources. All 83 tools are discoverable.
+
+```bash
+claude mcp add --scope user --transport http meshive https://mcp.meshive.ai/mcp
+```
+
+```bash
+codex mcp add meshive --url https://mcp.meshive.ai/mcp
+codex mcp login meshive
+```
+
+For credentials and one-time keys, open the confirmation link and receive the value in the signed-in console. Revoke an OAuth connection under **Account → API keys** to end access and refresh.
+
+### Connect with a manual key
 
 **1. Get an API key.** In the [console](https://console.meshive.ai), open
 **Account → API keys**. A **Read only** key lets the agent look around; pick **Read & write** if it should also
