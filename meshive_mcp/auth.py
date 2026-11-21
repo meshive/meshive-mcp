@@ -1,8 +1,4 @@
-"""Request → API key / client identification.
-
-Authentication passes the HTTP header straight through. The server neither stores nor validates keys —
-when the API returns 401/403, errors.translate turns it into a sentence for the model.
-"""
+"""Extract MCP bearer credentials and the calling client label for the SDK."""
 from __future__ import annotations
 
 import os
@@ -27,6 +23,10 @@ def api_key_from_headers(headers: Mapping[str, str] | None) -> str | None:
 
 
 def api_key(ctx: Context[Any, Any]) -> str | None:
+    if settings.oauth_resource and ctx.headers:
+        scheme, _, token = (ctx.headers.get("authorization") or "").partition(" ")
+        if scheme.lower() == "bearer" and token.startswith("mshoa_"):
+            return token
     key = api_key_from_headers(ctx.headers)
     if key:
         return key

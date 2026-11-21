@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 from meshive import AsyncMeshive
 from meshive.models import Workspace
 
+from .oauth_confirm import resolved
 from .errors import invalid_argument, tool_error, translate
 from .serialize import to_dict
 
@@ -78,6 +79,7 @@ def _by_label(workspaces: list[Workspace], label: str) -> str:
                      workspaces=_summary(hits))
 
 
+@resolved("workspace")
 async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool = True) -> str | dict[str, Any] | None:
     """Return a single workspace id. A needs_input dict if one can't be picked from several.
 
@@ -106,6 +108,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
     }
 
 
+@resolved("workspace", single_item_list=True)
 async def resolve_many(client: AsyncMeshive, workspace: str | None, *, allow_all: bool = True) -> WorkspaceTargets | dict[str, Any]:
     """For list tools: every id for "all", otherwise the single resolve result as a list."""
     workspaces = await _read(client.list_workspaces)
@@ -129,6 +132,7 @@ async def resolve_many(client: AsyncMeshive, workspace: str | None, *, allow_all
     return WorkspaceTargets([one], workspaces)
 
 
+@resolved("workspace")
 async def resolve_target(client: AsyncMeshive, workspace: str, *, confirm: bool) -> str:
     """For tools that change the workspace itself (update_workspace, delete_workspace). Unlike `resolve`, nothing is picked
     for the caller: a blank value is refused even when the user has one workspace. A label works on the preview only: it
@@ -159,6 +163,7 @@ def _is_downloader(pod: Any) -> bool:
     return bool(getattr(pod, "raw", {}).get("isDownloader"))
 
 
+@resolved("pod")
 async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm: bool = False) -> str:
     """If `pod` is a pod_name (16 hex + "-N") it's used as-is; otherwise it's treated as a label (user_alias) and looked up in the list.
     Observed (2026-09-09): a model looked up a pod it had just created by label, got not_found, and scanned the list again.
@@ -202,6 +207,7 @@ async def resolve_pod(client: AsyncMeshive, workspace: str, pod: str, *, confirm
                      "Ask the user which one and call again with its `pod_name`.", pods=candidates)
 
 
+@resolved("storage")
 async def resolve_storage(client: AsyncMeshive, workspace: str, storage: str, *, confirm: bool = False) -> str:
     """Accept a storage id or resolve its display name within the selected workspace."""
     if not isinstance(storage, str):

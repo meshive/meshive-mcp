@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from mcp.server.mcpserver import Context
 from meshive import AsyncMeshive
 
-from . import __version__
+from . import __version__, oauth
 from .auth import api_key, client_label
 from .errors import NEXT_STEP_NO_KEY, tool_error
 from .settings import settings
@@ -49,6 +49,16 @@ async def meshive_client(ctx: Context[Any, Any]) -> AsyncIterator[AsyncMeshive]:
     key = api_key(ctx)
     if not key:
         raise tool_error("no_api_key", "No Meshive API key was provided with this request.", NEXT_STEP_NO_KEY)
+    if key.startswith("mshoa_"):
+        async with oauth.private_http() as http:
+            transport = oauth.DelegatedTransport(http, key, oauth.current_tool.get())
+            client = AsyncMeshive("delegated", base_url=settings.oauth_internal_url, timeout=settings.request_timeout,
+                                  max_retries=0, transport=transport, headers={CLIENT_HEADER: client_label(ctx)})
+            try:
+                yield client
+            finally:
+                await client.close()
+        return
     client = _new_client(key, client_label(ctx))
     try:
         yield client
