@@ -194,7 +194,8 @@ def register(server: MCPServer) -> None:
                                  "removes them.")
         return page
 
-    @meshive_tool(server, "set_port_lock", title="Lock or Unlock Port", annotations=MUTATE)
+    @meshive_tool(server, "set_port_lock", title="Lock or Unlock Port", annotations=MUTATE,
+                  conditional_confirm=True)
     async def set_port_lock(ctx: Context[Any, Any], pod: _Pod, port: _Port, locked: bool, workspace: str | None = None,
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Lock or unlock one port a pod exposes over HTTPS. The pod isn't restarted. The change takes a few seconds to take effect: the answer's `state` is `locking` or `unlocking` until it does (read `lock_state` with the pods tool). Repeating the call doesn't speed this up: wait by reading `lock_state` with the pods tool instead.
@@ -246,7 +247,8 @@ def register(server: MCPServer) -> None:
                                 "(set_port_lock with locked=true).")
         return out
 
-    @meshive_tool(server, "set_port_preflight", title="Allow Preflight Requests on Port", annotations=MUTATE)
+    @meshive_tool(server, "set_port_preflight", title="Allow Preflight Requests on Port", annotations=MUTATE,
+                  conditional_confirm=True)
     async def set_port_preflight(ctx: Context[Any, Any], pod: _Pod, port: _Port, allow: bool,
                                  workspace: str | None = None, confirm: bool = False,
                                  operation_id: str | None = None) -> dict[str, Any]:

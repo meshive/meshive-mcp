@@ -17,13 +17,15 @@ from meshive._config import resolve_base_url
 
 from ..auth import api_key
 from ..client import meshive_client
-from ..errors import NEXT_STEP_UNAVAILABLE, ToolError, invalid_argument, tool_error
+from ..errors import NEXT_STEP_NO_KEY, NEXT_STEP_UNAVAILABLE, ToolError, invalid_argument, tool_error
 from ..money import hourly
 from ..serialize import to_dict
 from ..settings import settings
 from ._common import READ_ONLY, call, meshive_tool
 
 RENTAL_TYPES = ("demand", "spot")
+# The gpus tool also lists the GPUs a task can get.
+GPU_RENTAL_TYPES = RENTAL_TYPES + ("task",)
 # The price list changes rarely. Without the copy every keyless call is a request to the API, which anyone can send
 # without an account, and on a slow API those calls hold the server's request slots.
 CATALOG_TTL = 60.0       # A younger copy is used as it is.
@@ -123,16 +125,31 @@ def _camel(snake: str) -> str:
     return head + "".join(p.title() for p in rest)
 
 
+TASK_GPUS_NOTE = ("Pass gpu_model (and gpu_vram_gb when a model has several sizes) to estimate_task. Best-effort; "
+                  "submit_task checks again.")
+
+
 def register(server: MCPServer) -> None:
     @meshive_tool(server, "gpus", title="List GPUs", annotations=READ_ONLY)
     async def gpus(ctx: Context[Any, Any], rental_type: str = "demand",
                    min_vram_gb: int | None = None) -> dict[str, Any]:
         """Show which GPU types can be rented right now, with per-GPU hourly prices in USD.
         Works without an API key (prices only); with a key it also shows live availability and max GPUs per pod.
-        Use `rental_type` "spot" for the cheaper preemptible tier and `min_vram_gb` to filter by VRAM."""
+        Use `rental_type` "spot" for the cheaper preemptible tier and `min_vram_gb` to filter by VRAM.
+        `rental_type` "task" lists the GPUs a task can get now (tasks use another pool than pods; it needs an API key):
+        `price_per_gpu_hour`, `max_gpus_per_task` and the vCPUs and RAM a task gets per GPU."""
         rental_type = (rental_type or "demand").lower()
-        if rental_type not in RENTAL_TYPES:
-            raise invalid_argument("rental_type must be 'demand' or 'spot'.", allowed=list(RENTAL_TYPES))
+        if rental_type not in GPU_RENTAL_TYPES:
+            raise invalid_argument("rental_type must be 'demand', 'spot' or 'task'.", allowed=list(GPU_RENTAL_TYPES))
+        if rental_type == "task":
+            if not api_key(ctx):
+                raise tool_error("no_api_key", "The GPUs a task can get are shown only with a Meshive API key.",
+                                 NEXT_STEP_NO_KEY)
+            async with meshive_client(ctx) as client:
+                found = await call(client.list_task_gpus)
+            rows = [to_dict(g) for g in found if not min_vram_gb or (g.vram_gb or 0) >= min_vram_gb]
+            return {"items": rows, "total": len(rows), "authenticated": True, "rental_type": "task",
+                    "note": TASK_GPUS_NOTE}
         if not api_key(ctx):
             return await _public_catalog(rental_type, min_vram_gb)
         async with meshive_client(ctx) as client:

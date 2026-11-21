@@ -6,8 +6,12 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 ## v1.11.0
 
 Assets can be renamed, retyped and deleted, whole or file by file, and the assets tool shows more of what an asset
-is and where it came from. Built on the `meshive` Python SDK 1.11, which this release needs. There are 3 new tools;
+is and where it came from. Built on the `meshive` Python SDK 1.11, which this release needs. There are 12 new tools;
 existing tool names are unchanged.
+
+Files can be listed one by one, exported and added to a collection; assets can be added to and removed from a running
+pod; custom templates can be saved and deleted; servings can change their output bucket and idle-capacity sharing;
+tasks can run a project, use a private image and pick their output bucket, and finished tasks can be deleted.
 
 The read tools also show what the console shows: how a task was submitted and what it costs per hour, a task's
 input download log, a serving's replicas, failures and live numbers and the logs of its replicas, a workspace's host
@@ -37,6 +41,56 @@ maintenance and access pod, and a template's full spec.
   `size_bytes` and the storage saving out, and its question says the size includes the skipped files. The answer
   lists the files deleted, skipped and failed, lists ids that name no file of the workspace as `not_found` (not to be
   retried), and says when an asset went with its last file (`asset_deleted`).
+
+- `buckets` lists the S3-compatible buckets connected to a workspace (`bucket_id`, label, provider, bucket, default
+  prefix, `verified`, `is_default_output`; never the keys or the endpoint) and `default_output_bucket`, where task
+  outputs go by default. With `bucket` it browses one folder level (`folders`, `objects`), paged with an opaque
+  cursor tied to its `prefix`. A bucket the saved keys can't read fails with `bucket_access_failed`.
+- `asset_files` lists files: one asset's files with `asset` (narrowed by `paths` globs, `media_kind`, `file_type`), or
+  a workspace file view with `kind` (model, adapter, checkpoint, config, file, output; narrowed by `search` and
+  `include_catalog`, and the output view also by `pod` and `task`). Each file has `file_id` and `asset_id` for
+  `delete_asset_files` and `download_links`, and `pickle_flag` and `detected_format` (a workspace view from a server
+  that doesn't check files leaves them out, and the note says so).
+- `export_asset` copies an asset kept in Meshive storage to a connected bucket (`bucket`, `prefix`) or to a Hugging
+  Face repo (`hf_repo`, `hf_token_id`, `private`, `path_in_repo`), and takes `confirm`. The preview shows the
+  destination (with the repo URL and its visibility), the size and the warnings: objects with the same names are
+  overwritten, a Hugging Face repo that doesn't exist is created (a public one says PUBLIC), the license is the
+  user's responsibility, and the daily export allowance of accounts without a completed payment. Assets in the
+  user's bucket or linked from a source fail with `export_not_supported`, one that isn't active with
+  `asset_not_ready`. Nothing reports when the copy finishes.
+
+- `add_pod_asset` adds an Asset Hub asset, or some of its files (`paths`, `strip_prefix`), to an existing pod
+  without restarting it, like the console's Inject, and takes `confirm`. `role` is one of the pod's input slots
+  (omitted: the slot `target_dir` is in, or the pod's only slot; several slots fail with `role_required`). A running
+  pod gets it within moments; a stopped pod keeps the request for its next start (`mode` `next_start`; an asset
+  linked from its source is refused there). The preview shows the slot, the selected file count and size, the row it
+  replaces and the input volume's current price; `retry` adds a failed row again with the same files. New errors
+  include `no_input_slot`, `invalid_target_dir`, `pod_cannot_receive_assets`, `slot_filled`, `placed_elsewhere`,
+  `part_of_pod_configuration`, `injection_in_progress`, `already_connected`, `placement_conflict`,
+  `source_token_missing` and `asset_usage_blocked`.
+- `remove_pod_asset` takes an asset out of a pod without a restart (`connection_id` from `pods` with
+  `include_assets`), and takes `confirm`: an active asset's files are deleted from the pod, a download in progress is
+  stopped, a failed row is cleared (also on a deleted pod). Assets that are part of the pod's configuration are refused with
+  `part_of_pod_configuration`, which points to `update_pod`; a row still settling fails with `placement_busy`.
+
+- `save_template` creates a custom pod template in a workspace (`name`, `image`, `description`, `command`, `env`,
+  `ports`, `volume_mounts`, `semantic_paths`, `registry_login_id`) or changes one (`template_id`, only what changes;
+  each list replaces the stored one and the answer lists `removed_envs` and `removed_ports`). It needs no `confirm`.
+  Creating reads the image first, and nothing is saved if it can't be read. Public ports are saved locked unless
+  `lock_public_ports=false` or a port's `"locked": false`; the answer lists `locked_ports` and `open_ports`. A
+  secret variable with a value is refused with `secret_value_not_accepted` before anything is sent, a changed image
+  with `image_change_not_supported`, more ports than a template can have with `too_many_ports`.
+- `delete_template` deletes a custom template and takes `confirm`. The preview shows the template and the pods made
+  from it, which keep running with their settings; official templates are refused with `not_found`.
+
+- `delete_tasks` deletes up to 20 finished tasks and takes `confirm`. The preview reads each task and says what will
+  happen to it (`will`: delete, skip_running, skip_uploading or not_found) and that output assets and billing history
+  stay while the task's script, requirements, env and args are erased. A confirmed call needs the workspace id; the
+  answer lists `deleted` and `skipped` (with a reason: not_found, active, finalizing or uploading), and its next_step
+  says what to do about each reason.
+- `cancel_task_upload` stops saving the rest of a finished task's outputs while they upload, and takes `confirm`. The
+  preview shows how far the upload got; files already uploaded stay and become an asset. A task whose outputs aren't
+  uploading fails with `nothing_to_cancel`.
 
 ### Changed
 
@@ -68,11 +122,15 @@ maintenance and access pod, and a template's full spec.
   with `serving` and `replica`: by default the first running replica whose log it can read, or the replica of a
   failed deployment or of a paused serving, whose last run is in `previous`. New errors `replica_not_found` and
   `replica_logs_unavailable` (both with the replicas and whether each has a log to read) and
-  `replica_logs_expired`. A replica on an external GPU, whose log is collected another way, can't be read by this
-  tool yet, and its error says so instead of telling the agent to wait.
-- `estimate_task` and `submit_task` refuse `input_assets` entries with keys they don't send (such as `paths` or
-  `strip_prefix` from a task's detail) with `invalid_argument`, instead of submitting a task that downloads the
-  whole asset.
+  `replica_logs_expired`. A replica without a pod, whose log is collected another way, is read too (`container`
+  and `wait` don't apply to it); on a server without that, its error says so instead of telling the agent to wait.
+- `estimate_task` and `submit_task` take `project` (`asset`, `entrypoint`, `requirements_path`: run an uploaded
+  folder instead of `script`; pass exactly one of them), `registry_login_id` (a private `image`; refused together
+  with `template_id`), `output_bucket` (a `bucket_id` from `buckets`, or `"managed"` for Meshive storage; omitted,
+  the workspace's default) and `paths`/`strip_prefix` in `input_assets` items. Other `input_assets` keys are refused
+  with `invalid_argument`. An `env` value `"***"` (a secret the API hid) is refused with `masked_secret_value`. The
+  preview echoes `image_source`, `output_bucket`, `project` and the input assets' file selections. `script` is no
+  longer a required argument.
 - An `invalid_argument` error from a write tool no longer tells the agent to retry with the same arguments: nothing
   was run, and the fix is a different argument.
 - `servings` items gain `registration_id`, `model_retiring`, `is_official`, `endpoint_type`, `modality`,
@@ -102,6 +160,98 @@ maintenance and access pod, and a template's full spec.
   `semantic_paths`, `command`, `command_argv`, `args`, `volume_required` and `registry_login`.
 - The server instructions name serving failures, host maintenance reasons, a machine's setup log and task scripts
   and env as text from others, and task scripts with `include_code` as possibly holding secrets.
+- `assets` takes `pod` (a pod_name or display name: the assets that pod uploaded from its watched folders; a deleted
+  pod by its pod_name only). An API server that doesn't apply the filter yet is answered with `filter_not_supported`
+  instead of the unfiltered list. With `asset` it takes `include_comfy_layout`, which adds `comfy_layout` (the asset's folders and the ComfyUI model role each
+  fits). A single asset cut to its first 200 files points to `asset_files` for the rest.
+- `download_links` takes `file_ids` (up to 500, from any assets of one `workspace`) and answers with each file's
+  `file_id`, `asset_id`, `asset_name` and link, plus `skipped_file_count`. The daily export allowance of accounts
+  without a completed payment now fails with `export_limit_reached` (wait until 00:00 UTC) instead of `rate_limited`.
+- `upload_asset` takes `asset`: the files are added to that collection in Meshive storage instead of making a new
+  asset. Its `upload_id` (starting `add_`) goes to `finish_upload` as before. Adding never replaces a file
+  (`file_exists` lists the paths that are already there); files over 200 MiB are refused with
+  `file_too_large_for_mcp` and point to the console or the Python SDK. New errors `not_a_collection`,
+  `asset_not_managed`, `asset_moving` and `upload_already_completed`.
+- `model_sets` works without `template_id`: it lists every model set of the catalog, and with `entries=true` the
+  catalog's single files (paged, narrowed by `category`).
+- `import_asset` takes `source="catalog:<slug>"` (a catalog entry) and `"model_set:<slug>"` (every file of a set).
+  The answer lists each `asset_id` with its `default_role` under `imported` and the entries that couldn't be linked
+  under `failed`; calling again retries only those.
+- **`source_credentials` answers a viewer too.** It lists `registry_logins` (`registry_login_id`, `server`,
+  `username`, never the password). For a member who may not see Hugging Face tokens and CivitAI keys, those two lists
+  are `null` with `hf_tokens_note`; before this release the whole tool failed with `forbidden`.
+- `create_pod` and `estimate_pod` say that `harvest_destination.credential_id` takes a `bucket_id` from `buckets`.
+- `pods` with one `pod` takes `include_assets`, which adds `assets`: the pod's input assets (`connection_id`,
+  `origin` deploy or injection, `status`, size and file counts, `include_paths`/`strip_prefix`, `failure_cause` and
+  `failure_reason`, the source's text), `fetch_progress` (null when the pod hasn't reported, never 0%),
+  `input_slots`, whether it `receives_assets_while_running` or `receives_assets_on_start`, and its asset `volumes`
+  with their hourly price and `_display`. A pod that has no row yet answers `assets: null` with `assets_note`; on a
+  list the argument is ignored with a `note`.
+- `update_pod` takes `add_input_assets` (create_pod's `input_assets` format) and `remove_input_assets`
+  (connection_ids of active input assets), which change the pod's input assets with a restart; the preview says the
+  input volume is sized for the new set. New errors `input_asset_not_found` and `asset_config_conflict`. Its
+  description no longer says that input assets are always kept, and the details of locking newly exposed ports moved
+  into the `lock_public_ports` argument.
+- `detect_model` takes `asset` (an Asset Hub model) instead of `huggingface_repo`: the answer has `ready` (false while
+  it is still uploading) and the repo answer's names (`architecture`, `file_size_bytes`, `weight_formats`,
+  `has_config`, `status`, `engine`, `output`, `fit`). The repo answer gains `engine`, `weight_formats`, `has_config`
+  and `fit` too.
+- The server instructions say which tools add or remove an asset in a pod with or without a restart.
+- **`send_host_message` writes to a host from a workspace too**: `workspace` with `machine` (from the workspaces
+  tool's `host_threads` or `maintenance`) or `pod`, or `pod` alone. `machine` and `to` are no longer required
+  arguments, and `title` comes first. The preview names the workspace and what it runs on that machine (`about`) and
+  says when the workspace has no conversation or maintenance with it (`known_thread` false). A confirmed call needs
+  the workspace id, not its label. New errors `host_not_reachable` and `pod_not_placed`.
+- `host_messages` takes `workspace`: the messages between that workspace and the hosts of the machines it uses
+  (`direction` "in" from the host), with `about` and `pods`. `mark_host_messages_read` takes `workspace` instead of
+  `machine` for them; `machine` is no longer a required argument.
+- `account` adds `platform_notices` (incidents and maintenance the Meshive team announced, with the services they
+  affect and `user_guidance`) and `platform_incident_active`, only while there are any. The `server_error` and
+  `temporarily_unavailable` next_step points to them.
+- `transactions` lists storage operations too (a volume being created, grown or deleted, with `capacity` in MiB and
+  `storage_type`): every item has `kind` "pod" or "storage", newest first. A `transaction_id` lookup tries a pod
+  operation, then a storage one. A server without storage operations adds `storage_operations_unavailable`.
+  `create_storage` and `update_storage` say to poll it with their transaction_id.
+- `templates` takes `image` (with `registry_login_id` and `platform`): it reads what the image declares
+  (`image_config`: env, entrypoint, cmd, exposed ports, volumes, working directory) instead of listing templates.
+  New errors `image_not_found`, `registry_credential_required`, `registry_mismatch` and
+  `registry_credential_unusable`; a registry's own rate limit is `rate_limited`.
+- `machines` with one `machine` adds `network_status` (interfaces with link speed, duplex and carrier, the netplan
+  setup and recent automatic network fixes, whose `detail` is machine text) and `disk_health` (each disk's state,
+  `idle_write_ms`, the system disk's `root_usage_percent`, the thresholds and `recovering` stalls). `disk_warnings`
+  rows gain `gone`.
+- `delete_workspace` and the `workspace_not_empty` error name `delete_template` for custom templates.
+- The server instructions name host messages as text from renters or hosts, and say that an image no template
+  offers needs a custom template.
+- `scale_serving` takes `output_bucket` (a `bucket_id`, or `"managed"`), which needs no `confirm`, and
+  `share_idle_capacity`. Turning sharing on needs `confirm` and `sharing_consent=true`: the preview lists the terms
+  the console's consent dialog shows (`sharing.consent`) and whether replicas restart; a confirmed call without the
+  consent fails with `sharing_consent_required`. Turning it off applies at once. New errors
+  `sharing_not_available`, `output_bucket_not_found`, `output_bucket_not_verified`, `serving_not_changeable` and
+  `not_serving_owner` (only the member who deployed a serving can change it).
+- **`deploy_serving` with `share_idle_capacity=true` needs `sharing_consent=true`** after the user agreed to the
+  terms its preview lists; before this release the flag alone turned sharing on. It also takes `output_bucket`
+  (echoed with its label in the preview; an unknown id is `invalid_argument`). The preview adds `availability`:
+  whether the model can be deployed, how many GPUs that fit it are free at or under the cap (`gpus_within_cap`), the
+  cheapest of them and the suggested cap, with `_display`. With none, the question says replicas wait for one. A
+  failed check leaves `availability` null with `availability_error`.
+- `models` takes `source="official"` (Meshive's official catalog, no workspace) and `registration_id` (one model of
+  the workspace or the catalog with its GPU `availability`: `status`, `deployable`, `required_vram_gb`,
+  `required_host_ram_gib`, `cheapest_gpu`, `price_low`/`price_high`, `suggested_cap_per_hour` and `gpu_candidates`,
+  with `_display`; `max_context_tokens` sizes it). A member who may not see availability gets `availability: null`
+  with `availability_error`. An id in neither list is `model_not_found`. Lists are paged with `limit` and `cursor`
+  and carry `source`.
+- **`register_model` lets Hugging Face say what a model is**: without `framework` the server now works it out from
+  the repo, as the console does, so a diffusion repo is refused and a repo that doesn't say what it takes fails with
+  `modality_required`. The new `takes_image` argument says whether the model takes image input.
+- `gpus` takes `rental_type="task"`: the GPUs a task can get now (`price_per_gpu_hour`, `max_gpus_per_task`,
+  `vcpu_per_gpu`, `ram_gb_per_gpu`). It needs an API key (`no_api_key` without one).
+- The first page of `tasks` adds `counts` (tasks per status and the total). Its description says how to re-run a
+  task with its project, file selections and output bucket.
+- `delete_workspace` and the `workspace_not_empty` error name `delete_tasks` for finished tasks.
+- The server instructions name pods' asset `failure_reason`, machines' network events, templates' `image_config` and
+  bucket object keys as text from others, and name turning sharing on as needing `confirm` in `scale_serving`. A
+  server test checks that every tool whose `confirm` applies only to some calls is named there.
 
 ### Fixed
 

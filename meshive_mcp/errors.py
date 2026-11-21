@@ -60,13 +60,15 @@ NEXT_STEP_NOT_FOUND = (
     "Do not guess identifiers."
 )
 NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a write, check operation_status first; "
-                        "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome.")
+                        "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome. "
+                        "If calls keep failing, the account tool's platform_notices shows whether Meshive announced an "
+                        "incident.")
 # delete_workspace, on its preview and on the server's own refusal. A key can only delete an empty workspace, on purpose.
 NEXT_STEP_WORKSPACE_NOT_EMPTY = (
     "Nothing was deleted. Tell the user what `blockers` says is left, and clear nothing on your own. Pods, storage, "
-    "servings and custom models can be deleted with their tools, assets with delete_asset, and running tasks stopped "
-    "with stop_task, but only if the user asks. Finished tasks, credentials, webhooks, custom templates, inference "
-    "keys, members and invitations are managed in the console. `pods` also counts serving replicas, which go with "
+    "servings and custom models can be deleted with their tools, assets with delete_asset, custom templates with "
+    "delete_template, running tasks stopped with stop_task and finished ones deleted with delete_tasks, but only if "
+    "the user asks. Saved credentials, webhooks, inference keys, members and invitations are managed in the console. `pods` also counts serving replicas, which go with "
     "their serving, and "
     "system pods, which go with their storage volume (delete_storage); the pods tool lists those with "
     "include_system=true. A volume the storages tool still shows stays and bills until it is deleted; only a deleted "
@@ -182,7 +184,8 @@ _CONFLICT_CODES = {
     "name taken": ("name_taken", "A resource with this name already exists. If you just tried to create it and did not "
                                  "get a clear answer, that is probably it — check the matching list tool before creating "
                                  "anything else. Otherwise pick another name or use the existing one. For a rename "
-                                 "(update_pod, update_storage or update_workspace `name`), ask the user for another "
+                                 "(update_pod, update_storage, update_workspace or save_template `name`), ask the user "
+                                 "for another "
                                  "name. A resource being deleted still holds its name until deletion finishes."),
     "price exceeds cap": ("price_exceeds_cap", "The estimate is above the user's price cap. Show `pricePerHourUsd` and ask "
                                                "whether to raise the cap or choose cheaper hardware."),
@@ -232,6 +235,9 @@ _CONFLICT_CODES = {
                               "Another operation on this pod (starting, stopping or an earlier edit) is still running, "
                               "so nothing was changed. Wait until the pods tool shows the pod running or stopped, then "
                               "try again."),
+    # update_pod add_input_assets / remove_input_assets: an asset was added to or removed from the pod meanwhile.
+    "asset configuration changed": ("asset_config_conflict", "Something changed the pod's assets meanwhile; preview "
+                                                             "again."),
     # --- hosting ---
     # schedule_maintenance / maintenance_window edit or extend: the times run into another window of the machine.
     "overlapping maintenance window": ("maintenance_overlap",
@@ -243,6 +249,8 @@ _CONFLICT_CODES = {
                                   "This machine can't go into maintenance right now, and nothing was changed. Tell the "
                                   "user the reason in the message. A software update ends within minutes, so after one "
                                   "you can try again shortly; otherwise don't retry."),
+    # send_host_message from a workspace, by `pod`: the pod has no machine yet.
+    "pod not placed": ("pod_not_placed", "Wait until the pod is placed, then try again."),
     "not retryable": ("not_retryable", "Only a failed setup step can be retried, and the machine's current step isn't "
                                        "failed. Check its state with the machines tool before retrying."),
 }
@@ -347,6 +355,8 @@ _BAD_REQUEST_CODES = {
                                          "Existing local storage can only be attached on the pod's current machine, and "
                                          "this storage is on another one. Attach network storage in `volumes` or create "
                                          "new local storage in `local_volumes`; ask the user which."),
+    "input asset not found": ("input_asset_not_found", "Use connection_id values of active input assets from pods "
+                                                       "include_assets."),
     "template deleted": ("template_deleted", "This pod's template was deleted, so the edit needs a new one. Ask the user "
                                              "which template to use and pass its `template_id` (from the templates "
                                              "tool)."),
@@ -432,6 +442,11 @@ _BAD_REQUEST_CODES = {
                               "Nothing was sent. `to` must be a workspace id from the machine's `clients` in the "
                               "machines tool, or \"all\" for every workspace using the machine now. Ask the user which "
                               "one they mean."),
+    # send_host_message from a workspace to the host of a machine it neither uses nor has talked to.
+    "host not reachable": ("host_not_reachable",
+                           "Nothing was sent. This workspace isn't using that machine and has no conversation with its "
+                           "host. Use a machine_id from the workspaces tool (`host_threads` or `maintenance`), or "
+                           "write by `pod`."),
     "message send failed": ("message_rejected",
                             "Nothing was sent. Fix what the message says (for example a blank or too long title or "
                             "text, or nobody using the machine for to=\"all\"), then show the user the new message "
@@ -490,7 +505,50 @@ _ASSET_WRITE_CODES = {
                                                "again (new operation_id)."),
     "too many files": ("too_many_files", "At most 1000 files per call: split `file_ids` or narrow `paths`."),
     "no files": ("no_files_matched", "Nothing matched; check the paths with the assets tool."),
+    # --- export_asset, buckets ---
+    "already in your bucket": ("export_not_supported", "This asset is already in the user's own bucket; there is "
+                                                       "nothing to export. Don't retry."),
+    "nothing to export": ("export_not_supported", "This asset is linked from its source (Hugging Face, CivitAI or a "
+                                                  "URL), so Meshive stores nothing to export. Don't retry."),
+    "not uploadable": ("export_not_supported", "Only assets kept in Meshive storage can be uploaded. Don't retry."),
+    "asset not available": ("asset_not_ready", "The asset isn't ready (still uploading, being moved or deleted). "
+                                               "Check its status with the assets tool and try again once it is active."),
+    "token required": ("hf_token_required", "Nothing was started. `hf_token_id` must be a saved Hugging Face token "
+                                            "with write access (an id from source_credentials); tokens are added in "
+                                            "the console."),
+    "storage credential not found": ("not_found", "Use a bucket_id from buckets."),
+    "storage credential error": ("bucket_access_failed",
+                                 "The saved keys can't read this bucket; the user must fix or re-add the connection "
+                                 "in the console (Settings → Storage). Don't retry."),
+    # --- upload_asset with `asset` (adding files to a collection) ---
+    "file path already exists": ("file_exists",
+                                 "These paths are already in the collection and adding never replaces. Delete them "
+                                 "first with delete_asset_files if the user wants them replaced, or rename the new "
+                                 "files."),
+    "not a collection": ("not_a_collection", "Only collections take more files; upload a new asset instead."),
+    "linked asset": ("asset_not_managed", "Only collections in Meshive storage take more files."),
+    "unsupported asset": ("asset_not_managed", "Only collections in Meshive storage take more files."),
+    "unsupported storage": ("asset_not_managed", "Only collections in Meshive storage take more files."),
+    "asset not active": ("asset_not_ready", "Files can be added only to an active collection. Check its status with "
+                                            "the assets tool."),
+    # Adding files and exporting both answer this: the asset's files aren't complete in Meshive storage.
+    "asset not ready": ("asset_not_ready", "Nothing was changed. The asset's files aren't ready in Meshive storage "
+                                           "(still uploading, or an older asset whose upload never finished). Tell "
+                                           "the user; don't retry."),
+    "move in progress": ("asset_moving", "The collection is being moved to other storage. Wait until the move "
+                                         "ends (the assets tool shows its status), then start the upload again."),
+    "upload conflict": ("upload_in_progress", "Another upload into this collection is still open. Finish or cancel "
+                                              "it first (finish_upload), or wait until it expires."),
+    "upload batch conflict": ("upload_in_progress", "Another upload into this collection is still open. Finish or "
+                                                    "cancel it first (finish_upload), or wait until it expires."),
+    "upload already completed": ("upload_already_completed",
+                                 "The files were added; delete them with delete_asset_files if unwanted."),
 }
+
+# Accounts without a completed payment can take only so much out of Meshive storage per day (download links, exports).
+NEXT_STEP_EXPORT_LIMIT = ("Accounts without a completed payment can export a limited amount per day, reset at 00:00 "
+                          "UTC. Tell the user; don't retry today.")
+_EXPORT_LIMIT_TITLE = "daily export limit reached"
 
 
 def asset_write_error(exc: BaseException | None) -> ToolError | None:
@@ -498,6 +556,168 @@ def asset_write_error(exc: BaseException | None) -> ToolError | None:
     if not isinstance(exc, MeshiveAPIError) or exc.status_code not in (400, 403, 404, 409, 422):
         return None
     found = _ASSET_WRITE_CODES.get((exc.title or "").strip().lower())
+    if found is None:
+        return None
+    code, next_step = found
+    return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
+
+
+# --- Assets in a pod (add_pod_asset, remove_pod_asset) ---
+# Told apart by detail.title, for these two tools only: "Pod Not Running" or "Asset Not Available" mean something else
+# on other routes.
+NEXT_STEP_POD_CONFIGURATION = ("It is part of the pod's configuration: change or remove it with update_pod "
+                               "(add_input_assets / remove_input_assets), which restarts the pod. Ask the user first.")
+NEXT_STEP_NO_INPUT_SLOT = ("Pick a role from the pod's `input_slots` (pods with include_assets). To place the asset "
+                           "elsewhere, ask the user whether to use update_pod add_input_assets, which restarts the pod.")
+NEXT_STEP_INVALID_TARGET_DIR = "Use the slot path or one folder directly inside it."
+NEXT_STEP_PLACEMENT_BUSY = ("Wait until the row settles (pods with include_assets shows it active or failed), then "
+                            "preview again.")
+NEXT_STEP_INJECTION_IN_PROGRESS = ("This asset is still being added to or removed from this pod for that role. Wait "
+                                   "until pods with include_assets shows the row active or failed (or gone), then "
+                                   "preview again; don't remove it meanwhile.")
+_PLACEMENT_CONFLICT = ("The placement collides with something in the pod (the message says what). Pick another "
+                       "target_dir or other files, then preview again.")
+_POD_ASSET_CODES = {
+    "pod not running": ("pod_not_running",
+                        "The pod isn't running, so nothing was changed. If it is stopped, ask the user whether to "
+                        "start it (start_pod) and call again, or to use update_pod add_input_assets / "
+                        "remove_input_assets, which changes the pod's configuration with a restart. If it is deleted "
+                        "(pods shows it terminated), its files are gone with it: don't retry."),
+    "pod busy": ("pod_busy", "Another operation on this pod (starting, stopping or an edit) is still running. Wait "
+                             "until the pods tool shows it running or stopped."),
+    "pod cannot receive assets": ("pod_cannot_receive_assets",
+                                  "This pod can't take assets without a restart. Ask the user whether to use update_pod "
+                                  "add_input_assets, which restarts it."),
+    "pod cannot remove assets": ("pod_cannot_remove_assets",
+                                 "This pod can't remove assets while it runs. Ask the user whether to use update_pod "
+                                 "remove_input_assets, which restarts it."),
+    "invalid role": ("no_input_slot", NEXT_STEP_NO_INPUT_SLOT),
+    "input path missing": ("no_input_slot", NEXT_STEP_NO_INPUT_SLOT),
+    "path outside slot": ("invalid_target_dir", NEXT_STEP_INVALID_TARGET_DIR),
+    "reserved path": ("invalid_target_dir", NEXT_STEP_INVALID_TARGET_DIR),
+    "folder too deep": ("invalid_target_dir", NEXT_STEP_INVALID_TARGET_DIR),
+    "asset frozen": ("asset_frozen", NEXT_STEP_ASSET_FROZEN),
+    "asset not available": ("asset_unavailable", "The asset is deleted or being deleted. Check it with the assets "
+                                                 "tool."),
+    "asset not found": ("asset_unavailable", "The asset is deleted or being deleted. Check it with the assets tool."),
+    "asset not ready": ("asset_not_ready", "The asset is still being uploaded or prepared. Wait until the assets tool "
+                                           "shows it active, then preview again."),
+    "reference asset not supported": ("asset_not_placeable",
+                                      "This asset only points at a folder in the user's bucket and can't be placed in "
+                                      "a pod yet. Don't retry."),
+    "source token missing": ("source_token_missing",
+                             "The token this asset was imported with was removed. The user must add it again in the "
+                             "console."),
+    "injection in progress": ("injection_in_progress", NEXT_STEP_INJECTION_IN_PROGRESS),
+    "already connected": ("already_connected",
+                          "This asset is already placed in this pod for that role with the same files; nothing to do."),
+    "already placed elsewhere": ("placed_elsewhere",
+                                 "Nothing was changed. The asset is already placed for this role in another folder "
+                                 "(the message names it). To change its files, call again without target_dir (or with "
+                                 "that folder). To move it, ask the user whether to remove it first with "
+                                 "remove_pod_asset (for an `origin` deploy row, update_pod remove_input_assets, which "
+                                 "restarts the pod)."),
+    "part of pod configuration": ("part_of_pod_configuration", NEXT_STEP_POD_CONFIGURATION),
+    "slot already filled": ("slot_filled", "The slot takes one asset. Ask the user whether to remove the current one "
+                                           "(remove_pod_asset) first."),
+    "overlaps a watched folder": ("placement_conflict", _PLACEMENT_CONFLICT),
+    "input assets collide": ("placement_conflict", _PLACEMENT_CONFLICT),
+    "selection cannot be verified": ("placement_conflict", _PLACEMENT_CONFLICT),
+    "asset configuration conflict": ("asset_config_conflict", "Something changed the pod's assets meanwhile; preview "
+                                                              "again."),
+    "move in progress": ("asset_moving", "The asset is being moved to other storage. Wait until the move ends (the "
+                                         "assets tool shows its status), then preview again."),
+    "asset usage blocked": ("asset_usage_blocked", "Credit is exhausted; the user must top up in the console."),
+    "placement not found": ("not_found", "List pods with include_assets for current connection_id values."),
+    "placement busy": ("placement_busy", NEXT_STEP_PLACEMENT_BUSY),
+}
+
+
+def pod_asset_error(exc: BaseException | None) -> ToolError | None:
+    """add_pod_asset's and remove_pod_asset's own reading of a server refusal, or None to keep the general one."""
+    if not isinstance(exc, MeshiveAPIError) or exc.status_code not in (400, 403, 404, 409, 422):
+        return None
+    found = _POD_ASSET_CODES.get((exc.title or "").strip().lower())
+    if found is None:
+        return None
+    code, next_step = found
+    return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
+
+
+# --- Image inspection and custom templates (templates with `image`, save_template) ---
+# Told apart by detail.title, for these tools only: "Access Denied" or "Authentication Failed" mean something else on
+# other routes. A registry login that can't be used comes as a 404 titled "Not Found", told apart by its message.
+NEXT_STEP_IMAGE_NOT_FOUND = "Nothing was saved. Check the name, tag and platform with the user; don't guess another image."
+NEXT_STEP_REGISTRY_LOGIN = ("Nothing was saved. Pass registry_login_id from source_credentials; logins are added or "
+                            "fixed in the console. Never ask the user for the password.")
+NEXT_STEP_REGISTRY_UNUSABLE = "Nothing was saved. Ask the user to re-add the login in the console."
+_TEMPLATE_CODES = {
+    "image not found": ("image_not_found", NEXT_STEP_IMAGE_NOT_FOUND),
+    "invalid image reference": ("image_not_found", NEXT_STEP_IMAGE_NOT_FOUND),
+    "loading image failed": ("image_not_found", NEXT_STEP_IMAGE_NOT_FOUND),
+    "registry credential required": ("registry_credential_required", NEXT_STEP_REGISTRY_LOGIN),
+    "authentication failed": ("registry_credential_required", NEXT_STEP_REGISTRY_LOGIN),
+    "access denied": ("registry_credential_required", NEXT_STEP_REGISTRY_LOGIN),
+    "registry mismatch": ("registry_mismatch", "Nothing was saved. Pick the login whose `server` is the image's host "
+                                               "(source_credentials `registry_logins`)."),
+    "registry credential incomplete": ("registry_credential_unusable", NEXT_STEP_REGISTRY_UNUSABLE),
+    "too many endpoints": ("too_many_ports", "Nothing was saved. The message says how many ports a template can have; "
+                                             "drop some."),
+    "command too long": ("invalid_argument", "Nothing was saved. Shorten `command` and call again."),
+}
+_REGISTRY_LOGIN_MISSING = ("registry auth not found", "registry auth secret not found")
+
+
+def template_error(exc: BaseException | None) -> ToolError | None:
+    """The image and template tools' own reading of a server refusal, or None to keep the general one."""
+    if not isinstance(exc, MeshiveAPIError) or exc.status_code not in (400, 403, 404, 409, 422):
+        return None
+    title = (exc.title or "").strip().lower()
+    if title == "registry rate limited":
+        # The registry's own limit, sent as a 400: waiting helps, as with Meshive's.
+        return tool_error("rate_limited", exc.message or exc.title,
+                          "Nothing was saved. The image's registry is limiting requests. Do not retry immediately. "
+                          "Wait at least 60s before calling this tool again.", retry_after=60)
+    if (exc.message or "").strip().lower() in _REGISTRY_LOGIN_MISSING:
+        return tool_error("registry_credential_unusable", exc.message, NEXT_STEP_REGISTRY_UNUSABLE)
+    found = _TEMPLATE_CODES.get(title)
+    if found is None:
+        if exc.status_code == 422:
+            # The request model's own check (an env name the platform reserves, a field too long, ...).
+            return invalid_argument(exc.message or "The server rejected the template's settings.")
+        return None
+    code, next_step = found
+    return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
+
+
+# --- Serving writes (deploy_serving, scale_serving, register_model) ---
+# Told apart by detail.title, for these tools only. "Serving Not Found" from scale_serving comes after the serving was
+# read, so it means that another member deployed it, not a wrong id.
+NEXT_STEP_MODALITY_REQUIRED = ("Hugging Face doesn't say what this model does. Call detect_model and ask the user; then "
+                               "call again with takes_image set.")
+_SERVING_WRITE_CODES = {
+    "sharing not available": ("sharing_not_available",
+                              "Nothing was changed. Idle-capacity sharing is only for official text models served "
+                              "with vLLM; deploy or scale without share_idle_capacity."),
+    "storage credential not found": ("output_bucket_not_found",
+                                     "Use a bucket_id from buckets in this serving's workspace."),
+    "storage credential not verified": ("output_bucket_not_verified",
+                                        "The bucket must be verified in the console first."),
+    "serving not changeable": ("serving_not_changeable",
+                               "Nothing was changed. The serving is being deleted, is already deleted, or is in error "
+                               "(the message says which), so it can't be changed in this state; waiting won't help. "
+                               "Don't call again. If the user wants, deploy a new serving with deploy_serving (a "
+                               "serving in error is deleted with delete_serving first)."),
+    "serving not found": ("not_serving_owner", "Only the member who deployed it can change it."),
+    "modality required": ("modality_required", NEXT_STEP_MODALITY_REQUIRED),
+}
+
+
+def serving_write_error(exc: BaseException | None) -> ToolError | None:
+    """The serving write tools' own reading of a server refusal, or None to keep the general one."""
+    if not isinstance(exc, MeshiveAPIError) or exc.status_code not in (400, 403, 404, 409, 422):
+        return None
+    found = _SERVING_WRITE_CODES.get((exc.title or "").strip().lower())
     if found is None:
         return None
     code, next_step = found
@@ -588,6 +808,9 @@ def translate(exc: BaseException) -> ToolError:
         if special is not None:
             return tool_error(special[0], exc.message or exc.title, special[1])
         return tool_error("not_found", exc.message or "Not found.", NEXT_STEP_NOT_FOUND)
+    if isinstance(exc, RateLimitError) and (exc.title or "").strip().lower() == _EXPORT_LIMIT_TITLE:
+        # A daily allowance, not a burst limit: waiting seconds doesn't help.
+        return tool_error("export_limit_reached", exc.message or "Daily export limit reached.", NEXT_STEP_EXPORT_LIMIT)
     if isinstance(exc, RateLimitError):
         wait = int(exc.retry_after) if exc.retry_after else 30
         return tool_error("rate_limited", exc.message or "Rate limit exceeded.",

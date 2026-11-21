@@ -145,7 +145,8 @@ async def test_asset_detail_shows_the_first_200_files_with_their_flags(mcp_clien
     asset = body["asset"]
     assert asset["files_total"] == 250 and asset["files_truncated"] is True and len(asset["files"]) == 200
     assert [f["path"] for f in asset["files"][:2]] == ["renders/000.png", "renders/001.png"]
-    assert body["next_step"] == "The list is cut to the first 200 files."
+    assert body["next_step"] == ("The list is cut to the first 200 files; page through all of them with "
+                                 "asset_files(asset=\"asset_abc\").")
     f = asset["files"][7]
     assert {k: f[k] for k in ("file_id", "ext", "file_type", "media_kind", "detected_format", "pickle_flag",
                               "format_unverified")} == {
@@ -330,7 +331,7 @@ async def test_delete_asset_files_preview_never_offers_the_size_of_skipped_files
     body = _payload(await mcp_client.call_tool("delete_asset_files", {"file_ids": [f"file_{i}" for i in range(5)]}))
     assert body["size_bytes"] is None and body["selected_size_bytes"] == 32 * GIB
     assert "storage_freed_gib" not in body and "monthly_storage_saving_display" not in body
-    assert body["question"] == ("Delete 2 files (32.0 GiB selected, including the 3 skipped files) from several "
+    assert body["question"] == ("Delete 2 files (32.0 GiB selected, including the 3 files skipped) from several "
                                 "assets? Files in Meshive storage can't be recovered.")
 
     # A server that sends the deletable size on its own: that size is offered, and the saving follows it.
@@ -379,7 +380,7 @@ async def test_delete_asset_files_confirm_sends_the_expected_count(mcp_client, f
     assert body["asset_id"] == "asset_abc" and body["deleted"] == [{"file_id": "file_001", "path": "renders/001.png"}]
     assert body["already_deleted"] == 1 and body["failed"] == [] and body["asset_deleted"] is False
     assert body["blocked"] == [{"file_id": "file_003", "path": "renders/003.png", "reason": "asset_in_use"}]
-    assert body["next_step"].startswith("Deleted 1 files.") and "1 were skipped" in body["next_step"]
+    assert body["next_step"].startswith("Deleted 1 file.") and "1 were skipped" in body["next_step"]
 
 
 async def test_delete_asset_files_ids_that_name_no_file_here_are_not_offered_a_retry(mcp_client, fake, with_key,
@@ -457,3 +458,12 @@ async def test_asset_tool_descriptions_fit(mcp_client):
     assert tools["delete_asset"].annotations.destructive_hint is True
     assert tools["update_asset"].annotations.destructive_hint is False
     assert "confirm" not in tools["update_asset"].input_schema["properties"]
+
+
+def test_sizes_and_counts_in_questions_read_naturally():
+    # A 1 MiB render must not be offered as "1 files, 0.0 GiB" in a delete question.
+    from meshive_mcp.tools.assets import _files, _size_text
+    assert (_files(1), _files(0), _files(2)) == ("1 file", "0 files", "2 files")
+    assert _size_text(None) == "size not measured yet" and _size_text(10) == "10 bytes" and _size_text(1536) == "1.5 KiB"
+    assert _size_text(1186255) == "1.1 MiB" and _size_text(57890280) == "55.2 MiB"
+    assert _size_text(3 * GIB) == "3.0 GiB" and _size_text(GIB + GIB // 2) == "1.5 GiB"

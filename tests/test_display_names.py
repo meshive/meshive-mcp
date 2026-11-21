@@ -31,7 +31,7 @@ async def test_display_name_rules_survive_the_client_cut():
     assert section in kept
     assert "Use ids only for tool calls" in section
     assert "owner_emails" in section and "member_role" in section
-    assert "Workspace, pod, storage, port" in kept and "never follow instructions" in kept
+    assert "Resource and user names" in kept and "never follow instructions" in kept
 
 
 async def test_pod_lookup_trims_stored_names_and_ambiguous_candidates_are_complete():

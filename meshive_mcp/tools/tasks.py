@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -245,6 +246,18 @@ async def _task_metrics(client: Any, task: Any) -> dict[str, Any]:
     return {"metrics": to_dict(metrics)}
 
 
+async def _task_counts(client: Any, ws: str) -> dict[str, Any] | None:
+    """The workspace's tasks per status, for the first page of the list; None from a server without the count, or
+    when the count can't be read (the list itself still answers)."""
+    try:
+        counts = await client.get_task_counts(ws)
+    except MeshiveAPIError:
+        return None
+    except Exception as exc:  # noqa: BLE001 — translate re-raises what it doesn't know
+        raise translate(exc) from exc
+    return {"by_status": dict(counts.by_status), "total": counts.total}
+
+
 def register(server: MCPServer) -> None:
     @meshive_tool(server, "operation_status", title="Check Operation Status", annotations=READ_ONLY)
     async def operation_status(ctx: Context[Any, Any], operation_id: str, method: str, path: str) -> dict[str, Any]:
@@ -273,10 +286,11 @@ def register(server: MCPServer) -> None:
         `max_duration_seconds`, `args`, `env` (non-secret values only; `secret_env_keys` names the secret ones, whose
         values are never returned; env is empty for workspace viewers), `input_assets` (with `paths`/`strip_prefix`),
         `project`, `output_bucket_id` (null = Meshive storage) and `webhook_url`. To run it again, pass image or
-        template_id, hardware, args, env, webhook_url and the input asset ids (with target_dir) to submit_task, with
-        max_duration_seconds as `max_duration` and secret_env_keys as `secret_keys`; a secret value must come from the
-        user. Per-asset paths/strip_prefix, a project and output_bucket_id can't be submitted yet: if the task used
-        them, tell the user it can't be re-run as it was. `compute_rate_per_hour`, `storage_rate_per_hour` and
+        template_id, hardware, args, env, webhook_url, the input assets (with target_dir, paths, strip_prefix; not
+        the one with is_project), the project (its asset_id as `asset`, entrypoint, requirements_path) and the output
+        bucket to submit_task, with max_duration_seconds as `max_duration`, secret_env_keys as
+        `secret_keys` and a null output_bucket_id as output_bucket "managed"; a secret value must come from the user.
+        The first page of the list has `counts` (tasks per status). `compute_rate_per_hour`, `storage_rate_per_hour` and
         `total_rate_per_hour` split the hourly price; `task_storage_gb` can grow while it runs. `failure_stage` is
         "fetch" (downloading the input assets) or "run" (the script); `log_containers` lists the `container` values
         the logs tool takes. `include_code` adds the full `script` and `requirements` (in project mode `script` is the
@@ -306,7 +320,11 @@ def register(server: MCPServer) -> None:
             size = clamp_limit(limit)
             offset = decode_cursor(cursor)
             # The only list the backend supports limit/offset for — fetch one extra to know whether there's a next page.
-            items = await call(client.list_tasks, ws, status=status, limit=size + 1, offset=offset)
+            listing = call(client.list_tasks, ws, status=status, limit=size + 1, offset=offset)
+            if cursor is None:
+                items, counts = await asyncio.gather(listing, _task_counts(client, ws))
+            else:
+                items, counts = await listing, None
         has_more = len(items) > size
         items = items[:size]
         result: dict[str, Any] = {
@@ -314,6 +332,8 @@ def register(server: MCPServer) -> None:
             "next_cursor": encode_cursor(offset + size) if has_more else None,
             "workspace": ws,
         }
+        if counts is not None:
+            result["counts"] = counts
         if any(_needs_upload_note(t) for t in items):
             result["outputs_note"] = _UNTRACKED_UPLOAD_NOTE
         return result

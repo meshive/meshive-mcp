@@ -341,7 +341,9 @@ async def test_serving_tools(mcp_client, fake, with_key):
     assert "cost goes up" in up["question"] and not _calls(fake, "scale_serving")
     body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "max_replicas": 4, "confirm": True, "operation_id": "test-operation-0001"}))
     assert body["action"] == "scale" and _calls(fake, "scale_serving")[0][2] == {"idempotency_key": "test-operation-0001", "min_replicas": None, "max_replicas": 4,
-                                                                                    "autoscale": None, "price_cap_per_hour": None}
+                                                                                    "autoscale": None, "price_cap_per_hour": None,
+                                                                                    "output_bucket_id": None, "managed_output": False,
+                                                                                    "share_idle_capacity": None}
     # (fake makes a new client per tool call → _calls only sees the last call's record)
     down = _payload(await mcp_client.call_tool("scale_serving", {"operation_id": "test-operation-0001", "serving": 42, "max_replicas": 2}))
     assert down["action"] == "scale" and _calls(fake, "scale_serving")[0][2]["max_replicas"] == 2

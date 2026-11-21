@@ -84,8 +84,10 @@ def register(server: MCPServer) -> None:
                                + (f" A usage warning is sent when it is {threshold:.0%} full." if usage_warning else ""))
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)
-        out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Find its pv_name in "
-                            "the storages tool once it is `running`.")
+        out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Poll "
+                            f"transactions with transaction_id={created.transaction_id} until status is done or failed "
+                            "(the list shows a storage operation only for its first 3 minutes), and find its pv_name "
+                            "in the storages tool once it is `running`.")
         return out
 
     @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
@@ -156,8 +158,10 @@ def register(server: MCPServer) -> None:
             result = await call(client.update_storage, storage, ws, **kwargs)
         out = to_dict(result)
         tx = result.transaction_id
-        out["next_step"] = (f"Growing the volume runs asynchronously (transaction {tx}); the storages tool shows the new "
-                            "size when it is done." if tx is not None else "Saved; the change applies right away.")
+        out["next_step"] = (f"Growing the volume runs asynchronously (transaction {tx}): poll transactions with "
+                            f"transaction_id={tx} until status is done or failed (the list shows a storage operation "
+                            "only for its first 3 minutes); the storages tool shows the new size when it is done."
+                            if tx is not None else "Saved; the change applies right away.")
         return out
 
     @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=REVEAL, operation_record=False)

@@ -46,6 +46,37 @@ _OWN_RETRY_ADVICE_CODES = {"invalid_argument", "asset_in_use", "asset_frozen", "
                            "insufficient_notice", "maintenance_overlap", "maintenance_state", "recipient_not_allowed",
                            "message_rejected", "listing_refused", "port_check_cooldown", "delete_in_progress",
                            "credentials_not_available", "feedback_unavailable", "feedback_rate_limited"}
+# Asset files, buckets and exports: a bucket the saved keys can't read, the daily export allowance, an asset that can't
+# be exported or isn't ready, and the refusals of adding files to a collection (a path that exists, not a collection,
+# not in Meshive storage, being moved, already completed, too large for this server) each say what has to change.
+_OWN_RETRY_ADVICE_CODES |= {"bucket_access_failed", "export_limit_reached", "export_not_supported", "asset_not_ready",
+                            "file_exists", "not_a_collection", "asset_not_managed", "asset_moving",
+                            "upload_already_completed", "file_too_large_for_mcp"}
+# Assets in a pod: a pod that isn't running or can't take or remove assets without a restart, a slot or folder that
+# doesn't fit, an asset that can't be placed, a request already in progress or done, a row of the pod's configuration,
+# a filled slot, a busy row, no credit, a placement that collides, a deleted asset, the pod's assets changed meanwhile,
+# and an update_pod connection_id that isn't an active input asset each say what has to change first.
+_OWN_RETRY_ADVICE_CODES |= {"pod_not_running", "pod_cannot_receive_assets", "pod_cannot_remove_assets",
+                            "no_input_slot", "role_required", "invalid_target_dir", "asset_not_placeable",
+                            "source_token_missing", "injection_in_progress", "already_connected", "placed_elsewhere",
+                            "part_of_pod_configuration", "slot_filled", "placement_busy", "asset_usage_blocked",
+                            "input_asset_not_found", "placement_conflict", "asset_unavailable",
+                            "asset_config_conflict"}
+# An asset list filter the API server doesn't apply yet: listing again with it gives the same unfiltered answer.
+_OWN_RETRY_ADVICE_CODES |= {"filter_not_supported"}
+# Messages to hosts, images and custom templates: a host the workspace can't reach, an image that can't be read or a
+# registry login that doesn't fit or can't be used, too many ports, and the local refusals of save_template (an image
+# change, a secret's value) each say what has to change first.
+_OWN_RETRY_ADVICE_CODES |= {"host_not_reachable", "image_not_found", "registry_credential_required",
+                            "registry_mismatch", "registry_credential_unusable", "too_many_ports",
+                            "image_change_not_supported", "secret_value_not_accepted"}
+# Servings and tasks: sharing that isn't offered or not yet agreed to, an output bucket that isn't there or verified, a
+# serving that can't change now or was deployed by another member, a model whose input Hugging Face doesn't state or
+# that isn't found, a hidden secret value that can't be resubmitted, and an output upload with nothing left to cancel
+# each say what has to change first.
+_OWN_RETRY_ADVICE_CODES |= {"sharing_not_available", "sharing_consent_required", "output_bucket_not_found",
+                            "output_bucket_not_verified", "serving_not_changeable", "not_serving_owner",
+                            "modality_required", "model_not_found", "masked_secret_value", "nothing_to_cancel"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key: the server keeps an operation record for them, so a retry with the same
 # operation_id gets the first answer back and operation_status can look the operation up.
@@ -58,6 +89,14 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "send_host_message", "mark_host_messages_read", "set_port_lock", "set_port_preflight",
            "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions", "send_feedback",
            "update_asset", "delete_asset", "delete_asset_files"}
+# Copying an asset out of Meshive storage, and making catalog files assets.
+_WRITES |= {"export_asset", "upload_asset_to_hf", "import_open_assets"}
+# Adding an asset to a pod without a restart, and taking one out.
+_WRITES |= {"add_pod_asset", "remove_pod_asset"}
+# Writing from a workspace to a host and marking the host's replies read, and saving or deleting a custom template.
+_WRITES |= {"message_host", "mark_workspace_messages_read", "create_template", "update_template", "delete_template"}
+# Deleting finished tasks, and stopping a task's output upload.
+_WRITES |= {"delete_tasks", "discard_task_outputs"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
@@ -69,6 +108,9 @@ _UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "i
                # A command run in a pod and the steps of a file upload: the server keeps no operation record of them
                # (it would hold the command's output or the upload links), so calling again runs or starts it again.
                "run_command", "start_asset_upload", "complete_asset_upload", "abort_asset_upload"}
+# The steps of adding files to a collection: their answers hold the upload's token or links.
+_UNRECORDED |= {"start_asset_file_upload", "asset_file_upload_part_urls", "complete_asset_file_upload",
+                "abort_asset_file_upload"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -150,8 +192,14 @@ _FEEDBACK_OFFER = (" If it still fails, you may ask the user once in this conver
                    "with send_feedback (tool \"{tool}\", error_code \"server_error\"); send it only if they agree.")
 
 
+# Tools whose `confirm` is needed only for some calls (pausing a serving, locking a port, ...). The server instructions
+# name each one as an exception to "every tool with a `confirm` argument needs it"; tests/test_instructions.py checks
+# that the two lists match.
+CONDITIONAL_CONFIRM: set[str] = set()
+
+
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
-                 operation_record: bool = True):
+                 operation_record: bool = True, conditional_confirm: bool = False):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
     (2) a ToolError raised by the tool as an `isError` result whose body is **pure JSON with no prefix**. The SDK's default prepends "Error executing tool <name>: ...",
     but the error body must be the `{code, message, next_step}` JSON itself — the model has to parse it
@@ -160,7 +208,12 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
     operation_record=False marks a write whose SDK call is in `_UNRECORDED`: its description and retry advice say
     that a repeated call runs again instead of pointing at operation_status. A tool that sends a recorded write too
     keeps the default; its failed unrecorded call still gets the unrecorded retry advice.
+
+    conditional_confirm=True registers a tool whose `confirm` applies only to some calls in CONDITIONAL_CONFIRM.
     """
+    if conditional_confirm:
+        CONDITIONAL_CONFIRM.add(name)
+
     def decorator(fn: Callable[..., Awaitable[dict[str, Any]]]):
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any):

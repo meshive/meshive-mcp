@@ -53,6 +53,12 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        "ServingStoppedReplica": {"pod_name"},
                                        # Whether the server masked a template env value; `value_set` says it instead.
                                        "TemplateEnv": {"masked"}}
+# An add-files upload's token authorises the upload together with the user's key; upload_asset puts it only inside
+# its opaque upload_id. A workspace file's statefulset name is how the platform finds a pod, not something to show.
+_DROP_BY_CLASS.update({"FileUploadBatch": {"upload_token"}, "BatchUploadTarget": {"url"},
+                       "WorkspaceFile": {"source_statefulset"}})
+# A platform notice's revision and publish time are the console's bookkeeping, not part of what was announced.
+_DROP_BY_CLASS.update({"PlatformNotice": {"revision", "publish_at"}})
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}
@@ -67,6 +73,11 @@ _HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour
 _HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "ram_price_per_gb"},
                                                  # What renters pay per GPU per hour on a host's machine.
                                                  "MachinePrice": {"demand_per_hour", "spot_per_hour"}}
+# What a pod's asset volumes cost per hour together (each volume's own rate is a `price_per_hour`).
+_HOURLY_FIELDS_BY_CLASS.update({"PodAssetVolumes": {"total_price_per_hour"}})
+# What a replica of a model costs per hour on the GPUs that fit it, and what a task pays per GPU per hour.
+_HOURLY_FIELDS_BY_CLASS.update({"ModelAvailability": {"price_low", "price_high", "suggested_cap_per_hour"},
+                                "TaskGpu": {"price_per_gpu_hour"}})
 # Other amounts can't be told apart by name alone (e.g. DailyCost.pod is an amount, WorkspaceResources.pod a count)
 # → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {

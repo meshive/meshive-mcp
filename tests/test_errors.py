@@ -262,7 +262,7 @@ def test_a_workspace_that_is_not_empty_sorts_what_tools_can_delete_from_what_the
     step = _not_empty_step()
     assert "Pods, storage, servings and custom models can be deleted with their tools" in step
     assert "assets with delete_asset" in step
-    assert "Finished tasks, credentials, webhooks, custom templates, inference keys" in step
+    assert "custom templates with delete_template" in step and "credentials, webhooks, inference keys" in step
     assert "templates and models" not in step
 
 
@@ -305,7 +305,7 @@ def test_a_taken_name_covers_renaming_a_workspace():
     from meshive.exceptions import ConflictError
 
     b = _body(ConflictError(409, "m", title="Name Taken", raw={"detail": {"title": "Name Taken", "message": "m"}}))
-    assert "update_pod, update_storage or update_workspace `name`" in b["next_step"]
+    assert "update_pod, update_storage, update_workspace or save_template `name`" in b["next_step"]
 
 
 # --- hosting -------------------------------------------------------------------------------------------------------

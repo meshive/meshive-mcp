@@ -8,7 +8,7 @@ from meshive.exceptions import MeshiveAPIError, NotFoundError
 from meshive.models import (Machine, MachineDetail, Member, PodMetrics, Serving, ServingModel, Storage, Template,
                             WorkspaceDetail)
 
-from conftest import _machine
+from conftest import FakeMeshive, _machine
 
 pytestmark = pytest.mark.anyio
 
@@ -247,6 +247,9 @@ async def test_serving_logs_read_the_running_replica_in_the_servings_workspace(m
 
 
 async def test_serving_replica_still_setting_up_is_unavailable(mcp_client, fake, servings_fake, with_key):
+    serving = _serving()
+    serving["replicas"][1]["logReplicaId"] = None       # no pod and no log of its own yet
+    servings_fake["serving"] = serving
     body = _payload(await mcp_client.call_tool("logs", {"serving": 42, "replica": 0}))
     assert body["code"] == "replica_logs_unavailable" and not _calls(fake, "get_pod_logs")
 
@@ -626,32 +629,52 @@ def _internal(index, status="running"):
     return {"replicaIndex": index, "status": status, "statefulsetName": f"srv-{index}", "logReplicaId": None}
 
 
-async def test_serving_logs_without_replica_skip_one_whose_log_is_read_elsewhere(mcp_client, fake, servings_fake,
-                                                                                with_key):
+async def test_serving_logs_of_a_replica_without_a_pod_are_read_by_its_log_id(mcp_client, fake, servings_fake,
+                                                                              with_key):
     servings_fake["serving"] = _serving(replicas=[_external(0), _internal(1)])
+    body = _payload(await mcp_client.call_tool("logs", {"serving": 12, "replica": 0, "tail": 50}))
+    call, = _calls(fake, "get_serving_replica_logs")
+    assert call[1] == (12, 100) and call[2] == {"tail": 50} and not _calls(fake, "get_pod_logs")
+    assert body["text"] == "engine ready" and body["replica_index"] == 0 and body["replica_source"] == "live"
+    assert "untrusted" in body["note"] and "replica_note" not in body
+    # The answer doesn't say how the replica's log is collected.
+    assert not {"pod_name", "serving_id_raw", "replica_id", "log_replica_id"} & set(body)
+    assert "100" not in json.dumps({k: v for k, v in body.items() if k != "operation_id"})
+
+    # A pod's `container` and `wait` don't apply to it.
+    body = _payload(await mcp_client.call_tool("logs", {"serving": 12, "replica": 0, "wait": 3, "container": "x"}))
+    assert "ignored" in body["replica_note"] and _calls(fake, "get_serving_replica_logs")[0][2] == {"tail": 200}
+
+    # Without `replica`, a running replica with a pod or a log id is read; the pod one is read through the pod.
+    servings_fake["serving"] = _serving(replicas=[_internal(1), _external(2, status="pending")])
     body = _payload(await mcp_client.call_tool("logs", {"serving": 12}))
-    call, = _calls(fake, "get_pod_logs")
-    assert call[1] == ("srv-1-0", WS) and body["replica_index"] == 1
-
-    # No running replica has a pod: the lowest-index replica that has one is read before an unreadable running one.
-    servings_fake["serving"] = _serving(replicas=[_external(0), _internal(2, status="pending")])
-    body = _payload(await mcp_client.call_tool("logs", {"serving": 12}))
-    assert _calls(fake, "get_pod_logs")[0][1] == ("srv-2-0", WS) and body["replica_index"] == 2
+    assert _calls(fake, "get_pod_logs")[0][1] == ("srv-1-0", WS) and body["replica_index"] == 1
 
 
-async def test_serving_logs_of_a_replica_read_elsewhere_list_the_readable_ones(mcp_client, fake, servings_fake,
-                                                                               with_key):
+async def test_serving_replica_logs_on_a_server_without_the_route(mcp_client, fake, servings_fake, with_key,
+                                                                  monkeypatch):
+    async def old_server(self, sid, replica_id, **kw):
+        self._rec("get_serving_replica_logs", sid, replica_id, **kw)
+        raise NotFoundError(404, "This Meshive API server does not support these replica logs yet.")
+
+    monkeypatch.setattr(FakeMeshive, "get_serving_replica_logs", old_server)
     servings_fake["serving"] = _serving(replicas=[_external(0), _internal(1)])
     body = _payload(await mcp_client.call_tool("logs", {"serving": 12, "replica": 0}))
-    assert body["code"] == "replica_logs_unavailable" and not _calls(fake, "get_pod_logs")
-    assert "call again" not in body["next_step"] and "another replica" in body["next_step"]
+    assert body["code"] == "replica_logs_unavailable" and "call again" not in body["next_step"]
+    assert "another replica" in body["next_step"] and "MUST reuse" not in body["next_step"]
+    # This server can read only the pod replica: the one it can't read isn't offered as readable.
     assert {(c["replica_index"], c["has_log"]) for c in body["candidates"]} == {(0, False), (1, True)}
-    assert "MUST reuse" not in body["next_step"]
 
-    # Only an external replica: no readable one exists, and waiting still won't help.
+    # Without `replica` the pick falls back to the pod replica instead of failing on the external one.
+    body = _payload(await mcp_client.call_tool("logs", {"serving": 12}))
+    assert body["replica_index"] == 1 and _calls(fake, "get_pod_logs")[-1][1] == ("srv-1-0", WS)
+    assert body["text"] is not None and "code" not in body
+
+    # With only external replicas there is nothing to fall back to.
     servings_fake["serving"] = _serving(replicas=[_external(0)])
     body = _payload(await mcp_client.call_tool("logs", {"serving": 12}))
-    assert body["code"] == "replica_logs_unavailable" and "call again" not in body["next_step"]
+    assert body["code"] == "replica_logs_unavailable" and "console" in body["next_step"]
+    assert [(c["replica_index"], c["has_log"]) for c in body["candidates"]] == [(0, False)]
 
     # A replica still being set up (no pod, no other log yet) is told to wait, with the candidates.
     servings_fake["serving"] = _serving(replicas=[{**_external(0, status="pending"), "logReplicaId": None}])
@@ -664,25 +687,26 @@ async def test_tasks_description_promises_only_what_submit_task_takes(mcp_client
     desc = " ".join(tools["tasks"].description.split())
     assert "pass these to submit_task" not in desc
     assert "max_duration_seconds as `max_duration`" in desc and "secret_env_keys as `secret_keys`" in desc
-    assert "can't be submitted yet" in desc
+    assert "can't be submitted yet" not in desc and 'output_bucket "managed"' in desc
     submit = set(tools["submit_task"].input_schema["properties"])
-    assert {"max_duration", "secret_keys", "input_assets"} <= submit
-    assert not {"project", "output_bucket_id", "max_duration_seconds"} & submit
+    assert {"max_duration", "secret_keys", "input_assets", "project", "output_bucket", "registry_login_id"} <= submit
+    assert not {"output_bucket_id", "max_duration_seconds"} & submit
     assert len(tools["tasks"].description.encode("utf-16-le")) // 2 <= 4096
 
 
 @pytest.mark.parametrize("tool", ["submit_task", "estimate_task"])
 async def test_task_input_assets_with_keys_the_task_body_drops_are_refused(mcp_client, fake, with_key, tool):
     args = {"name": "t", "script": "pass", "image": "img", "cpu_preset": "micro-2c8g", "workspace": WS,
-            "input_assets": [{"asset": "asset_x", "paths": ["data/*.csv"], "strip_prefix": "data"}]}
+            "input_assets": [{"asset": "asset_x", "role": "loras", "include_paths": ["data/*.csv"]}]}
     if tool == "submit_task":
         args.update(confirm=True, operation_id="op-task-0001")
     result = await mcp_client.call_tool(tool, args)
     body = _payload(result)
-    assert result.is_error and body["code"] == "invalid_argument" and body["unsupported"] == ["paths", "strip_prefix"]
+    assert result.is_error and body["code"] == "invalid_argument" and body["unsupported"] == ["include_paths", "role"]
     assert "last" not in fake                      # refused before any client was built: nothing was sent
 
-    ok = {**args, "input_assets": ["asset_a", {"asset": "asset_x", "target_dir": "d"}]}
+    ok = {**args, "input_assets": ["asset_a", {"asset": "asset_x", "target_dir": "d", "paths": ["data/*.csv"],
+                                               "strip_prefix": "data"}]}
     result = await mcp_client.call_tool(tool, ok)
     assert not result.is_error
 

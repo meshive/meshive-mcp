@@ -65,8 +65,16 @@ def _task_container(task: Any, container: str) -> str:
                            allowed=["run", "fetch"])
 
 
-def _candidates(serving: Any) -> list[dict[str, Any]]:
-    out = [{"replica_index": r.replica_index, "status": r.status, "source": "live", "has_log": bool(r.pod_name)}
+def _readable(replica: Any) -> bool:
+    """Whether this tool can read the replica's log: from its pod, or the way a replica without a pod sends it."""
+    return bool(replica.pod_name) or getattr(replica, "log_replica_id", None) is not None
+
+
+def _candidates(serving: Any, *, pod_only: bool = False) -> list[dict[str, Any]]:
+    """The replicas to offer. `pod_only`: the server can't read a replica without a pod, so only pod replicas have a
+    log here."""
+    readable = (lambda r: bool(r.pod_name)) if pod_only else _readable
+    out = [{"replica_index": r.replica_index, "status": r.status, "source": "live", "has_log": readable(r)}
            for r in serving.replicas]
     if serving.status == "error" and serving.failed_replica is not None:
         out.append({"replica_index": serving.failed_replica.replica_index, "status": "failed", "source": "failed"})
@@ -79,13 +87,13 @@ def _candidates(serving: Any) -> list[dict[str, Any]]:
 def _pick_replica(serving: Any, replica: int | None) -> tuple[Any, str]:
     """The replica to read and where its log comes from: (replica, "live"), (failed replica, "failed") or
     (stopped replica, "stopped"). Without `replica`, the first running replica whose log this tool can read (it runs
-    in a pod), else the lowest-index one with a pod, else the first running replica, else the lowest index — so a
-    replica whose log is collected elsewhere never hides a readable one."""
+    in a pod or sends it another way), else the lowest-index readable one, else the first running replica, else the
+    lowest index — so a replica still being set up never hides a readable one."""
     live = sorted(serving.replicas, key=lambda r: r.replica_index)
     if replica is not None:
         hit = serving.replica(replica)
     else:
-        readable = [r for r in live if r.pod_name]
+        readable = [r for r in live if _readable(r)]
         hit = next((r for r in readable if r.status == "running"), None) or (readable[0] if readable else None)
         if hit is None:
             hit = next((r for r in live if r.status == "running"), live[0] if live else None)
@@ -105,6 +113,13 @@ def _pick_replica(serving: Any, replica: int | None) -> tuple[Any, str]:
                      candidates=_candidates(serving))
 
 
+def _pod_replica(serving: Any) -> Any:
+    """The replica to read when only pod replicas can be read: the first running one with a pod, else the lowest-index
+    one with a pod, else None."""
+    pods = sorted((r for r in serving.replicas if r.pod_name), key=lambda r: r.replica_index)
+    return next((r for r in pods if r.status == "running"), pods[0] if pods else None)
+
+
 def _unavailable(_exc: Any = None, *, candidates: list[dict[str, Any]] | None = None) -> Any:
     extra = {"candidates": candidates} if candidates is not None else {}
     return tool_error("replica_logs_unavailable", "This replica has no log to read yet.",
@@ -114,6 +129,23 @@ def _unavailable(_exc: Any = None, *, candidates: list[dict[str, Any]] | None = 
 def _elsewhere(candidates: list[dict[str, Any]]) -> Any:
     return tool_error("replica_logs_unavailable", "This replica's log is collected outside its pod.",
                       REPLICA_LOGS_ELSEWHERE_STEP, candidates=candidates)
+
+
+class _NoReplicaLogRoute(Exception):
+    """The API server can't read a replica's log by its log id (it predates that route)."""
+
+
+async def _replica_logs(client: Any, serving: Any, log_replica_id: int, tail: int) -> Any:
+    """A replica's log read by its log id. A server without the route can't read it (_NoReplicaLogRoute: wait won't
+    help); a replica that is gone meanwhile has no log to read."""
+    try:
+        return await client.get_serving_replica_logs(serving.serving_id, log_replica_id, tail=tail)
+    except NotFoundError as exc:
+        if "does not support" in (exc.message or ""):
+            raise _NoReplicaLogRoute() from exc
+        raise _unavailable(exc, candidates=_candidates(serving)) from exc
+    except Exception as exc:  # noqa: BLE001 — translate re-raises what it doesn't know
+        raise translate(exc) from exc
 
 
 def _expired(_exc: Any = None) -> Any:
@@ -167,15 +199,30 @@ def register(server: MCPServer) -> None:
             elif serving is not None:
                 s = await call(client.get_serving, serving)
                 picked, source = _pick_replica(s, replica)
-                if not picked.pod_name:
-                    # A replica whose log is collected another way can't be read here — don't tell the agent to wait.
-                    if getattr(picked, "log_replica_id", None) is not None:
-                        raise _elsewhere(_candidates(s))
+                log_replica_id = getattr(picked, "log_replica_id", None)
+                result = None
+                if not picked.pod_name and log_replica_id is not None:
+                    # A replica without a pod sends its log another way; it has no containers and nothing to wait for.
+                    try:
+                        result = await _replica_logs(client, s, log_replica_id, tail)
+                    except _NoReplicaLogRoute as exc:
+                        # An older server: only pod replicas can be read. Without `replica` the pick falls back to one.
+                        fallback = None if replica is not None else _pod_replica(s)
+                        if fallback is None:
+                            raise _elsewhere(_candidates(s, pod_only=True)) from exc.__cause__
+                        picked = fallback
+                    else:
+                        if container is not None or wait is not None:
+                            extra["replica_note"] = ("`container` and `wait` don't apply to this replica and were "
+                                                     "ignored.")
+                if result is None and not picked.pod_name:
                     raise _unavailable(candidates=_candidates(s))   # still being set up
-                result = await _pod_logs(client, picked.pod_name, s.namespace_name,
-                                         _unavailable if source == "live" else _expired,
-                                         tail=tail, container=container, wait=wait)
-                extra = {"serving_id": s.serving_id, "replica_index": picked.replica_index, "replica_source": source}
+                if result is None:
+                    result = await _pod_logs(client, picked.pod_name, s.namespace_name,
+                                             _unavailable if source == "live" else _expired,
+                                             tail=tail, container=container, wait=wait)
+                extra.update({"serving_id": s.serving_id, "replica_index": picked.replica_index,
+                              "replica_source": source})
             else:
                 ws = await resolve(client, workspace)
                 if needs_input(ws):

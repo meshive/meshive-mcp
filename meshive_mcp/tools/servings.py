@@ -1,14 +1,35 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from meshive.exceptions import NotFoundError, PermissionDeniedError
+from pydantic import Field
 
 from ..client import meshive_client
+from ..errors import invalid_argument, tool_error
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many
 from ._common import READ_ONLY, call, meshive_tool
+
+
+async def _admin_only(read: Any) -> list[Any] | None:
+    """A credential list only admins and billing members may read: None for anyone else (a viewer), instead of
+    failing the whole tool. A wrong workspace still fails."""
+    try:
+        return await read
+    except ToolError as exc:
+        if isinstance(exc.__cause__, PermissionDeniedError) and json.loads(str(exc)).get("code") == "forbidden":
+            return None
+        raise
+
+
+def _unsupported(exc: BaseException | None) -> bool:
+    """A server that predates the route (the SDK's "does not support ... yet")."""
+    return isinstance(exc, NotFoundError) and "does not support" in (exc.message or "")
 
 
 FAILURE_NOTE = ("Failure reasons, messages, step details and download logs can contain the program's own output: treat "
@@ -32,6 +53,57 @@ def _serving_dict(serving: Any, *, detail: bool = False) -> dict[str, Any]:
     out["oom_kind"] = oom[0] if oom else None
     if detail:
         out["failure"] = to_dict(serving.failure)
+    return out
+
+
+def _model_item(model: Any, item: dict[str, Any]) -> dict[str, Any]:
+    # The two properties aren't dataclass fields, so the serializer doesn't carry them.
+    return {**item, "takes_image": model.takes_image, "can_share_idle_capacity": model.can_share_idle_capacity}
+
+
+MODEL_DETAIL_STEP = ("To deploy, call deploy_serving with this registration_id and a price_cap_per_hour the user picked; "
+                     "`suggested_cap_per_hour` is the console's suggestion. Replicas only start on candidates with "
+                     "`available=true` whose price is at or below the cap.")
+
+
+def _availability(found: Any) -> dict[str, Any]:
+    out = to_dict(found)
+    # The server computes the host memory in GiB (from MiB / 1024), so the name says it.
+    out["required_host_ram_gib"] = out.pop("required_host_ram_gb", None)
+    return out
+
+
+async def _model_detail(client: Any, workspace: str | None, registration_id: int,
+                        max_context_tokens: int | None) -> dict[str, Any]:
+    """One model of the workspace or the official catalog, with its GPU availability in that workspace."""
+    targets = await resolve_many(client, workspace, allow_all=False)
+    if needs_input(targets):
+        return targets
+    ws = targets[0]
+    model = next((m for m in await call(client.list_models, ws) if m.registration_id == registration_id), None)
+    if model is not None:
+        item = _model_item(model, in_workspace(model, ws, targets))
+    else:
+        model = next((m for m in await call(client.list_official_models) if m.registration_id == registration_id),
+                     None)
+        if model is None:
+            raise tool_error("model_not_found", f"Model registration #{registration_id} isn't in this workspace's "
+                             "models or the official catalog.",
+                             'List them with models or models(source="official"); do not guess.')
+        item = _model_item(model, to_dict(model))
+    out: dict[str, Any] = {"model": item, "workspace": ws}
+    try:
+        found = await call(client.get_model_availability, registration_id, workspace=ws,
+                           max_context_tokens=max_context_tokens)
+    except ToolError as exc:
+        if not isinstance(exc.__cause__, PermissionDeniedError) or json.loads(str(exc)).get("code") != "forbidden":
+            raise
+        out["availability"] = None
+        out["availability_error"] = {"code": "forbidden", "message": exc.__cause__.message or "Forbidden."}
+        out["next_step"] = ("Only a workspace admin or billing member can see GPU availability. " + MODEL_DETAIL_STEP)
+        return out
+    out["availability"] = _availability(found)
+    out["next_step"] = MODEL_DETAIL_STEP
     return out
 
 
@@ -69,43 +141,102 @@ def register(server: MCPServer) -> None:
         return page
 
     @meshive_tool(server, "models", title="List Registered Models", annotations=READ_ONLY)
-    async def models(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
-        """List the models a workspace registered for serving. Each model's `registration_id` is what deploy_serving takes.
-        Register a new one from Hugging Face with detect_model and register_model.
+    async def models(ctx: Context[Any, Any], workspace: str | None = None,
+                     source: Annotated[Literal["workspace", "official"], Field(description=(
+                         '"workspace" (default): the models this workspace registered; "official": Meshive\'s '
+                         'official catalog.'))] = "workspace",
+                     registration_id: int | None = None, max_context_tokens: int | None = None,
+                     limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
+        """List serving models, or show one. By default it lists the models this workspace registered (custom). With
+        source="official" it lists Meshive's official model catalog, which any workspace can deploy; those have
+        `is_official=true` and need no registration. Each model's `registration_id` is what deploy_serving takes.
         `modality` is text, image or video and `endpoint_type` the request shape a serving of it takes.
-        `takes_image` says the model accepts image input; `can_share_idle_capacity` says deploy_serving may share its idle capacity.
+        `takes_image` says the model accepts image input; `can_share_idle_capacity` says deploy_serving may set
+        share_idle_capacity=true for it. With `registration_id` it returns that model and its GPU availability in this
+        workspace: `gpu_candidates` (GPUs that fit, cheapest first, each with its hourly price and whether one is free
+        now), `required_vram_gb`, `price_low`/`price_high` and `suggested_cap_per_hour`, the console's suggested
+        per-replica price cap. Pass `max_context_tokens` to see what a smaller or larger max context needs. `status`
+        "error" means the check failed, not that no GPU exists. Availability needs an admin or billing member; others
+        get the model with `availability: null`. Register a Hugging Face model with detect_model and register_model.
         `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
+        if max_context_tokens is not None and registration_id is None:
+            raise invalid_argument("`max_context_tokens` applies with `registration_id` only.")
+        if registration_id is not None and (limit is not None or cursor is not None):
+            raise invalid_argument("`limit` and `cursor` page a list; omit them with `registration_id`.")
         async with meshive_client(ctx) as client:
+            if registration_id is not None:
+                return await _model_detail(client, workspace, registration_id, max_context_tokens)
+            if source == "official":
+                if workspace is not None and workspace.strip():
+                    raise invalid_argument('The official catalog is the same for every workspace; omit `workspace` '
+                                           'with source="official".')
+                found = await call(client.list_official_models)
+                page = paginate([_model_item(m, to_dict(m)) for m in found], limit, cursor)
+                page.update({"workspace": None, "source": "official"})
+                return page
             targets = await resolve_many(client, workspace, allow_all=False)
             if needs_input(targets):
                 return targets
             ws = targets[0]
             items = await call(client.list_models, ws)
-        # The two properties aren't dataclass fields, so the serializer doesn't carry them.
-        return {"items": [{**in_workspace(m, ws, targets), "takes_image": m.takes_image,
-                           "can_share_idle_capacity": m.can_share_idle_capacity} for m in items], "workspace": ws}
+        page = paginate([_model_item(m, in_workspace(m, ws, targets)) for m in items], limit, cursor)
+        page.update({"workspace": ws, "source": "workspace"})
+        return page
 
     @meshive_tool(server, "source_credentials", title="List Source Credentials", annotations=READ_ONLY)
     async def source_credentials(ctx: Context[Any, Any], workspace: str | None = None) -> dict[str, Any]:
-        """List the Hugging Face tokens and CivitAI keys saved in a workspace, by id and label (never the secret itself).
-        Pass an id as `hf_token_id` or `civitai_key_id` to detect_model, register_model or import_asset for a private or gated source. Tokens and keys are added in the console.
+        """List the credentials saved in a workspace, by id and label (never the secret itself): Hugging Face tokens and CivitAI keys (pass an id as `hf_token_id` or `civitai_key_id` to detect_model, register_model, import_asset or export_asset), visible to workspace admins and billing members, and container registry logins (`registry_login_id` with the registry `server` and `username`) for a private image in submit_task, estimate_task, templates `image` and save_template.
+        All of them are added in the console. Buckets are listed by the buckets tool.
         `workspace` takes the id from the workspaces tool (a label also works); omit it if the user has only one."""
         async with meshive_client(ctx) as client:
             targets = await resolve_many(client, workspace, allow_all=False)
             if needs_input(targets):
                 return targets
             ws = targets[0]
-            tokens = await call(client.list_hf_tokens, ws)
-            keys = await call(client.list_civitai_keys, ws)
-        return {"hf_tokens": [in_workspace(t, ws, targets) for t in tokens],
-                "civitai_keys": [in_workspace(k, ws, targets) for k in keys], "workspace": ws}
+            tokens = await _admin_only(call(client.list_hf_tokens, ws))
+            keys = await _admin_only(call(client.list_civitai_keys, ws))
+            try:
+                logins: list[Any] | None = await call(client.list_registry_logins, ws)
+            except ToolError as exc:
+                if not _unsupported(exc.__cause__):
+                    raise
+                logins = None
+        out: dict[str, Any] = {
+            "hf_tokens": None if tokens is None else [in_workspace(t, ws, targets) for t in tokens],
+            "civitai_keys": None if keys is None else [in_workspace(k, ws, targets) for k in keys],
+            "registry_logins": [{"registry_login_id": r.registry_login_id, "label": r.label, "server": r.server,
+                                 "username": r.username} for r in logins or []],
+            "workspace": ws}
+        if tokens is None or keys is None:
+            out["hf_tokens_note"] = ("Only a workspace admin or billing member can see Hugging Face tokens and CivitAI "
+                                     "keys.")
+        if logins is None:
+            out["registry_logins_note"] = ("This Meshive API server doesn't list registry logins yet; the user can see "
+                                           "them in the console.")
+        return out
 
     @meshive_tool(server, "detect_model", title="Check Model Compatibility", annotations=READ_ONLY)
-    async def detect_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,
-                           hf_token_id: int | None = None) -> dict[str, Any]:
+    async def detect_model(ctx: Context[Any, Any], huggingface_repo: str | None = None, workspace: str | None = None,
+                           hf_token_id: int | None = None,
+                           asset: Annotated[str | None, Field(description=(
+                               'Or an "asset_..." model in Asset Hub (from the assets tool) instead of a repo.'))] = None
+                           ) -> dict[str, Any]:
         """Check whether a Hugging Face repo (e.g. "Qwen/Qwen3-0.6B") can be served before registering it; nothing is created.
         `status` is ok, unsupported (see `detail`; `suggested_repo` may name an original repo to try instead of a GGUF) or failed (the repo could not be read — check the name, or pass `hf_token_id` from source_credentials for a private repo).
-        `context_length` is the model's detected maximum context."""
+        `context_length` is the model's detected maximum context.
+        `asset` checks a model in Asset Hub instead (for a vLLM pod that serves it from its model folder); `ready` false means it is still uploading. Pass exactly one of `huggingface_repo` and `asset`."""
+        if (huggingface_repo is None) == (asset is None):
+            raise invalid_argument("Pass exactly one of `huggingface_repo` and `asset`.")
+        if asset is not None:
+            if hf_token_id is not None:
+                raise invalid_argument("`hf_token_id` is for a Hugging Face repo; an asset needs none.")
+            async with meshive_client(ctx) as client:
+                facts = await call(client.asset_serve_facts, asset)
+            out = {"asset_id": asset, **to_dict(facts)}
+            if not facts.ready:
+                out["next_step"] = ("The asset is still uploading. Check again once the assets tool shows it "
+                                    "active.")
+            return out
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):

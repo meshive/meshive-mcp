@@ -30,6 +30,20 @@ NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task
                   "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
                   "host_install_command", "ssh_access", "connect_storage", "run_command", "upload_asset",
                   "create_access_key", "roll_access_key", "send_feedback"}
+# Asset files, buckets and exports.
+READ_TOOLS |= {"buckets", "asset_files"}
+WRITE_TOOLS |= {"export_asset"}
+NOT_IDEMPOTENT |= {"export_asset"}
+# Assets in an existing pod.
+WRITE_TOOLS |= {"add_pod_asset", "remove_pod_asset"}
+DESTRUCTIVE |= {"remove_pod_asset"}
+NOT_IDEMPOTENT |= {"add_pod_asset"}
+# Custom pod templates.
+WRITE_TOOLS |= {"save_template", "delete_template"}
+DESTRUCTIVE |= {"delete_template"}
+# Deleting finished tasks and stopping a task's output upload.
+WRITE_TOOLS |= {"delete_tasks", "cancel_task_upload"}
+DESTRUCTIVE |= {"delete_tasks", "cancel_task_upload"}
 # Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
 
@@ -46,7 +60,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 74
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 83
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -975,7 +989,7 @@ CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "
 # Writes without `confirm`, as in the console.
 NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
                      "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload",
-                     "update_asset"}
+                     "update_asset", "save_template"}
 
 
 async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):

@@ -53,7 +53,7 @@ async def test_machine_detail_shows_clients_maintenance_diagnostics_and_fee(mcp_
     assert item["schedules"] == {"upcoming": [], "ongoing": None}
     assert item["earning_hourly_display"] == "$1.25" and "raw" not in item
     assert ("list_maintenance", (MACHINE_ID,), {}) in fake["last"].calls
-    assert item["disk_warnings"] == DISK_WARNINGS
+    assert item["disk_warnings"] == [{**w, "gone": False} for w in DISK_WARNINGS]
 
 
 def _detail_without_disk_field(detail):
@@ -80,7 +80,7 @@ async def test_machine_detail_reads_disk_warnings_with_an_older_sdk(mcp_client, 
         inst.get_machine = older
     fake["setup"] = setup
     item = _payload(await mcp_client.call_tool("machines", {"machine": MACHINE_ID}))["machine"]
-    assert item["disk_warnings"] == expected and "raw" not in item
+    assert item["disk_warnings"] == [{**w, "gone": False} for w in expected] and "raw" not in item
     assert item["network_warnings"][0]["code"] == "slow_upload" and item["fee"]["platform_fee"] == 0.2
 
 
