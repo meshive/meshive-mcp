@@ -687,4 +687,4 @@ async def test_billing_history_payouts_without_an_onboarded_account_points_to_th
 
 async def test_billing_history_rejects_an_unknown_kind(mcp_client, fake, with_key):
     result, body = await _call(mcp_client, "billing_history", {"kind": "refunds"})
-    assert result.is_error and body["allowed"] == ["credit", "earnings", "payouts"]
+    assert result.is_error and body["allowed"] == ["credit", "earnings", "payouts", "workspace", "shared_earnings"]

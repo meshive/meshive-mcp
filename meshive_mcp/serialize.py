@@ -13,6 +13,7 @@ import re
 from datetime import date, datetime
 from decimal import Decimal, DecimalException
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from . import money
 
@@ -54,11 +55,18 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        # Whether the server masked a template env value; `value_set` says it instead.
                                        "TemplateEnv": {"masked"}}
 # An add-files upload's token authorises the upload together with the user's key; upload_asset puts it only inside
-# its opaque upload_id. A workspace file's statefulset name is how the platform finds a pod, not something to show.
+# its opaque upload_id. A workspace file's statefulset name is not a pod_name; asset_files shows it as
+# `source_pod_name` ("<statefulset>-0") instead.
 _DROP_BY_CLASS.update({"FileUploadBatch": {"upload_token"}, "BatchUploadTarget": {"url"},
                        "WorkspaceFile": {"source_statefulset"}})
 # A platform notice's revision and publish time are the console's bookkeeping, not part of what was announced.
 _DROP_BY_CLASS.update({"PlatformNotice": {"revision", "publish_at"}})
+# An inference key's value goes out only in the confirmed answer of create_inference_key and roll_inference_key, and
+# an inference request's signed download links only in the inference_requests detail.
+_DROP_BY_CLASS.update({"InferenceKeyCreated": {"inference_key"}, "InferenceRequest": {"download_urls"}})
+# Prices per million tokens (the shared catalog): 4 decimals, see money.per_million.
+_PER_MILLION_FIELDS_BY_CLASS: dict[str, set[str]] = {
+    "SharedModel": {"price_per_1m_input_tokens", "price_per_1m_output_tokens"}}
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}
@@ -97,6 +105,12 @@ _USD_FIELDS: dict[str, set[str]] = {
     "AssetStorage": {"price_per_gb_month", "estimated_monthly_cost"},
     "StorageEstimate": {"price_per_gb_month"},
     "TaskEstimate": {"max_cost"},
+    # A workspace's Billing page (its `price_per_hour` is hourly by name), what sharing a serving's idle capacity
+    # earned, and what referrals earned.
+    "WorkspaceBilling": {"weekly_avg_daily_cost", "serverless_shared_this_month", "shared_credited_this_month"},
+    "SharedAccrual": {"gross", "amount"},
+    "SharedEarningModel": {"gross"},
+    "Referral": {"total_earned", "reward_cap"},
 }
 # A pod estimate breakdown is a set of hourly amounts like {"gpu": "0.068", ...} — the console's Receipt shows 3 decimals per line too.
 _HOURLY_DICT_FIELDS = {("PodEstimate", "breakdown"), ("PodUpdateEstimate", "breakdown")}
@@ -155,11 +169,76 @@ def _estimate_scratch_disk(disk: Any, obj: Any) -> Any:
     return disk
 
 
+_DISCORD_WEBHOOK_HOSTS = frozenset({"discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"})
+# The fixed part of a Slack or Discord webhook URL; everything after it is the secret.
+_SECRET_WEBHOOK_PREFIXES = {"slack": "/services/", "discord": "/api/webhooks/"}
+
+
+def webhook_platform(url: str | None) -> str:
+    """"slack", "discord" or "generic" for a webhook URL, by the API server's rule."""
+    try:
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return "generic"
+    if host == "hooks.slack.com":
+        return "slack"
+    if host in _DISCORD_WEBHOOK_HOSTS and parts.path.startswith("/api/webhooks/"):
+        return "discord"
+    return "generic"
+
+
+# Discord also takes versioned webhook URLs (/api/v10/webhooks/<id>/<token>). The API server counts them as generic,
+# but their token is as much a secret, so they are masked and refused as arguments like the plain form.
+_DISCORD_SECRET_PATH = re.compile(r"^/api(?:/v\d+)?/webhooks/")
+
+
+def secret_webhook_prefix(url: str | None) -> str | None:
+    """The fixed part of a webhook URL whose rest is a secret (Slack, Discord, versioned Discord), or None."""
+    try:
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return None
+    if host == "hooks.slack.com":
+        slack = _SECRET_WEBHOOK_PREFIXES["slack"]
+        return slack if parts.path.startswith(slack) else "/"
+    if host in _DISCORD_WEBHOOK_HOSTS:
+        found = _DISCORD_SECRET_PATH.match(parts.path)
+        if found:
+            return found.group(0)
+    return None
+
+
+def mask_webhook_url(url: str | None) -> tuple[str, bool]:
+    """A webhook URL as the agent may see it, and whether anything was hidden: the path of a Slack or Discord URL after
+    its fixed prefix becomes "…", and the userinfo, query string and fragment of every URL are left out."""
+    url = url or ""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return ("…", bool(url))
+    if not host:
+        return ("…", bool(url)) if url else ("", False)
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc += f":{port}"
+    path = parts.path
+    prefix = secret_webhook_prefix(url)
+    if prefix is not None:
+        path = prefix + "…"
+    masked = urlunsplit((parts.scheme, netloc, path, "", ""))
+    return masked, masked != url
+
+
 def to_dict(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj).__name__
         usd_fields = _USD_FIELDS.get(cls, frozenset())
         hourly_fields = _HOURLY_FIELDS | _HOURLY_FIELDS_BY_CLASS.get(cls, set())
+        per_million_fields = _PER_MILLION_FIELDS_BY_CLASS.get(cls, frozenset())
         drop = _DROP_BY_CLASS.get(cls, frozenset())
         out: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
@@ -175,6 +254,9 @@ def to_dict(obj: Any) -> Any:
             elif f.name in usd_fields:
                 out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
                 out[f"{f.name}_display"] = money.usd(value)
+            elif f.name in per_million_fields:
+                out[f.name] = normalize_number(value) if isinstance(value, str) else to_dict(value)
+                out[f"{f.name}_display"] = money.per_million(value)
             elif (cls, f.name) in _HOURLY_DICT_FIELDS and isinstance(value, dict):
                 out[f.name] = {str(k): normalize_number(v) if isinstance(v, str) else to_dict(v)
                                for k, v in value.items()}
@@ -203,6 +285,13 @@ def to_dict(obj: Any) -> Any:
         # port's access keys) or unlocked (anyone with the URL). The SDK works it out; it isn't a dataclass field.
         if cls == "PodEndpoint":
             out["access"] = obj.access
+        # A webhook URL is shown masked everywhere (a Slack or Discord URL is itself a secret, and a query string or
+        # userinfo can carry one); the SDK keeps it whole.
+        if cls in ("WebhookEndpoint", "WebhookDelivery"):
+            out["url"], out["url_masked"] = mask_webhook_url(obj.url)
+            out["platform"] = obj.platform or webhook_platform(obj.url)
+        if cls == "WebhookEndpoint":
+            out["signed"] = out["platform"] == "generic"
         return out
     if isinstance(obj, dict):
         return {str(k): to_dict(v) for k, v in obj.items() if k not in _DROP}

@@ -44,6 +44,22 @@ DESTRUCTIVE |= {"delete_template"}
 # Deleting finished tasks and stopping a task's output upload.
 WRITE_TOOLS |= {"delete_tasks", "cancel_task_upload"}
 DESTRUCTIVE |= {"delete_tasks", "cancel_task_upload"}
+# Inference requests, webhooks and inference keys. A new webhook endpoint is another resource, and an inference key
+# call issues another key value every time, like an access key call.
+READ_TOOLS |= {"inference_requests", "webhooks", "inference_keys"}
+WRITE_TOOLS |= {"cancel_inference_request", "save_webhook", "delete_webhook", "create_inference_key",
+                "roll_inference_key", "revoke_inference_key"}
+DESTRUCTIVE |= {"delete_webhook", "revoke_inference_key"}
+NOT_IDEMPOTENT |= {"save_webhook", "create_inference_key", "roll_inference_key"}
+# Saved credentials and where task outputs go by default. A deleted token, key or login can't be brought back.
+WRITE_TOOLS |= {"delete_credential", "set_default_output_bucket"}
+DESTRUCTIVE |= {"delete_credential"}
+# A pod's history, members and invitations, and the account's display name. A removed member has to be invited again.
+READ_TOOLS |= {"pod_history"}
+WRITE_TOOLS |= {"remove_member", "update_account"}
+DESTRUCTIVE |= {"remove_member"}
+# A hosted GPU machine's fan curve.
+WRITE_TOOLS |= {"set_fan_curve"}
 # Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
 
@@ -60,7 +76,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 83
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 98
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -985,11 +1001,11 @@ async def test_server_instructions_cover_creating_a_workspace():
 
 # Tools whose `confirm` applies only to some calls; the server instructions name each exception.
 CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders", "set_port_lock",
-                      "set_port_preflight"}
+                      "set_port_preflight", "save_webhook", "import_asset"}
 # Writes without `confirm`, as in the console.
-NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
+NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "ssh_access",
                      "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload",
-                     "update_asset", "save_template"}
+                     "update_asset", "save_template", "cancel_inference_request", "update_account"}
 
 
 async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):
@@ -1012,7 +1028,8 @@ async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_clien
 
 # Writes whose SDK call keeps no operation record on the server: a repeated call runs again.
 UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command", "run_command",
-                    "upload_asset", "finish_upload", "create_access_key", "roll_access_key"}
+                    "upload_asset", "finish_upload", "create_access_key", "roll_access_key", "create_inference_key",
+                    "roll_inference_key"}
 
 
 def _sdk_calls_per_tool() -> dict[str, set[str]]:

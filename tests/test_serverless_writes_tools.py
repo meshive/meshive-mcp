@@ -452,3 +452,30 @@ async def test_task_counts_only_on_the_first_page(mcp_client, fake, with_key):
     fake["setup"] = lambda inst: setattr(inst, "task_counts", None)     # a server without the count
     old = _payload(await mcp_client.call_tool("tasks", {}))
     assert "counts" not in old and "items" in old
+
+
+# --- review fixes: "managed" output, sharing a model can't share ------------------------------------------------------
+
+async def test_deploy_takes_managed_output_like_the_other_tools(mcp_client, fake, with_key, serving_state):
+    prev = await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5, "price_cap_per_hour": 0.5,
+                                                         "workspace": WS, "output_bucket": "managed"})
+    assert not prev.is_error and _payload(prev)["confirmed"] is False and "output_bucket" not in _payload(prev)
+    await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5, "price_cap_per_hour": 0.5,
+                                                  "workspace": WS, "output_bucket": "managed", "confirm": True,
+                                                  "operation_id": OP})
+    assert _calls(fake, "deploy_serving")[0][2]["output_bucket_id"] is None
+
+
+async def test_deploy_sharing_preview_refuses_a_model_that_cant_share(mcp_client, fake, with_key, serving_state):
+    # Model 12 of the fake list is a workspace's own model, not an official one, so it can't share idle capacity.
+    body = _payload(await mcp_client.call_tool("deploy_serving", {"model_registration_id": 12,
+                                                                  "price_cap_per_hour": 0.5, "workspace": WS,
+                                                                  "share_idle_capacity": True}))
+    assert body["code"] == "sharing_not_available" and "sharing_consent_required" not in body
+    assert "without sharing" in body["next_step"]
+
+
+async def test_scale_sharing_preview_refuses_a_model_that_cant_share(mcp_client, fake, with_key, serving_state):
+    serving_state["serving"] = _serving(registrationId=12)
+    body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "share_idle_capacity": True}))
+    assert body["code"] == "sharing_not_available" and not _calls(fake, "scale_serving")

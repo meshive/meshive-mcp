@@ -6,8 +6,20 @@ latest release; self-hosted images are published to Docker Hub as `meshive/meshi
 ## v1.11.0
 
 Assets can be renamed, retyped and deleted, whole or file by file, and the assets tool shows more of what an asset
-is and where it came from. Built on the `meshive` Python SDK 1.11, which this release needs. There are 12 new tools;
+is and where it came from. Built on the `meshive` Python SDK 1.11, which this release needs. There are 27 new tools;
 existing tool names are unchanged.
+
+Inference requests can be listed and canceled, webhook endpoints listed, saved, tested and deleted, and inference
+keys listed, created, rolled and revoked; the shared model catalog is listed by `models`.
+
+Assets can be made from a connected bucket (a folder or picked objects) and files copied out of a bucket folder
+into Meshive storage; saved credentials show what uses them and can be deleted, and a workspace's default output
+bucket can be changed.
+
+A pod's state history, timeline and recent alerts can be read; a member can be removed and an invitation canceled;
+a workspace's daily charges and shared-serving earnings are in `billing_history`; and the account shows its referral
+link and email preferences and can change its display name. A hosted GPU machine's fan curve and live fan
+readings can be read, and its fan curve set.
 
 Files can be listed one by one, exported and added to a collection; assets can be added to and removed from a running
 pod; custom templates can be saved and deleted; servings can change their output bucket and idle-capacity sharing;
@@ -92,7 +104,120 @@ maintenance and access pod, and a template's full spec.
   preview shows how far the upload got; files already uploaded stay and become an asset. A task whose outputs aren't
   uploading fails with `nothing_to_cancel`.
 
+- `inference_requests` lists a workspace's inference requests (the queued jobs that async calls to a serving create),
+  newest first, filtered by `status` and `modality`, or shows one by `request_id` with `download_urls` for a succeeded
+  request's outputs (about an hour each). Each request has who sent it, the inference key it used, where its result
+  is stored, `error_code` and `error_message` (marked as untrusted) and `cancelable`. Only the newest 200 are read;
+  the list says `truncated` when it hit that.
+- `cancel_inference_request` cancels a queued request. It needs no `confirm` (nothing ran, and its reserved credit is
+  refunded). A request that isn't queued fails with `request_not_cancellable`, an unknown id with `request_not_found`.
+- `webhooks` shows a workspace's webhook endpoints (`kind="endpoints"`, or one with `webhook`), what was sent to them
+  (`kind="deliveries"`, filtered by `webhook` or `request_id`; one delivery's `request_body` with `delivery_id`) and
+  the event catalog (`kind="events"`). Webhook URLs are masked everywhere: a Slack or Discord URL's path becomes "…",
+  and the query string and userinfo of every URL are left out (`url_masked`).
+- `save_webhook` creates or changes a webhook endpoint (URL, event types, label, on/off) and can send it a test event
+  (`send_test=true`). Creating one, changing its URL, adding event types or turning it back on takes `confirm`;
+  renaming, removing event types, turning it off or only testing doesn't. A Slack or Discord URL, or a URL with a
+  user name or password, is refused before anything is sent (`secret_url_not_accepted`): those are secrets the user
+  adds in the console. Other new errors: `invalid_webhook_url`, `webhook_disabled`, `webhook_not_found`, and `delivery_not_found` for an
+  unknown `delivery_id`.
+- `delete_webhook` deletes a webhook endpoint and takes `confirm`; its delivery history stays.
+- `inference_keys` lists a workspace's inference API keys (never their values): your own, or every key of the
+  workspace for an admin or billing member, with who made each one.
+- `create_inference_key` and `roll_inference_key` create a key or replace one's value and take `confirm`. The value
+  is in the confirmed answer only (`inference_key`), like a port access key's. A key doesn't expire unless
+  `expires_in_days` is given, and it keeps working after the Meshive API key used to make it is revoked or expires;
+  the previews and the confirmed answers of both tools say so (a rolled key keeps its expiry). A roll gives the key a
+  new id, and its old value stops working at once. Both previews refuse a member who isn't an admin or billing member
+  (`forbidden`). An unknown or already rolled key id fails with `inference_key_not_found`, and an answer that lost
+  the value with `inference_key_value_missing`. Neither keeps an
+  operation record: a call without a clear answer fails with `inference_key_outcome_unknown`, whose `next_step` says
+  to read `inference_keys` instead of calling again. Only the key's creator can roll it
+  (`inference_key_not_rollable`).
+- `revoke_inference_key` revokes a key and takes `confirm`: your own, or any key of the workspace as an admin or
+  billing member.
+- `delete_credential` deletes a saved Hugging Face token, CivitAI key or container registry login, or removes a
+  bucket connection (`kind` hf_token, civitai_key, registry_login or bucket; `credential_id`; `workspace` is required
+  and must be the id on confirm), and takes `confirm`. The preview shows what uses it: the assets linked with a token
+  or key and the pods using them, the templates, pods and tasks of a registry login, or a bucket's registered assets,
+  running pods and tasks and whether task outputs go there by default (then with the Meshive storage price they go
+  back to). Removing a bucket connection deletes nothing in the bucket; files registered from it stay readable by
+  pods and tasks. An id that isn't there fails with `credential_not_found`.
+- `set_default_output_bucket` chooses where a workspace's task outputs go by default: a verified `bucket_id` from
+  `buckets`, or `"managed"` (Meshive storage, whose price the preview names). It takes `confirm`; `workspace` is
+  required and must be the id on confirm. A call that changes nothing answers `changed: false` without a preview; an
+  unverified bucket fails with `bucket_not_verified` before the preview.
+- `pod_history` shows a pod's history like the console's State history tab, newest first: the container exits the
+  system detected (`cause`, a fixed `summary`, `oom_kind` ram or vram) and the actions taken on it (`action`,
+  `action_status`, `action_log`); `kind` "system" or "action" keeps one. `include_timeline` adds how long the pod was
+  running, waiting and terminated in a `since`/`until` window. Without `pod` it lists recent alerts across the
+  workspace's pods, or every workspace the user manages with `workspace="all"` (`unread_only`; the newest 200,
+  `truncated`). It needs the admin or billing role (`forbidden` says that `pods` still shows the last exits). Each
+  entry's `message` is what the container printed and is marked as untrusted.
+- `remove_member` removes a member (`user`, their email) or cancels an invitation (`invite`, an `invite_id`) and
+  takes `confirm`; `workspace` is required and must be the id on confirm. The preview names the member's role and the
+  keys that keep working after the removal: their inference API keys and the port access keys they created. You
+  can't remove yourself, the only admin or the billing owner: `member_not_removable` says which, before any preview.
+  An unknown invitation fails with `invite_not_found`. Inviting people and changing roles stay in the console.
+- `update_account` changes the account's display name (`username`, 1-64 characters). It needs no `confirm`; the
+  current name changes nothing (`changed: false`), and a name the server doesn't allow fails with
+  `invalid_argument`.
+- `set_fan_curve` sets a hosted GPU machine's fan curve, like the console's Fan curve tab: `mode` "default"
+  (Meshive's curve), "custom" (`points`, [temperature °C, fan %] pairs) or "driver" (the NVIDIA driver controls
+  the fans). It takes `confirm`: the preview has the server check the curve and shows the current and the new
+  curve, how many client pods run on the machine and warnings (a driver curve, a custom curve, an offline
+  machine); a curve the server refuses fails there with `invalid_fan_curve`, and a machine without GPUs with
+  `not_gpu_machine`. A saved curve the machine couldn't take at once answers `applied: false`: it picks it up
+  within about 5 minutes or when it reconnects.
+
 ### Changed
+
+- `machines` takes `include_fan` (one GPU machine only; `invalid_argument` without `machine`): `fan_curve` (mode,
+  the points the machine follows, the saved custom and the default curve, revision and the `limits` a custom curve
+  must keep) and `fan_status`, each GPU's temperature and fans read from the machine now, whose errors are machine
+  text. While the machine is offline or its agent doesn't answer, `fan_status` is null with `fan_status_error`
+  (`machine_offline` or `fan_status_unavailable`). A machine that isn't a GPU machine gets null with `fan_note`.
+- `delete_workspace` and the `workspace_not_empty` error name the tools for the last blockers: `delete_credential`
+  for saved credentials, `delete_webhook` for webhooks, `revoke_inference_key` for inference keys (an admin can
+  revoke every key of the workspace) and `remove_member` for members and invitations.
+- `account`'s note on API keys names `inference_keys` for a workspace's inference keys, and `buckets` names
+  `import_asset` among the tools that take a `bucket_id`.
+- The server instructions name a machine's fan errors among the text from hosts.
+- `workspaces` with a workspace adds `invites` (the invitations of the last 24 hours: `invite_id`, `email`, `role`,
+  `seen`, `accepted`; `invites_note` when they can't be read) and an `email` on every member, the value
+  `remove_member` takes.
+- `billing_history` has two more kinds, both with `workspace`: `"workspace"` lists the workspace's charges per day
+  (pod, storage, serverless, task, asset, `total`) newest first with a `summary` (billing owner, hourly price, 7-day
+  daily average, this month's shared-model spend and sharing credits), and `"shared_earnings"` lists what sharing a
+  serving's idle capacity earned, per settlement and per model (`models`).
+- `account` takes `include_referral` (the referral link, sign-ups, earnings and the reward `rule`; the first look
+  creates the account's referral code) and `include_email_preferences` (whether product update mail is on; it is
+  changed in the console). A server without them answers that section with null and a note.
+- `asset_files` with an asset linked from a bucket folder (assets `reference.mode` "prefix") lists the bucket
+  objects under it one folder level at a time (`prefix` = a folder inside the asset; items `key`, `path`,
+  `size_bytes`, `last_modified`, `ext`; `folders`; an opaque cursor). `paths`, `media_kind` and `file_type` are
+  refused there.
+- `import_asset` takes `source="bucket:<bucket_id>/<folder>"`: without `paths` the folder is linked as one asset that
+  can be browsed and copied from but can't be a pod's or task's `input_assets` itself; with `paths` (object keys from
+  `buckets`, up to 500) and `name`, just those files, as an asset that can. Nothing is copied and it needs no `confirm`. New errors: `bucket_objects_not_found`,
+  `bucket_prefix_empty`.
+- `import_asset` with `source` an `"asset_..."` linked from a bucket folder copies the files `paths` names (`path`
+  values from `asset_files`, taken exactly whatever characters they hold, or globs when an entry has `*` or `?`;
+  brackets are literal; none = all) into a new asset in Meshive storage. This is the one case of
+  `import_asset` that takes `confirm`: the preview shows the file count, size, sample paths and the estimated monthly
+  storage cost (`estimated_monthly_cost` with its `_display`); a selection that can't be copied (also over the
+  200 GiB per copy and 80 GiB per file limits) fails with `subset_not_fetchable`. Exact paths in a folder with more
+  files than the preview can read fail with `bucket_objects_unchecked` (not "not found"); the console's file picker
+  copies those. The copy runs in the background.
+- `source_credentials` takes `kind` and `credential_id`: what uses one credential (the assets linked with a token or
+  key and how many pods use each, or the custom templates of a registry login and its active pods and tasks).
+- `models` takes `source="shared"`: the shared catalog of models other workspaces opened up, billed per million
+  tokens (`price_per_1m_input_tokens`, `price_per_1m_output_tokens`, with a 4-decimal `_display`), with `base_url`
+  and each model's `model` name (`shared/<api_model_id>`) to call it with an inference key.
+- The server instructions name the inference key tools among the tools that return a secret and the exception to
+  `operation_status`, `save_webhook` among the tools whose `confirm` applies to some calls only, and webhook request
+  bodies among the text that can come from other people. Some of their sentences are shorter, to stay inside the
+  4096 characters clients keep.
 
 - `assets` takes `collection` (true = folder assets, false = single files) and `include_catalog`. Assets that a
   model set or catalog import added are hidden by default; the first page counts them in `catalog_hidden` (0 with
@@ -261,6 +386,44 @@ maintenance and access pod, and a template's full spec.
   GPU and the hourly rate they started with, so the cost can stay above the new cap. The answer to a call that
   lowers the cap now says so, and the description says that only a smaller replica range or turning autoscale off
   removes running replicas.
+- **Retry advice only where an outcome is open.** The "reuse this operation_id and the same arguments" advice was
+  added to every write tool's error, also where nothing was sent (a preview, a local check, a missing
+  `operation_id`) or where the server refused the write for certain (a 4xx, after which the operation_id is
+  released), so it contradicted "fix the arguments". It is now added only when a write was sent and its outcome is
+  open (a timeout, a 5xx, a 429, an operation still pending). An `operation_id` already used for a request with
+  other arguments (`Idempotency-Key Reused`) is `operation_id_reused`, on every write tool including the template
+  tools (before: `invalid_request` or `invalid_argument`), and its `next_step` says to look the earlier operation up
+  with `operation_status` first. A write the server keeps no operation record of (`run_command`, `ssh_access`,
+  `connect_storage`, the upload steps and the like) no longer points at `operation_status` after a timeout or 5xx.
+- A confirmed create that no machine can take any more ("No available cluster") is `no_capacity`, not
+  `invalid_request`; `download_links` on a linked asset is `linked_asset_not_downloadable`.
+- `delete_template` and `save_template` on an official template answer `official_template` (also on confirm, where
+  the server answers like a missing id); `templates(template=<custom id>)` without `workspace` says to pass it.
+- `export_asset` to Hugging Face checks `hf_token_id` against the workspace's saved tokens in the preview.
+- `asset_files` kind views carry `source_pod_name`, which the `pod` filter takes back (a deleted pod's display name
+  doesn't find it).
+- `deploy_serving` takes `output_bucket="managed"` like `scale_serving` and the task tools; the `deploy_serving` and
+  `scale_serving` previews refuse turning sharing on for a model that can't share idle capacity
+  (`sharing_not_available`) instead of asking for consent.
+- `detect_model(asset=...)` answers `status: "unsupported"` with a `detail` for an asset with no model weights.
+- `update_pod remove_input_assets` says that an asset added while the pod ran may leave its files in the pod until
+  it is re-created (the preview adds that `remove_pod_asset` deletes them now, before the edit), and `remove_pod_asset` / `pods include_assets` describe
+  `origin` as how a row was placed, not a guarantee. Sizes in preview questions are never "0 MiB".
+- The `finish_upload` description says that a repeated finish returns the same success; only cancelling a finished
+  add of files answers `upload_already_completed`. Delete previews round `monthly_storage_saving` to 6 decimals.
+- `delete_webhook` checks on confirm that the endpoint is in `workspace` (the server deletes by id alone);
+  `save_webhook` refuses a URL that is only the masked form of the stored one (`masked_url_given`), which would drop
+  its hidden query string; versioned Discord webhook URLs (`/api/v10/webhooks/...`) are masked and refused as
+  arguments like the plain form.
+- `roll_inference_key` refuses an expired key in the preview and maps the server's refusal to
+  `inference_key_expired`, pointing at `create_inference_key`.
+- `remove_member`: the confirmed refusals "Not a Member" and "Member Not Removable" are `member_not_removable`; a
+  viewer is refused before the invitation preview; a replayed invitation cancel names the email from the answer. A
+  workspace the caller isn't in reads as `unknown_workspace` on the admin-gated routes.
+- `update_account` with an `operation_id` always sends the rename, so a retry after an unclear answer gets the
+  server's replay instead of "nothing was changed".
+- `machines include_fan` and `set_fan_curve` against an API server without fan curve routes keep the machine detail
+  or answer `fan_curve_not_supported`, not `not_found`. The `account` note names the inference key tools.
 
 ## v1.10.0
 

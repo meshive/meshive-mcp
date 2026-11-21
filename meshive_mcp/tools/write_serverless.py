@@ -77,6 +77,24 @@ def _check_bucket_arg(output_bucket: Any) -> None:
         raise invalid_argument('`output_bucket` is a bucket_id from buckets, or "managed".')
 
 
+async def _sharing_refusal(client: Any, ws: str | None, registration_id: int | None, what: str) -> None:
+    """Refuse turning sharing on for a model that can't share idle capacity, before the user is asked to agree to
+    terms the server would then refuse ("Sharing Not Available"). A model the list doesn't show is left to the server."""
+    if not ws or registration_id is None:
+        return
+    try:
+        models = await call(client.list_models, ws)
+    except ToolError:
+        return
+    model = next((m for m in models if m.registration_id == registration_id), None)
+    if model is not None and not model.can_share_idle_capacity:
+        raise tool_error("sharing_not_available",
+                         f"{what} can't share idle capacity: sharing is only for official text models served with "
+                         "vLLM.",
+                         "Nothing was changed. Leave share_idle_capacity out (deploy or scale without sharing); "
+                         "don't ask the user to agree to the sharing terms for this model.")
+
+
 async def _bucket(client: Any, ws: str, bucket_id: int) -> Any:
     """The connected bucket with this id in the workspace (its label goes in a preview)."""
     found = next((c for c in await call(client.list_storage_credentials, ws) if c.credential_id == bucket_id), None)
@@ -179,9 +197,9 @@ def register(server: MCPServer) -> None:
                              workspace: str | None = None, min_replicas: int = 1, max_replicas: int = 3,
                              autoscale: bool = True, max_context_tokens: int | None = None,
                              share_idle_capacity: bool = False,
-                             output_bucket: Annotated[int | None, Field(description=(
-                                 "A bucket_id from buckets for an image or video model's outputs; omit for Meshive "
-                                 "storage."))] = None,
+                             output_bucket: Annotated[int | Literal["managed"] | None, Field(description=(
+                                 "A bucket_id from buckets for an image or video model's outputs; omit it or pass "
+                                 '"managed" for Meshive storage.'))] = None,
                              sharing_consent: bool = False,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Deploy an already-registered model as a serverless serving (inference endpoint). Billing runs per replica per hour,
@@ -193,6 +211,9 @@ def register(server: MCPServer) -> None:
         share_idle_capacity=true lets other workspaces use the serving's idle capacity; it also needs
         sharing_consent=true, which you may set only after the user agreed to the terms the summary lists."""
         _check_bucket_arg(output_bucket)
+        if output_bucket == "managed":
+            # Meshive storage is what a deploy without a bucket uses.
+            output_bucket = None
         kwargs = dict(price_cap_per_hour=price_cap_per_hour, min_replicas=min_replicas, max_replicas=max_replicas,
                       autoscale=autoscale, max_context_tokens=max_context_tokens, share_idle_capacity=share_idle_capacity,
                       output_bucket_id=output_bucket)
@@ -223,6 +244,7 @@ def register(server: MCPServer) -> None:
                     question += (" No GPU that fits this model is free at or under this cap right now; replicas wait "
                                  "until one is" + (f" (suggested cap: {suggested}/hour)." if suggested else "."))
                 if sharing is not None:
+                    await _sharing_refusal(client, ws, model_registration_id, f"Model #{model_registration_id}")
                     payload["sharing"] = sharing
                     payload["sharing_consent_required"] = not sharing_consent
                     question += " Idle-capacity sharing is turned on: " + " ".join(SHARING_CONSENT)
@@ -326,6 +348,9 @@ def register(server: MCPServer) -> None:
             raises_cost = current.scale_raises_cost(**requested)
             sharing_on = current.sharing_needs_consent(share_idle_capacity)
             sharing = _sharing(current.sharing_state != "ready") if sharing_on else None
+            if not confirm and sharing_on:
+                await _sharing_refusal(client, current.namespace_name, current.registration_id,
+                                       f"Serving #{serving}'s model")
             if not confirm and (raises_cost or sharing_on):
                 questions = []
                 if raises_cost:

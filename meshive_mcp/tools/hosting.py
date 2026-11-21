@@ -1,19 +1,21 @@
 """Host tools — machines a user hosts on Meshive: history, messages, maintenance windows, listing, setup retries,
-removal, machine logins and install commands.
+fan curves, removal, machine logins and install commands.
 
-Reads need a read key, everything else the write scope. Scheduling and changing maintenance, unlisting, removing a
-machine, sending a message, revealing a login and issuing an install command take `confirm`: with confirm=false the
-tool only says what would happen and changes nothing. Listing a machine, retrying setup and marking messages read
-need no confirmation, as in the console. A call with confirm=true runs as sent; the server can't tell whether the
+Reads need a read key, everything else the write scope. Scheduling and changing maintenance, unlisting, setting a fan
+curve, removing a machine, sending a message, revealing a login and issuing an install command take `confirm`: with
+confirm=false the tool only says what would happen and changes nothing. Listing a machine, retrying setup and marking
+messages read need no confirmation, as in the console. A call with confirm=true runs as sent; the server can't tell whether the
 user agreed.
 """
 from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
 from ..client import meshive_client
 from ..errors import NEXT_STEP_LISTING_REFUSED, invalid_argument, tool_error
@@ -21,6 +23,7 @@ from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_target
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview
+from .machines import FAN_GPU_ONLY_NOTE, FAN_UNSUPPORTED_NOTE, fan_curve_view, fan_unsupported
 
 _HISTORY_KINDS = ("downtime", "stress_test")
 _CHECKS = ("setup", "ports")
@@ -136,6 +139,33 @@ def _using_workspaces(detail: Any) -> list[str]:
     clients = detail.clients
     return sorted({p.workspace for p in clients.pods if p.workspace and _active(p.status)}
                   | {s.workspace for s in clients.storages if s.workspace and _active(s.status)})
+
+
+_FAN_WARNINGS = {
+    "driver": "Meshive stops controlling these fans; the NVIDIA driver or the host's own tool takes over.",
+    "custom": "Running GPUs hotter than the default curve can throttle the pods on it.",
+}
+_FAN_OFFLINE = "The machine is offline; it picks up the curve when it reconnects."
+
+
+async def _fan_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """A fan curve call; an API server without the fan curve routes reads as such, not as a wrong machine id."""
+    try:
+        return await call(fn, *args, **kwargs)
+    except ToolError as exc:
+        if not fan_unsupported(exc):
+            raise
+        raise tool_error("fan_curve_not_supported", FAN_UNSUPPORTED_NOTE,
+                         "Nothing was changed. Ask the user to set the fan curve in the console; don't retry here.",
+                         machine_id=args[0] if args else None) from exc.__cause__
+
+
+def _fan_points_text(mode: str, points: list[tuple[int, int]]) -> str:
+    """What a curve does, for the question: its points, or who drives the fans."""
+    if mode == "driver":
+        return "the NVIDIA driver controls the fans"
+    text = ", ".join(f"{t} °C {p}%" for t, p in points)
+    return f"Meshive's default curve: {text}" if mode == "default" else text
 
 
 def _choice(value: str | None, allowed: tuple[str, ...], name: str, default: str) -> str:
@@ -499,6 +529,63 @@ def register(server: MCPServer) -> None:
         out = to_dict(result)
         out["next_step"] = ("Unlisted. Pods running on it keep running; list it again with set_machine_listing "
                             "listed=true.")
+        return out
+
+    @meshive_tool(server, "set_fan_curve", title="Set Fan Curve", annotations=MUTATE)
+    async def set_fan_curve(
+            ctx: Context[Any, Any], machine: str,
+            mode: Annotated[Literal["default", "custom", "driver"], Field(description=(
+                '"default" (Meshive\'s curve), "custom" (your `points`) or "driver" (the NVIDIA driver controls the '
+                "fans)."))],
+            points: Annotated[list[list[int]] | None, Field(description=(
+                "[[temperature_c, fan_percent], ...]: required for custom; 2 to 8 points, temperatures rising, fan % "
+                "never falling, the last one 100% at or below `fan_curve.limits.max_full_speed_temperature`. With "
+                "another mode they are kept as the saved custom curve."))] = None,
+            confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
+        """Set a hosted GPU machine's fan curve, like the console's Fan curve tab. `machine` is the machine_id from the
+        machines tool. `mode` "default" uses Meshive's curve, "custom" uses your `points`, and "driver" stops Meshive
+        from controlling the fans so that the NVIDIA driver (or the host's own fan tool) does. `points` are
+        [temperature °C, fan %] pairs: 2 to 8 of them, temperatures rising, fan % never falling, and the last one 100%
+        at or below the limit that machines include_fan=true shows. A custom curve without points is refused.
+        It changes how the GPUs that run other users' pods are cooled, so confirm=false (default) only checks the curve
+        with the server and shows the current and the new curve and how many client pods run on the machine; nothing
+        is saved (invalid_fan_curve says what to fix). Call again with the same arguments and confirm=true after the
+        user agreed.
+        The curve is saved even when the machine can't take it right now: `applied` false means the machine picks it
+        up within about 5 minutes or when it reconnects. Don't call again for that; check with machines
+        include_fan=true."""
+        async with meshive_client(ctx) as client:
+            if not confirm:
+                detail = await call(client.get_machine, machine)
+                if detail.machine_type != "gpu":
+                    raise tool_error("not_gpu_machine", FAN_GPU_ONLY_NOTE,
+                                     "Fan curves exist only for GPU machines. Don't retry.", machine_id=machine)
+                current = fan_curve_view(await _fan_call(client.get_fan_curve, machine))
+                estimate = await _fan_call(client.estimate_fan_curve, machine, mode=mode, points=points)
+                running = len([p for p in detail.clients.pods if (p.status or "").lower() == "running"])
+                warnings = [_FAN_WARNINGS[mode]] if mode in _FAN_WARNINGS else []
+                if estimate.agent_reachable is False:
+                    warnings.append(_FAN_OFFLINE)
+                question = (f"Set the fan curve of '{detail.name or machine}' to {mode} "
+                            f"({_fan_points_text(mode, estimate.effective_points)})? {running} client pod(s) run on "
+                            "it now.")
+                if warnings:
+                    question += " " + " ".join(warnings)
+                return preview("set_fan_curve", {
+                    "machine": machine, "machine_name": detail.name,
+                    "current": {k: current[k] for k in ("mode", "effective_points", "revision")},
+                    "after": {"mode": estimate.mode, "effective_points": fan_curve_view(estimate)["effective_points"]},
+                    "running_client_pods": running, "machine_online": estimate.agent_reachable,
+                    "warnings": warnings}, question)
+            result = await _fan_call(client.set_fan_curve, machine, mode=mode, points=points)
+        curve = fan_curve_view(result)
+        out = {"machine_id": result.machine_id or machine, "mode": curve["mode"],
+               "effective_points": curve["effective_points"], "custom_points": curve["custom_points"],
+               "revision": curve["revision"], "updated_at": curve["updated_at"], "applied": result.applied,
+               "apply_error": result.apply_error}
+        out["next_step"] = ("Applied on the machine now." if result.applied else
+                            "Saved. The machine picks it up within about 5 minutes or when it reconnects; don't call "
+                            "again. Check later with machines include_fan=true.")
         return out
 
     @meshive_tool(server, "retry_machine_setup", title="Retry Machine Setup", annotations=MUTATE)

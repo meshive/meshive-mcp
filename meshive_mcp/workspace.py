@@ -56,6 +56,8 @@ class WorkspaceTargets(list[str]):
     def __init__(self, ids: list[str], workspaces: list[Workspace]):
         super().__init__(ids)
         self.names = {w.namespace_name: w.workspace_name for w in workspaces}
+        # The caller's role in each workspace, when the server says it.
+        self.roles = {w.namespace_name: getattr(w, "member_role", None) for w in workspaces}
 
 
 def in_workspace(item: Any, workspace: str, targets: WorkspaceTargets) -> dict[str, Any]:

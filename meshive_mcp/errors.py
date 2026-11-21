@@ -59,16 +59,21 @@ NEXT_STEP_NOT_FOUND = (
     "Verify the identifier with the matching list tool (pods, storages, templates, ...). "
     "Do not guess identifiers."
 )
-NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a write, check operation_status first; "
-                        "reuse the original operation_id and arguments if retrying. Never create a new operation for an unknown outcome. "
-                        "If calls keep failing, the account tool's platform_notices shows whether Meshive announced an "
-                        "incident.")
+# The write half of NEXT_STEP_UNAVAILABLE. A write the server keeps no operation record of has nothing for
+# operation_status to find, so the tool wrapper takes this sentence out and says that a retry runs the call again.
+UNAVAILABLE_WRITE_STEP = ("For a write, check operation_status first; reuse the original operation_id and arguments if "
+                          "retrying. Never create a new operation for an unknown outcome. ")
+NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. " + UNAVAILABLE_WRITE_STEP +
+                         "If calls keep failing, the account tool's platform_notices shows whether Meshive announced an "
+                         "incident.")
 # delete_workspace, on its preview and on the server's own refusal. A key can only delete an empty workspace, on purpose.
 NEXT_STEP_WORKSPACE_NOT_EMPTY = (
     "Nothing was deleted. Tell the user what `blockers` says is left, and clear nothing on your own. Pods, storage, "
     "servings and custom models can be deleted with their tools, assets with delete_asset, custom templates with "
     "delete_template, running tasks stopped with stop_task and finished ones deleted with delete_tasks, but only if "
-    "the user asks. Saved credentials, webhooks, inference keys, members and invitations are managed in the console. `pods` also counts serving replicas, which go with "
+    "the user asks. The same goes for saved credentials (delete_credential), webhooks (delete_webhook), inference keys "
+    "(revoke_inference_key: an admin can revoke every key of the workspace, inference_keys lists them), and members "
+    "and open invitations (remove_member). `pods` also counts serving replicas, which go with "
     "their serving, and "
     "system pods, which go with their storage volume (delete_storage); the pods tool lists those with "
     "include_system=true. A volume the storages tool still shows stays and bills until it is deleted; only a deleted "
@@ -253,6 +258,9 @@ _CONFLICT_CODES = {
     "pod not placed": ("pod_not_placed", "Wait until the pod is placed, then try again."),
     "not retryable": ("not_retryable", "Only a failed setup step can be retried, and the machine's current step isn't "
                                        "failed. Check its state with the machines tool before retrying."),
+    # machines include_fan: live fan readings need the machine online.
+    "machine offline": ("machine_offline", "The machine is offline; live readings come back when it reconnects. Check "
+                                           "its state with the machines tool."),
 }
 
 _MAINTENANCE_STATE = ("Nothing was changed: the maintenance window or the machine isn't in a state that allows this (the "
@@ -280,6 +288,25 @@ _WORKSPACE_NOT_READY = ("No pod or task was created. Call the `workspaces` tool 
 # The kind of 400 is told apart by detail.title too. Extra info (allowed, keys, port, name, maxLength, templatePorts,
 # attached, paths, currentSizeGb, failed, available) is passed on.
 _BAD_REQUEST_CODES = {
+    # The operation_id was already used for a request with other arguments, which may have run. Neither "fix the
+    # arguments" nor "retry with the same operation_id" helps: that earlier operation has to be looked up first.
+    "idempotency-key reused": ("operation_id_reused",
+                               "Nothing new was done: this operation_id was already used for a request with different "
+                               "arguments, which may have run. Call operation_status with this operation_id and "
+                               "operation_lookup and tell the user what it shows before doing anything else. Don't "
+                               "change the arguments to get past this. Only if the user wants this different action "
+                               "too, call again with a new operation_id."),
+    # A confirmed create (pod, storage, workspace) when nothing can take it now, e.g. the machine filled up after the
+    # estimate. The arguments were valid, so fixing them is not the advice.
+    "no available cluster": ("no_capacity",
+                             "Nothing was created: no machine can take this right now (what the estimate showed may "
+                             "have been taken meanwhile). Estimate again and suggest other hardware or a smaller "
+                             "request, or trying later. Do not resend the same request blindly."),
+    # download_links on an asset linked from Hugging Face, CivitAI or a URL: Meshive stores none of its files.
+    "linked asset not downloadable": ("linked_asset_not_downloadable",
+                                      "This asset is linked from its source (its `source` in the assets tool), so "
+                                      "Meshive keeps no copy to link to. Download the files from that source instead; "
+                                      "don't retry download_links for it."),
     "local storage not attachable": ("local_storage_not_attachable",
                                      "That storage is local to one machine, and a new pod can only attach network "
                                      "storage. Attach network storage in `volumes`, or create new local storage with the "
@@ -451,6 +478,11 @@ _BAD_REQUEST_CODES = {
                             "Nothing was sent. Fix what the message says (for example a blank or too long title or "
                             "text, or nobody using the machine for to=\"all\"), then show the user the new message "
                             "before sending it."),
+    # machines include_fan, set_fan_curve.
+    "not a gpu machine": ("not_gpu_machine", "Fan curves exist only for GPU machines. Don't retry."),
+    "invalid fan curve": ("invalid_fan_curve",
+                          "Nothing was saved. Fix the points as the message says (see `fan_curve.limits` in machines "
+                          "include_fan=true) and preview again."),
     # --- port locks and access keys ---
     "not a public endpoint": ("port_not_public", NEXT_STEP_PORT_NOT_PUBLIC),
     "endpoint not locked": ("port_not_locked", NEXT_STEP_PORT_NOT_LOCKED),
@@ -682,6 +714,9 @@ def template_error(exc: BaseException | None) -> ToolError | None:
         return tool_error("registry_credential_unusable", exc.message, NEXT_STEP_REGISTRY_UNUSABLE)
     found = _TEMPLATE_CODES.get(title)
     if found is None:
+        if title == "idempotency-key reused":
+            # Not the template's settings: the general reading (operation_id_reused) applies.
+            return None
         if exc.status_code == 422:
             # The request model's own check (an env name the platform reserves, a field too long, ...).
             return invalid_argument(exc.message or "The server rejected the template's settings.")
@@ -789,7 +824,9 @@ def translate(exc: BaseException) -> ToolError:
         low = msg.lower()
         if "scope" in low:
             return tool_error("write_scope_required", msg, NEXT_STEP_WRITE_SCOPE)
-        if "member of workspace" in low or "not a member" in low:
+        # "You are not member of this workspace" is the SDK routes' admin gate for a workspace the caller isn't in.
+        if ("member of workspace" in low or "not a member" in low or "not member of" in low
+                or (exc.title or "").strip().lower() == "not a member"):
             # The backend answers a nonexistent or someone else's workspace id with 403 — for the model that's a "wrong id".
             return tool_error("unknown_workspace", msg,
                               "The workspace id is wrong or not the user's. Call the workspaces tool and use "
@@ -835,6 +872,9 @@ def translate(exc: BaseException) -> ToolError:
                               "Check the current state with the matching list tool before retrying.")
         if status in (400, 422):
             return _bad_request(exc)
+        if status == 503 and (exc.title or "").strip().lower() == "fan status unavailable":
+            # The machine's agent didn't answer a live fan reading; Meshive itself is up.
+            return tool_error("fan_status_unavailable", msg, "Try again in a minute; the node agent didn't answer.")
         if status == 503:
             return tool_error("temporarily_unavailable", msg, NEXT_STEP_UNAVAILABLE.format(retry_after=30),
                               retry_after=30)

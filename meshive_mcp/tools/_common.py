@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from .. import money
-from ..errors import translate, tool_error
+from ..errors import UNAVAILABLE_WRITE_STEP, translate, tool_error
 
 T = TypeVar("T")
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -33,12 +33,13 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # whole asset, too large, empty or changed since the preview is previewed again, not sent again. A serving replica
 # whose log can't be read names the replicas to read instead, or says to wait. An invalid argument is refused before
 # anything runs (locally, or by a server 400 that releases the operation_id), so the fix is a different argument, not
-# the same arguments again.
+# the same arguments again. An operation_id already bound to other arguments is looked up with operation_status
+# first, not sent again.
 _OWN_RETRY_ADVICE_CODES = {"invalid_argument", "asset_in_use", "asset_frozen", "upload_in_progress", "asset_not_editable",
                            "asset_type_locked", "whole_asset_delete_required", "selection_changed", "too_many_files",
                            "no_files_matched", "replica_not_found", "replica_logs_expired", "replica_logs_unavailable",
                            "endpoint_lock_unavailable", "port_lock_change_failed", "access_key_outcome_unknown",
-                           "access_key_value_missing",
+                           "access_key_value_missing", "operation_id_reused",
                            "name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
                            "hf_token_required", "hf_license_not_accepted", "hf_access_not_approved",
@@ -77,6 +78,28 @@ _OWN_RETRY_ADVICE_CODES |= {"host_not_reachable", "image_not_found", "registry_c
 _OWN_RETRY_ADVICE_CODES |= {"sharing_not_available", "sharing_consent_required", "output_bucket_not_found",
                             "output_bucket_not_verified", "serving_not_changeable", "not_serving_owner",
                             "modality_required", "model_not_found", "masked_secret_value", "nothing_to_cancel"}
+# Inference requests, webhooks and inference keys: a request that isn't queued any more, a Slack or Discord URL (a
+# secret) or a URL the server refuses, a turned-off endpoint, a request, endpoint, delivery or key id that isn't there,
+# a key only its creator can roll, an expired key (a new one is made instead), and an inference key call without a
+# clear answer, or whose answer lost the value (calling again issues another value), each say what to do instead of
+# calling again.
+_OWN_RETRY_ADVICE_CODES |= {"request_not_cancellable", "request_not_found", "secret_url_not_accepted",
+                            "invalid_webhook_url", "webhook_disabled", "webhook_not_found", "delivery_not_found",
+                            "inference_key_outcome_unknown", "inference_key_value_missing", "inference_key_not_found",
+                            "inference_key_not_rollable", "inference_key_expired"}
+# Assets from a bucket and saved credentials: keys or a folder that aren't in the bucket, a copy out of a bucket folder
+# that can't be done as asked, a credential id that isn't there, and a bucket that isn't verified each say what has to
+# change first.
+_OWN_RETRY_ADVICE_CODES |= {"bucket_objects_not_found", "bucket_prefix_empty", "subset_not_fetchable",
+                            "credential_not_found", "bucket_not_verified"}
+# Members and invitations: a member who can't be removed (yourself, the only admin, the billing owner, not a member)
+# and an invitation that isn't there each say what to do instead of calling again.
+_OWN_RETRY_ADVICE_CODES |= {"member_not_removable", "invite_not_found"}
+# Fan curves: a curve the server refuses is fixed and previewed again, and a machine without GPUs has no fan curve.
+_OWN_RETRY_ADVICE_CODES |= {"invalid_fan_curve", "not_gpu_machine"}
+# A webhook URL that is only the masked form of the stored one, and an API server without fan curve routes, each say
+# what to do instead of calling again.
+_OWN_RETRY_ADVICE_CODES |= {"masked_url_given", "fan_curve_not_supported"}
 _operation: ContextVar[dict | None] = ContextVar("mcp_operation", default=None)
 # SDK methods that take an Idempotency-Key: the server keeps an operation record for them, so a retry with the same
 # operation_id gets the first answer back and operation_status can look the operation up.
@@ -97,6 +120,17 @@ _WRITES |= {"add_pod_asset", "remove_pod_asset"}
 _WRITES |= {"message_host", "mark_workspace_messages_read", "create_template", "update_template", "delete_template"}
 # Deleting finished tasks, and stopping a task's output upload.
 _WRITES |= {"delete_tasks", "discard_task_outputs"}
+# Canceling a queued inference request, saving, testing and deleting a webhook endpoint, and revoking an inference key.
+_WRITES |= {"cancel_inference_request", "create_webhook", "update_webhook", "test_webhook", "delete_webhook",
+            "revoke_inference_key"}
+# Making assets from a connected bucket, copying files out of a bucket folder, deleting a saved credential or bucket
+# connection, and choosing where task outputs go by default.
+_WRITES |= {"register_bucket_objects", "register_bucket_prefix", "fetch_reference_subset", "delete_hf_token",
+            "delete_civitai_key", "delete_registry_login", "delete_storage_credential", "set_asset_storage_setting"}
+# Removing a member, canceling an invitation, and changing the account's display name.
+_WRITES |= {"remove_member", "cancel_invite", "update_profile"}
+# Setting a hosted GPU machine's fan curve.
+_WRITES |= {"set_fan_curve"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not
@@ -111,6 +145,8 @@ _UNRECORDED = {"connect_storage", "ssh_access", "reveal_machine_credentials", "i
 # The steps of adding files to a collection: their answers hold the upload's token or links.
 _UNRECORDED |= {"start_asset_file_upload", "asset_file_upload_part_urls", "complete_asset_file_upload",
                 "abort_asset_file_upload"}
+# An inference key's value, like a port access key's: every call issues another value.
+_UNRECORDED |= {"create_inference_key", "roll_inference_key"}
 
 
 def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallToolResult:
@@ -198,6 +234,29 @@ _FEEDBACK_OFFER = (" If it still fails, you may ask the user once in this conver
 CONDITIONAL_CONFIRM: set[str] = set()
 
 
+# Answers to a write that say for certain it was refused and nothing was done. The server releases the operation_id of
+# such a refusal (it fails before any side effect), so the fix is what next_step says, not the same call again. 408 and
+# 429 are left out (the same call is right later), and so are the idempotency refusals, which are about the
+# operation_id itself.
+_OPEN_OUTCOME_TITLES = {"idempotency-key reused", "operation outcome unknown", "request in progress"}
+
+
+def _certain_refusal(exc: BaseException) -> bool:
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int) or not 400 <= status < 500 or status in (408, 429):
+        return False
+    return (getattr(exc, "title", None) or "").strip().lower() not in _OPEN_OUTCOME_TITLES
+
+
+def _outcome_open(operation: dict) -> bool:
+    """Whether a failed tool call may have left a write done or half done, so that the retry advice (same operation_id,
+    same arguments, check state first) applies. Not when no write was sent (a preview, a local check, a missing
+    operation_id), nor when the only write sent was refused for certain."""
+    if not operation.get("sent"):
+        return False
+    return operation.get("completed", False) or not operation.get("refused", False)
+
+
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
                  operation_record: bool = True, conditional_confirm: bool = False):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
@@ -239,8 +298,11 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                     result["operation_id"] = op
                     if "lookup" in operation:
                         result["operation_lookup"] = operation["lookup"]
-                    if result.get("code") not in _OWN_RETRY_ADVICE_CODES:
+                    if result.get("code") not in _OWN_RETRY_ADVICE_CODES and _outcome_open(operation):
                         unrecorded = not operation_record or operation.get("unrecorded")
+                        if unrecorded:
+                            # operation_status can't find a call the server keeps no record of.
+                            result["next_step"] = result.get("next_step", "").replace(UNAVAILABLE_WRITE_STEP, "")
                         result["next_step"] = (result.get("next_step", "") +
                                                (_UNRECORDED_RETRY if unrecorded else _RECORDED_RETRY))
                 if result.get("code") == "server_error" and name != "send_feedback":
@@ -291,9 +353,17 @@ async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
                 raise tool_error("operation_id_required", "No write was sent. A stable operation_id is required.",
                                  "Use the preview's operation_id or generate a UUID, then reuse it for every retry.")
             kwargs["idempotency_key"] = operation["id"]
+        sends = is_write or name in _UNRECORDED
+        operation = _operation.get()
+        if sends and operation is not None:
+            # From here on the write may reach the server; the wrapper's retry advice applies to a failure.
+            operation["sent"] = True
+            operation["refused"] = False
         result = await fn(*args, **kwargs)
         raw = getattr(result, "raw", {})
         operation = _operation.get()
+        if sends and operation is not None:
+            operation["completed"] = True
         if is_write and operation is not None and raw.get("operationMethod"):
             operation["lookup"] = {"method": raw["operationMethod"], "path": raw["operationPath"]}
         if is_write and operation is not None and getattr(result, "replayed", False) is True:
@@ -303,4 +373,7 @@ async def call(fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         operation = _operation.get()
         if is_write and operation is not None and getattr(exc, "operation_method", None):
             operation["lookup"] = {"method": exc.operation_method, "path": exc.operation_path}
+        if operation is not None and operation.get("sent") and (_certain_refusal(exc) or type(exc) is ValueError):
+            # The server refused it before doing anything (or the SDK did, before sending).
+            operation["refused"] = True
         raise translate(exc) from exc

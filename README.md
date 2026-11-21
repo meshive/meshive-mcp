@@ -144,16 +144,17 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 
 | Area | Tools |
 | --- | --- |
-| Account and billing | `account`, `activity` (what your API keys did), `billing_history` (credit, host earnings and payouts) |
-| Workspaces | `workspaces`, `create_workspace`, `update_workspace`, `delete_workspace`; `host_messages`, `send_host_message` and `mark_host_messages_read` with `workspace` talk to the hosts of its machines |
+| Account and billing | `account` (also your referral link and email preferences), `update_account` (display name), `activity` (what your API keys did), `billing_history` (credit, host earnings and payouts, a workspace's daily charges and shared-serving earnings) |
+| Workspaces | `workspaces` (also members and pending invitations), `create_workspace`, `update_workspace`, `delete_workspace`, `remove_member` (a member or an invitation); `host_messages`, `send_host_message` and `mark_host_messages_read` with `workspace` talk to the hosts of its machines |
 | GPUs, CPUs and templates | `gpus` (also works without a key; `rental_type="task"` for tasks), `cpus`, `templates`, `save_template`, `delete_template`, `model_sets` |
-| Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `add_pod_asset`, `remove_pod_asset`, `run_command`, `command_status`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
+| Pods | `pods`, `estimate_pod`, `create_pod`, `update_pod`, `start_pod`, `stop_pod`, `restart_pod`, `delete_pod`, `pod_history`, `add_pod_asset`, `remove_pod_asset`, `run_command`, `command_status`, `ssh_access`, `logs`, `transactions`, `watched_folders`, `set_watched_folders` |
 | Port locks and access keys | `set_port_lock`, `set_port_preflight`, `revoke_browser_sessions`, `access_keys`, `create_access_key`, `roll_access_key`, `revoke_access_key` |
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
-| Serving models | `models` (also the official catalog), `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
+| Serving models | `models` (also the official and shared catalogs), `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
+| Inference requests, keys and webhooks | `inference_requests`, `cancel_inference_request`, `inference_keys`, `create_inference_key`, `roll_inference_key`, `revoke_inference_key`, `webhooks`, `save_webhook`, `delete_webhook` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task`, `delete_tasks`, `cancel_task_upload` |
-| Files (Asset Hub) | `assets`, `asset_files`, `upload_asset`, `finish_upload`, `import_asset`, `update_asset`, `delete_asset`, `delete_asset_files`, `download_links`, `export_asset`, `buckets`, `source_credentials` |
-| Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
+| Files (Asset Hub) | `assets`, `asset_files`, `upload_asset`, `finish_upload`, `import_asset`, `update_asset`, `delete_asset`, `delete_asset_files`, `download_links`, `export_asset`, `buckets`, `set_default_output_bucket`, `source_credentials`, `delete_credential` |
+| Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `set_fan_curve`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
 | Reporting to the Meshive team | `send_feedback` (a bug, an idea or a complaint; the agent asks you first) |
 

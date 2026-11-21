@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -7,7 +8,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ..client import meshive_client
-from ..errors import invalid_argument, template_error
+from ..errors import invalid_argument, template_error, tool_error
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import in_workspace, needs_input, resolve_many
@@ -127,7 +128,17 @@ def register(server: MCPServer) -> None:
             else:
                 workspace = None
             if template is not None:
-                return {"template": to_dict(await call(client.get_template, template, workspace))}
+                try:
+                    found = await call(client.get_template, template, workspace)
+                except ToolError as exc:
+                    if workspace is not None or json.loads(str(exc)).get("code") != "not_found":
+                        raise
+                    # Without a workspace only official templates are found; a custom one is read in its workspace.
+                    raise tool_error("not_found", f"No official template has id {template}.",
+                                     "A custom template is read with `workspace` set to the workspace it belongs to "
+                                     "(templates with that workspace lists it). Call again with `workspace`; don't "
+                                     "guess an id.") from exc.__cause__
+                return {"template": to_dict(found)}
             items = await call(client.list_templates, workspace, app_type=app_type)
         if hardware_type:
             items = [t for t in items if t.hardware_type.lower() in (hardware_type.lower(), "any")]
