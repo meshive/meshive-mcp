@@ -144,7 +144,7 @@ def _local_storage_note(est: Any) -> str:
 
 
 def _bytes_size(value: Any) -> str:
-    """Byte count → GiB like the console's other sizes (MiB under 1 GiB)."""
+    """Byte count → GiB like the console's other sizes (MiB under 1 GiB, KiB or bytes under 1 MiB, never "0 MiB")."""
     try:
         raw = float(value)
     except (TypeError, ValueError):
@@ -156,7 +156,11 @@ def _bytes_size(value: Any) -> str:
         return f"{gib:,.0f} GiB"
     if gib >= 1:
         return f"{gib:.1f} GiB"
-    return f"{raw / 1024 ** 2:.0f} MiB"
+    if raw >= 1024 ** 2:
+        return f"{raw / 1024 ** 2:.0f} MiB"
+    if raw >= 1024:
+        return f"{round(raw / 1024, 1)} KiB"
+    return f"{int(raw)} bytes"
 
 
 def _model_set(est: Any) -> dict[str, Any] | None:
@@ -248,6 +252,15 @@ def _model_set_note(est: Any) -> str:
 
 # Said in an update_pod preview that adds or removes input assets.
 _INPUT_ASSETS_NOTE = " Input assets change, so the input volume is sized for the new set and billed by size."
+# remove_input_assets drops the row from the pod's configuration; the files of an asset that was added while the pod
+# ran can stay in the pod until it is next re-created.
+_REMOVE_INPUT_ASSETS_NOTE = (" Removing an asset that was added while the pod was running may leave its files in the "
+                             "pod until the pod is next re-created; to delete them now, use remove_pod_asset while "
+                             "the pod runs.")
+# After the edit: the asset's connection is released, so remove_pod_asset has nothing to act on, and the restart of
+# this edit doesn't remove the files either.
+_REMOVE_INPUT_ASSETS_DONE_NOTE = (" The files of an asset that was added while the pod was running may stay in the "
+                                  "pod until it is re-created again (this edit's restart doesn't remove them).")
 
 
 # update_pod arguments that guard an edit rather than change the pod.
@@ -736,6 +749,8 @@ def register(server: MCPServer) -> None:
                 question += _local_storage_note(est) + _ports.preview_note(locks, creating=False)
                 if add_input_assets or remove_input_assets:
                     question += _INPUT_ASSETS_NOTE
+                if remove_input_assets:
+                    question += _REMOVE_INPUT_ASSETS_NOTE
                 if allow_node_migration:
                     question += " If its machine can't fit the change, the pod moves to another machine."
                 elif allow_data_loss:
@@ -773,6 +788,8 @@ def register(server: MCPServer) -> None:
         if tx is not None:
             step += (f" If it doesn't come back as expected, call the transactions tool with transaction_id={tx}: it "
                      "shows the current step and why it failed.")
+        if remove_input_assets:
+            step += _REMOVE_INPUT_ASSETS_DONE_NOTE
         out["next_step"] = step + _ports.result_note(locks)
         return out
 

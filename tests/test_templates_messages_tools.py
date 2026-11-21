@@ -221,6 +221,16 @@ async def test_renter_host_messages_list_both_directions_newest_first(mcp_client
     assert [m["id"] for m in one["items"]] == [3]
 
 
+async def test_renter_host_messages_name_a_few_resources_and_count_them(mcp_client, fake, with_key, misc):
+    """A message about many resources names at most five of them and counts them all, as in host mode."""
+    misc["messages"] = [_message(1, "host", "mac-9", False, "2026-11-20T09:00:00Z",
+                                 pods=tuple(f"run{n}" for n in range(40)))]
+    body = _payload(await mcp_client.call_tool("host_messages", {"workspace": WS}))
+    row = body["items"][0]
+    assert row["about"] == [f"run{n}" for n in range(5)] and row["pods"] == [f"run{n}-sts-0" for n in range(5)]
+    assert row["pod_count"] == 40 and row["volume_count"] == 0
+
+
 async def test_renter_mark_read(mcp_client, fake, with_key, misc):
     body = _payload(await mcp_client.call_tool("mark_host_messages_read", {"workspace": WS, "message_ids": [1, 3],
                                                                           "operation_id": OP}))
@@ -463,7 +473,33 @@ async def test_delete_template_previews_the_pods_made_from_it(mcp_client, fake, 
 async def test_delete_template_refuses_an_official_one(mcp_client, fake, with_key, misc):
     misc["template"] = {**_TEMPLATE, "isOfficial": True}
     body = _payload(await mcp_client.call_tool("delete_template", {"template_id": 2, "workspace": WS}))
-    assert body["code"] == "not_found" and "Only custom templates" in body["next_step"]
+    assert body["code"] == "official_template" and "can't be changed or deleted" in body["next_step"]
+    assert "MUST reuse this operation_id" not in body["next_step"]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("delete_template", {"template_id": 2, "confirm": True}),
+    ("save_template", {"template_id": 2, "description": "x"})])
+async def test_a_confirmed_change_of_an_official_template_says_so(mcp_client, fake, with_key, misc, tool, args):
+    # The server answers an official template's id like a missing one (404 Template Not Found); the tool reads the
+    # template then and names the real reason instead of "verify the identifier".
+    misc["template"] = {**_TEMPLATE, "isOfficial": True}
+    missing = _api_error(NotFoundError, 404, "Template Not Found")
+    fake["setup"] = lambda inst: inst.raise_on.update(delete_template=missing, update_template=missing)
+    body = _payload(await mcp_client.call_tool(tool, {**args, "workspace": WS, "operation_id": "op-template-0001"}))
+    assert body["code"] == "official_template", tool
+    misc["template"] = dict(_TEMPLATE)
+    body = _payload(await mcp_client.call_tool(tool, {**args, "workspace": WS, "operation_id": "op-template-0002"}))
+    assert body["code"] == "not_found", tool
+
+
+async def test_reading_a_custom_template_without_workspace_says_to_pass_it(mcp_client, fake, with_key, misc):
+    fake["setup"] = lambda inst: inst.raise_on.update(get_template=_api_error(NotFoundError, 404,
+                                                                              "Template Not Found"))
+    body = _payload(await mcp_client.call_tool("templates", {"template": 77}))
+    assert body["code"] == "not_found" and "`workspace`" in body["next_step"]
+    body = _payload(await mcp_client.call_tool("templates", {"template": 77, "workspace": WS}))
+    assert body["code"] == "not_found" and "Do not guess" in body["next_step"]
 
 
 @pytest.mark.parametrize("tool,args", [

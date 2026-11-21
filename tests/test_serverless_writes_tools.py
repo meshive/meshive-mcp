@@ -452,3 +452,65 @@ async def test_task_counts_only_on_the_first_page(mcp_client, fake, with_key):
     fake["setup"] = lambda inst: setattr(inst, "task_counts", None)     # a server without the count
     old = _payload(await mcp_client.call_tool("tasks", {}))
     assert "counts" not in old and "items" in old
+
+
+# --- review fixes: "managed" output, sharing a model can't share ------------------------------------------------------
+
+async def test_deploy_takes_managed_output_like_the_other_tools(mcp_client, fake, with_key, serving_state):
+    prev = await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5, "price_cap_per_hour": 0.5,
+                                                         "workspace": WS, "output_bucket": "managed"})
+    assert not prev.is_error and _payload(prev)["confirmed"] is False and "output_bucket" not in _payload(prev)
+    await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5, "price_cap_per_hour": 0.5,
+                                                  "workspace": WS, "output_bucket": "managed", "confirm": True,
+                                                  "operation_id": OP})
+    assert _calls(fake, "deploy_serving")[0][2]["output_bucket_id"] is None
+
+
+async def test_deploy_sharing_preview_refuses_a_model_that_cant_share(mcp_client, fake, with_key, serving_state):
+    # Model 12 of the fake list is a workspace's own model, not an official one, so it can't share idle capacity.
+    body = _payload(await mcp_client.call_tool("deploy_serving", {"model_registration_id": 12,
+                                                                  "price_cap_per_hour": 0.5, "workspace": WS,
+                                                                  "share_idle_capacity": True}))
+    assert body["code"] == "sharing_not_available" and "sharing_consent_required" not in body
+    assert "without sharing" in body["next_step"]
+
+
+async def test_scale_sharing_preview_refuses_a_model_that_cant_share(mcp_client, fake, with_key, serving_state):
+    serving_state["serving"] = _serving(registrationId=12)
+    body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "share_idle_capacity": True}))
+    assert body["code"] == "sharing_not_available" and not _calls(fake, "scale_serving")
+
+
+_OFFICIAL_IMAGE = {"id": 62, "displayName": "flux-schnell", "framework": "diffusers", "modelType": "image",
+                   "modality": "image", "isOfficial": True}
+_OFFICIAL_TEXT = {"id": 63, "displayName": "qwen-official", "framework": "vllm", "modelType": "llm",
+                  "modality": "text", "isOfficial": True}
+
+
+@pytest.mark.parametrize("consent", [False, True])
+async def test_deploy_sharing_preview_refuses_an_official_model_that_cant_share(mcp_client, fake, with_key,
+                                                                               serving_state, consent):
+    """An official model is not in the workspace's own registrations; it is looked up in the official catalog, so
+    an official image model is refused before the user is asked to agree to the sharing terms."""
+    fake["setup"] = lambda inst: setattr(inst, "official_models", [_OFFICIAL_IMAGE, _OFFICIAL_TEXT])
+    body = _payload(await mcp_client.call_tool("deploy_serving", {
+        "model_registration_id": 62, "price_cap_per_hour": 12.0, "workspace": WS, "share_idle_capacity": True,
+        "sharing_consent": consent}))
+    assert body["code"] == "sharing_not_available" and "sharing" not in body
+
+
+async def test_deploy_sharing_preview_keeps_the_terms_for_an_official_model_that_can_share(
+        mcp_client, fake, with_key, serving_state):
+    fake["setup"] = lambda inst: setattr(inst, "official_models", [_OFFICIAL_IMAGE, _OFFICIAL_TEXT])
+    body = _payload(await mcp_client.call_tool("deploy_serving", {
+        "model_registration_id": 63, "price_cap_per_hour": 0.5, "workspace": WS, "share_idle_capacity": True}))
+    assert body["confirmed"] is False and body["sharing"]["consent"]
+
+
+async def test_scale_sharing_preview_refuses_an_official_model_that_cant_share(mcp_client, fake, with_key,
+                                                                              serving_state):
+    """scale_serving looks the serving's model up in the official catalog too."""
+    fake["setup"] = lambda inst: setattr(inst, "official_models", [_OFFICIAL_IMAGE])
+    serving_state["serving"] = _serving(registrationId=62)
+    body = _payload(await mcp_client.call_tool("scale_serving", {"serving": 42, "share_idle_capacity": True}))
+    assert body["code"] == "sharing_not_available" and not _calls(fake, "scale_serving")

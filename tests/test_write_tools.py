@@ -285,6 +285,19 @@ async def test_storage_usage_warning_and_minimum_size(mcp_client, fake, with_key
     assert "90% full" in default["question"] and "usage_warning_threshold" not in _calls(fake, "estimate_storage")[0][2]
 
 
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_storage_smaller_than_the_minimum_is_refused_naming_size_gb(mcp_client, fake, with_key, confirm):
+    """Network storage starts at 10 GiB. A smaller size_gb is refused before anything is sent, naming the tool's
+    argument rather than the server's field."""
+    args = {"name": "data", "size_gb": 5, **({"confirm": True, "operation_id": "test-operation-0001"} if confirm else {})}
+    result = await mcp_client.call_tool("create_storage", args)
+    body = _payload(result)
+    assert result.is_error and body["code"] == "invalid_argument"
+    assert "`size_gb`" in body["message"] and "10" in body["message"] and "sizeGb" not in body["message"]
+    # Refused before a client is even made: nothing reached the API.
+    assert "last" not in fake or not (_calls(fake, "estimate_storage") or _calls(fake, "create_storage"))
+
+
 async def test_storage_tools(mcp_client, fake, with_key):
     prev = _payload(await mcp_client.call_tool("create_storage", {"name": "data", "size_gb": 10, "disk_type": "HDD",
                                                                   "region": "KR"}))

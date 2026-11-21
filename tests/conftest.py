@@ -348,6 +348,11 @@ class FakeMeshive:
         self._rec("me")
         return WhoAmI.from_dict({"email": "u@example.com", "name": "U"})
 
+    async def list_invites(self, workspace):
+        # The workspaces detail reads a workspace's invitations; none unless a test sets them.
+        self._rec("list_invites", workspace)
+        return []
+
     async def list_api_keys(self):
         self._rec("list_api_keys")
         return [ApiKey.from_dict(k) for k in self.api_keys]

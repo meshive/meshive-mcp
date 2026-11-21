@@ -243,7 +243,7 @@ def test_a_workspace_that_is_not_empty_passes_the_blockers_on():
                                             "blockers": blockers}}))
     assert b["code"] == "workspace_not_empty" and b["blockers"] == blockers and "'lab'" in b["message"]
     step = b["next_step"]
-    assert "Tell the user" in step and "only if the user asks" in step and "managed in the console" in step
+    assert "Tell the user" in step and "only if the user asks" in step
     assert "`operations_in_progress` and `task_outputs` clear on their own" in step and "check again shortly" in step
     assert "under `storages` for a few minutes" in step and "include_system=true" in step and "`pending_payouts`" in step
     # What it never does: offer a way past the check, or a force option on a tool. A person has the console, and which
@@ -262,7 +262,12 @@ def test_a_workspace_that_is_not_empty_sorts_what_tools_can_delete_from_what_the
     step = _not_empty_step()
     assert "Pods, storage, servings and custom models can be deleted with their tools" in step
     assert "assets with delete_asset" in step
-    assert "custom templates with delete_template" in step and "credentials, webhooks, inference keys" in step
+    assert "custom templates with delete_template" in step
+    # Every blocker a person can clear has its tool now, so nothing is left "managed in the console".
+    assert ("saved credentials (delete_credential), webhooks (delete_webhook), inference keys (revoke_inference_key"
+            in step)
+    assert "an admin can revoke every key of the workspace" in step
+    assert "members and open invitations (remove_member)" in step and "managed in the console" not in step
     assert "templates and models" not in step
 
 

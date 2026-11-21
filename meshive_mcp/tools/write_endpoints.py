@@ -107,9 +107,11 @@ async def _key(client: Any, pod: str, ws: str, port: int, key_id: int) -> Any:
     return key
 
 
-async def _issue(fn: Any, *args: Any, what: str, check: str, **kwargs: Any) -> Any:
-    """Call create_access_key or roll_access_key. A failure that leaves open whether the key was issued gets its own
-    advice: calling again would issue another value, so the list is read first."""
+async def _issue(fn: Any, *args: Any, what: str, check: str, code: str = "access_key_outcome_unknown",
+                 listing: str = "the port's keys with access_keys", **kwargs: Any) -> Any:
+    """Call a write that answers with a key's value (create_access_key, roll_access_key, create_inference_key,
+    roll_inference_key). A failure that leaves open whether the key was issued gets its own advice under `code`:
+    calling again would issue another value, so `listing` (what to read, and with which tool) is read first."""
     try:
         return await call(fn, *args, **kwargs)
     except ToolError as exc:
@@ -120,11 +122,11 @@ async def _issue(fn: Any, *args: Any, what: str, check: str, **kwargs: Any) -> A
         if body.get("code") not in _UNCLEAR_CODES:
             raise
         raise tool_error(
-            "access_key_outcome_unknown",
+            code,
             f"The request to {what} got no clear answer ({body.get('message') or 'no response'}), so it may or may "
             "not have gone through.",
-            "Don't call this tool again yet: another call would issue another key value. First read the port's keys "
-            f"with access_keys. {check} If the list can't be read either, tell the user and stop.") from exc
+            f"Don't call this tool again yet: another call would issue another key value. First read {listing}. "
+            f"{check} If the list can't be read either, tell the user and stop.") from exc
 
 
 def _key_preview(kind: str, payload: dict[str, Any], question: str, pod_name: str) -> dict[str, Any]:

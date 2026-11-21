@@ -227,7 +227,7 @@ async def test_add_with_paths_previews_the_plan_counts(mcp_client, fake, with_ke
                                                                 "strip_prefix": ""}))
     assert _calls(fake, "plan_asset_attach")[-1][1] == ("asset_abc", [{"paths": ["a/"], "strip_prefix": ""}])
     assert body["selected_file_count"] == 3 and body["selected_size_bytes"] == 300
-    assert "(300 B)" not in body["question"] and "'my-lora' (0 MiB)" in body["question"]
+    assert "(300 B)" not in body["question"] and "'my-lora' (300 bytes)" in body["question"]
 
 
 async def test_add_names_the_row_it_replaces_and_a_full_slot(mcp_client, fake, with_key, pa_fake):
@@ -293,7 +293,10 @@ async def test_add_reads_the_servers_refusals(mcp_client, fake, with_key, pa_fak
     err = _payload(await mcp_client.call_tool("add_pod_asset", {"pod": POD, "asset": "asset_abc", "role": "loras",
                                                                "confirm": True, "operation_id": OP}))
     assert err["code"] == code, title
-    assert ("MUST reuse this operation_id" not in err["next_step"]) is own, title
+    # A 4xx refusal of the write is certain (nothing was done and the server released the operation_id), so no
+    # refusal carries the "reuse this operation_id and the same arguments" advice; `own` marks the codes whose
+    # next_step says themselves what to do instead.
+    assert "MUST reuse this operation_id" not in err["next_step"], title
 
 
 # --- remove_pod_asset ----------------------------------------------------------------------------------------------
@@ -474,3 +477,36 @@ async def test_placed_elsewhere_doesnt_send_the_agent_to_update_pod_first(mcp_cl
                                                                 "confirm": True, "operation_id": OP}))
     assert body["code"] == "placed_elsewhere" and "without target_dir" in body["next_step"]
     assert body["next_step"].index("remove_pod_asset") < body["next_step"].index("update_pod")
+
+
+# --- E2E findings: an asset that isn't a model, what removing an input asset does, small sizes ------------------------
+
+async def test_detect_model_gives_a_verdict_for_an_asset_that_isnt_a_model(mcp_client, fake, with_key, pa_fake):
+    pa_fake["facts"] = {"ready": True, "weightFormats": [], "hasConfig": False}
+    body = _payload(await mcp_client.call_tool("detect_model", {"asset": "asset_abc"}))
+    assert body["status"] == "unsupported" and body["detail"] and "isn't a servable model" in body["next_step"]
+
+
+async def test_removing_an_input_asset_doesnt_promise_its_files_are_gone(mcp_client, fake, with_key):
+    args = {"pod": POD, "remove_input_assets": [11]}
+    body = _payload(await mcp_client.call_tool("update_pod", args))
+    assert "may leave its files in the pod until the pod is next re-created" in body["question"]
+    assert "remove_pod_asset" in body["question"]
+    done = _payload(await mcp_client.call_tool("update_pod", {**args, "confirm": True, "operation_id": OP}))
+    assert "may stay in the pod" in done["next_step"]
+    plain = _payload(await mcp_client.call_tool("update_pod", {"pod": POD, "add_input_assets": [
+        {"asset": "asset_abc", "role": "loras"}]}))
+    assert "may leave its files" not in plain["question"]
+
+
+async def test_remove_pod_asset_description_doesnt_treat_origin_as_a_guarantee(mcp_client):
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    desc = " ".join(tools["remove_pod_asset"].description.split())
+    assert "`origin` tells how the row was placed, not a guarantee" in desc and "`effect`" in desc
+
+
+@pytest.mark.parametrize("size,text", [(1412, "1.4 KiB"), (300, "300 bytes"), (5 * 2 ** 20, "5 MiB"),
+                                       (3 * 2 ** 30, "3.0 GiB")])
+def test_sizes_in_sentences_are_never_zero_mib(size, text):
+    from meshive_mcp.tools.write_pods import _bytes_size
+    assert _bytes_size(size) == text

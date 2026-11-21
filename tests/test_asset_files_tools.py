@@ -296,7 +296,9 @@ async def test_asset_files_workspace_view(mcp_client, fake, with_key, files_fake
                                     "include_catalog": False, "cursor": None, "limit": 20}
     item, = body["items"]
     assert item["source_pod"] == "comfy" and item["ingest_source"] == "pod_harvest"
-    assert "source_statefulset" not in item and "aaaa1111bbbb2222" not in json.dumps(body)
+    # A deleted pod is found by its pod_name only, so the row carries the one `pod` takes back (the display name
+    # in source_pod no longer finds it); the bare statefulset name isn't shown.
+    assert "source_statefulset" not in item and item["source_pod_name"] == "aaaa1111bbbb2222-0"
     assert body["catalog_hidden"] == 2 and body["next_cursor"] == "w:srv-cur-1"
     more = _payload(await mcp_client.call_tool("asset_files", {"kind": "output", "cursor": body["next_cursor"],
                                                                "task": "task_1"}))
@@ -369,6 +371,14 @@ async def test_export_asset_to_hugging_face_warns_when_public(mcp_client, fake, 
     assert kw["private"] is False and kw["hf_token_id"] == 4 and kw["idempotency_key"] == body["operation_id"]
     assert not _calls(fake, "get_asset")        # the workspace was given: confirming needs no lookup
     assert done["status"] == "uploading" and done["license_notice"]
+
+
+async def test_export_asset_to_hugging_face_checks_the_token_in_the_preview(mcp_client, fake, with_key, files_fake):
+    # Like a bucket the workspace doesn't have, a token id it doesn't have can only fail on confirm.
+    body = _payload(await mcp_client.call_tool("export_asset", {"asset": "asset_abc", "hf_repo": "me/renders",
+                                                                "hf_token_id": 999999}))
+    assert body["code"] == "not_found" and "source_credentials" in body["next_step"]
+    assert "MUST reuse this operation_id" not in body["next_step"] and not _calls(fake, "upload_asset_to_hf")
 
 
 @pytest.mark.parametrize("over, code", [({"storageProvider": "user_s3"}, "export_not_supported"),
@@ -609,24 +619,41 @@ async def test_assets_pod_filter_ignored_by_an_older_server_is_refused(mcp_clien
     assert "MUST reuse" not in body["next_step"] and "source.pod_name" in body["next_step"]
 
 
+@pytest.mark.parametrize("tool, args, field", [
+    ("asset_files", {"kind": "output", "pod": "deleted-trainer"}, "source_pod_name"),
+    ("assets", {"pod": "deleted-trainer"}, "source.pod_name")])
+async def test_a_pod_name_no_pod_has_points_at_the_deleted_pods_pod_name(mcp_client, fake, with_key, files_fake,
+                                                                         tool, args, field):
+    """The pods tool doesn't list deleted pods, so a deleted pod's display name finds nothing. The answer says how such
+    a pod is found: by the pod_name its files or assets carry."""
+    result = await mcp_client.call_tool(tool, args)
+    body = _payload(result)
+    assert result.is_error and body["code"] == "not_found"
+    assert "deleted pod" in body["next_step"] and field in body["next_step"]
+
+
 async def test_assets_pod_filter_describes_how_a_deleted_pod_is_named(mcp_client):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in ("assets", "asset_files"):
         desc = tools[name].input_schema["properties"]["pod"]["description"]
         assert "deleted pod is found only by its pod_name" in desc and "(a deleted pod's too)" not in desc, name
-    assert "import_asset" not in " ".join(tools["buckets"].description.split()).split("Pass a `bucket_id`")[1] \
+    # The buckets tool names import_asset once import_asset takes `bucket:` sources.
+    assert "import_asset" in " ".join(tools["buckets"].description.split()).split("Pass a `bucket_id`")[1] \
         .split("With `bucket`")[0]
 
 
 async def test_finish_upload_describes_a_second_complete_of_added_files(mcp_client, fake, with_key, files_fake):
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     desc = " ".join(tools["finish_upload"].description.split())
-    assert "For a new asset, calling it again after success returns the same asset" in desc
-    assert "upload_already_completed" in desc
+    # The server answers a second complete of an add-files upload with the same success; only a cancel of a
+    # finished add is refused (Upload Already Completed).
+    assert "Calling it again after success returns the same success and adds nothing twice" in desc
+    assert "Cancelling (cancel=true) an add to a collection that already finished answers upload_already_completed"         in desc
+    assert "a second call answers upload_already_completed" not in desc
     upload_id = "add_" + base64.urlsafe_b64encode(json.dumps(
         {"a": "asset_abc", "b": "ub_1", "t": UPLOAD_TOKEN}).encode()).decode().rstrip("=")
-    _raise(fake, "complete_asset_file_upload", _api_error(ConflictError, 409, "Upload Already Completed"))
-    body = _payload(await mcp_client.call_tool("finish_upload", {"upload_id": upload_id}))
+    _raise(fake, "abort_asset_file_upload", _api_error(ConflictError, 409, "Upload Already Completed"))
+    body = _payload(await mcp_client.call_tool("finish_upload", {"upload_id": upload_id, "cancel": True}))
     assert body["code"] == "upload_already_completed" and "files were added" in body["next_step"]
 
 

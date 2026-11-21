@@ -5,9 +5,11 @@ Saving a template costs nothing (pods made from it go through create_pod's confi
 """
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ..client import meshive_client
@@ -31,6 +33,33 @@ _READ_RENAMES = {"env": {"auto_generated": "auto_generate"}, "volume_mounts": {"
 _READ_ONLY_KEYS = {"env": {"value_set"}, "ports": {"connect", "template_port_id"}}
 # What save_template returns of the saved template besides the template itself.
 _SAVE_FIELDS = ("workspace", "action", "removed_envs", "removed_ports", "replayed")
+_OFFICIAL_STEP = ("Official templates can't be changed or deleted; nothing was changed. Don't retry. To change its "
+                  "settings, create a custom template (save_template without template_id) if the user wants one.")
+
+
+def _official(template_id: int) -> ToolError:
+    return tool_error("official_template", f"Template {template_id} is an official template.", _OFFICIAL_STEP)
+
+
+async def _custom_call(client: Any, template_id: int, ws: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """A change of a custom template. The server answers an official template's id like a missing one (not found);
+    the template is read then, so that case says it is official instead of "check the id"."""
+    try:
+        return await template_call(fn, *args, **kwargs)
+    except ToolError as exc:
+        try:
+            code = json.loads(str(exc)).get("code")
+        except ValueError:
+            raise exc from None
+        if code != "not_found":
+            raise
+        try:
+            template = await call(client.get_template, template_id, ws)
+        except ToolError:
+            raise exc from None
+        if template.is_official:
+            raise _official(template_id) from exc.__cause__
+        raise
 
 _Env = Annotated[list[dict[str, Any]] | None, Field(description=(
     '[{"key": "HF_HOME", "value": "/data/hf"}] with optional "secret", "auto_generate", "show_on_connect" and '
@@ -176,8 +205,8 @@ def register(server: MCPServer) -> None:
                                                              ("command", command)) if v is not None}
                 if registry_login_id is not None:
                     changes["registry_login_id"] = registry_login_id or None
-                saved = await template_call(client.update_template, template_id, ws,
-                                            lock_public_ports=lock_public_ports, **changes, **given)
+                saved = await _custom_call(client, template_id, ws, client.update_template, template_id, ws,
+                                           lock_public_ports=lock_public_ports, **changes, **given)
         template = to_dict(saved)
         for key in _SAVE_FIELDS:
             template.pop(key, None)
@@ -210,9 +239,7 @@ def register(server: MCPServer) -> None:
             if not confirm:
                 template = await call(client.get_template, template_id, ws)
                 if template.is_official:
-                    raise tool_error("not_found", f"Template {template_id} is an official template.",
-                                     "Only custom templates can be deleted. Use a custom template's template_id from "
-                                     "the templates tool with `workspace`.")
+                    raise _official(template_id)
                 pods = [p for p in await call(client.list_pods, ws)
                         if p.template_id == template_id and not getattr(p, "raw", {}).get("isDownloader")]
                 using = [{"pod_name": p.pod_name, "user_alias": p.user_alias, "status": p.status} for p in pods]
@@ -223,6 +250,6 @@ def register(server: MCPServer) -> None:
                     "template": {"template_id": template.template_id, "name": template.name, "image": template.image,
                                  "port_count": len(template.ports), "env_count": len(template.envs)},
                     "workspace": ws, "workspace_name": targets.names.get(ws), "pods_using_it": using}, question)
-            result = await call(client.delete_template, template_id, ws)
+            result = await _custom_call(client, template_id, ws, client.delete_template, template_id, ws)
         return {"resource": "template", "id": result.id or str(template_id), "workspace": result.workspace or ws,
                 "action": "delete", "next_step": "Deleted."}

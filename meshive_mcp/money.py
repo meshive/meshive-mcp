@@ -46,3 +46,9 @@ def hourly(value: Any) -> str:
 def usd(value: Any) -> str:
     """Any other amount → "$2.10" (2 decimals). Same as the console."""
     return _fmt(value, 2)
+
+
+def per_million(value: Any) -> str:
+    """A price per million tokens → "$0.1500" (4 decimals): these are small amounts, and 2 decimals would show
+    different prices as the same."""
+    return _fmt(value, 4)
