@@ -535,6 +535,25 @@ async def test_passing_back_a_masked_url_is_refused(mcp_client, fake, with_key, 
     assert not _calls(fake, "update_webhook")
 
 
+async def test_backend_masked_urls_survive_reads_and_metadata_edits(mcp_client, fake, with_key, state):
+    displayed = "https://hooks.example.com/events"
+    state["endpoints"] = [_endpoint(5, url=displayed, urlMasked=True)]
+    state["deliveries"] = [_delivery(1, url=displayed, urlMasked=True)]
+    endpoint = _payload(await mcp_client.call_tool("webhooks", {"webhook": 5}))["webhook"]
+    assert endpoint["url"] == displayed and endpoint["url_masked"]
+    delivery = _payload(await mcp_client.call_tool("webhooks", {"kind": "deliveries", "delivery_id": 1}))["delivery"]
+    assert delivery["url"] == displayed and delivery["url_masked"]
+
+    for confirm in (False, True):
+        refused = _payload(await mcp_client.call_tool("save_webhook", {"webhook": 5, "url": displayed,
+                                                                      "confirm": confirm, "operation_id": OP}))
+        assert refused["code"] == "masked_url_given" and "without `url`" in refused["next_step"]
+    assert not _calls(fake, "update_webhook")
+    updated = _payload(await mcp_client.call_tool("save_webhook", {"webhook": 5, "label": "events", "operation_id": OP}))
+    assert updated["webhook"]["label"] == "events" and updated["webhook"]["url_masked"]
+    assert _calls(fake, "update_webhook")[0][2]["url"] is None
+
+
 @pytest.mark.parametrize("url", ["https://discord.com/api/v10/webhooks/123/TOKENSECRET",
                                  "https://discordapp.com/api/v9/webhooks/123/TOKENSECRET"])
 async def test_versioned_discord_urls_are_secrets(mcp_client, fake, with_key, state, url):

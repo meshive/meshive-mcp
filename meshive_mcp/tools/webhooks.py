@@ -254,10 +254,10 @@ def register(server: MCPServer) -> None:
             ws = targets[0]
             name = targets.names.get(ws) or ws
             current = None if creating else await _listed(client, ws, webhook)
-            if (current is not None and url is not None and url != current.url
+            if (current is not None and url is not None and (url != current.url or current.raw.get("urlMasked") is True)
                     and mask_webhook_url(url)[0] == mask_webhook_url(current.url)[0]):
                 # The agent only sees the masked URL; sent back, it would replace the stored one and drop its hidden
-                # query string, user part or fragment, while a preview would show no change at all.
+                # query string, user part or fragment. OAuth reads already carry the displayed URL and the mask flag.
                 raise tool_error("masked_url_given",
                                  f"Webhook #{webhook}'s stored URL has a hidden part (query string, user name or "
                                  "fragment) that the URL passed leaves out; saving it would remove that part.",

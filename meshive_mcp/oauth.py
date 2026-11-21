@@ -14,12 +14,13 @@ import httpx
 from meshive._config import resolve_base_url
 from starlette.responses import JSONResponse
 
+from .serialize import mask_webhook_url, secret_webhook_prefix
 from .settings import settings
 
 READ = frozenset("""gpus cpus account activity workspaces billing_history pods storages estimate_pod transactions
 watched_folders templates model_sets models servings detect_model source_credentials tasks estimate_task
-operation_status assets asset_files buckets download_links access_keys machines machine_history host_messages logs""".split())
-CONSOLE = frozenset("ssh_access connect_storage machine_credentials host_install_command create_access_key roll_access_key".split())
+operation_status assets asset_files buckets download_links access_keys machines machine_history host_messages logs
+pod_history inference_requests inference_keys webhooks""".split())
 current_tool: ContextVar[str] = ContextVar("meshive_oauth_tool")
 action_inputs: ContextVar[tuple[bool, str | None]] = ContextVar("meshive_action_inputs", default=(False, None))
 ACTION_PATHS = {
@@ -30,7 +31,10 @@ ACTION_PATHS = {
     "host_install_command": ("POST", r"/host/install-command"),
     "create_access_key": ("POST", r"/pods/[^/]+/ports/[0-9]+/keys"),
     "roll_access_key": ("POST", r"/pods/[^/]+/ports/[0-9]+/keys/[0-9]+/roll"),
+    "create_inference_key": ("POST", r"/inference-keys"),
+    "roll_inference_key": ("POST", r"/inference-keys/[1-9][0-9]*/roll"),
 }
+CONSOLE = frozenset(ACTION_PATHS) - {"pods"}  # Pod details require the console only with show_secrets.
 
 
 class ConsoleConfirmation(Exception):
@@ -163,6 +167,9 @@ class DelegatedTransport(httpx.AsyncBaseTransport):
             info = prepared.json()
             # Only the public action link and status cross the tool boundary.
             raise ConsoleConfirmation({key: info[key] for key in ("console_url", "status", "operation_id")})
+        if spec and request.method != "GET":
+            # Sensitive tools can delegate prerequisite reads. A changed issuing route must be reviewed in the console.
+            raise httpx.RequestError("Unsupported console confirmation operation", request=request)
         binding = {}
         upload = request.headers.get("X-Asset-Upload-Token")
         if upload and re.fullmatch(r"/v1/sdk/assets/[^/]+/uploads/[^/]+/(?:complete|abort|part-urls)", request.url.path):
@@ -197,6 +204,9 @@ def tool_list_sender(send):
                 entries = schemes(tool["name"])
                 tool["securitySchemes"] = entries
                 tool.setdefault("_meta", {})["securitySchemes"] = entries
+                if tool["name"] in ACTION_PATHS:
+                    tool["description"] += (" With OAuth, credential values are revealed only in the signed-in Meshive "
+                                            "console. Give the user the returned console_url to complete the operation.")
         except (ValueError, KeyError, TypeError):
             await send({**message, "body": bytes(chunks)})
             return
@@ -204,10 +214,19 @@ def tool_list_sender(send):
     return send_list
 
 
-_TOKEN_TEXT = re.compile(r"(?<![A-Za-z0-9_])(?:meshive_[0-9a-fA-F]{64}|msho[ar]_[A-Za-z0-9_-]{43}|mshod_[A-Za-z0-9_=-]{32,}|mshv_[A-Za-z0-9_-]{16,})")
+_TOKEN_TEXT = re.compile(r"(?<![A-Za-z0-9_])(?:meshive_[0-9a-fA-F]{64}|msho[ar]_[A-Za-z0-9_-]{43}|mshod_[A-Za-z0-9_=-]{32,}|mshv_[A-Za-z0-9_-]{16,}|mk-[A-Za-z0-9_-]{32,})")
+_URL_TEXT = re.compile(r"""https?://[^\s"'<>]+""", re.IGNORECASE)
 _BEARER_TEXT = re.compile(r"(?i)(\bAuthorization\s*:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+")
 _ASSIGNED_SECRET = re.compile(r"""(?im)(\b(?:HF_TOKEN|OPENAI_API_KEY|AWS_SECRET_ACCESS_KEY|ACCESS_PASSWORD|CLIENT_SECRET|API_KEY|PASSWORD)\s*=\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s;]+)""")
-_SECRET_FIELDS = {"password", "passwd", "apikey", "accesstoken", "refreshtoken", "clientsecret", "authorization", "privatekey"}
+_WEBHOOK_SECRET_TEXT = re.compile(
+    r'(?i)("(?:inference_?key|(?:webhook_?)?signing_?secret|webhook_?secret)"\s*:\s*)"(?:\\.|[^"\\])*"')
+_SECRET_FIELDS = {"password", "passwd", "apikey", "accesstoken", "refreshtoken", "clientsecret", "authorization",
+                  "privatekey", "accesskey", "inferencekey", "signingsecret", "webhooksecret", "webhooksigningsecret"}
+
+
+def _mask_receiver(match):
+    url = match[0]
+    return mask_webhook_url(url)[0] if secret_webhook_prefix(url) else url
 
 
 def public_result(result):
@@ -223,6 +242,9 @@ def public_result(result):
         if isinstance(value, list):
             return [clean(item) for item in value]
         if isinstance(value, str):
+            # Error messages, logs and webhook deliveries can repeat the receiver URL inside text.
+            value = _URL_TEXT.sub(_mask_receiver, value)
+            value = _WEBHOOK_SECRET_TEXT.sub(r'\1"[redacted]"', value)
             value = _BEARER_TEXT.sub(r"\1[redacted]", value)
             return _ASSIGNED_SECRET.sub(r"\1[redacted]", _TOKEN_TEXT.sub("[redacted]", value))
         return value

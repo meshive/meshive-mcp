@@ -110,6 +110,7 @@ async def resolve(client: AsyncMeshive, workspace: str | None, *, required: bool
     }
 
 
+@resolved("workspace", single_item_list=True)
 async def resolve_many(client: AsyncMeshive, workspace: str | None, *, allow_all: bool = True) -> WorkspaceTargets | dict[str, Any]:
     """For list tools: every id for "all", otherwise the single resolve result as a list."""
     workspaces = await _read(client.list_workspaces)

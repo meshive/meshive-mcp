@@ -35,8 +35,8 @@ OP = {"operation_id": "contract-operation-0001"}
 YES = {"confirm": True, **OP}
 
 
-def read(tool, sdk, role, *, scope="read", delivery="tool", **args):
-    return Case(tool, args, scope, role, sdk, "none", "read again", delivery)
+def read(tool, sdk, role, *, scope="read", effect="none", delivery="tool", **args):
+    return Case(tool, args, scope, role, sdk, effect, "read again", delivery)
 
 
 def write(tool, sdk, role, effect, *, recorded=True, delivery="tool", **args):
@@ -141,6 +141,29 @@ CASES = (
           recorded=False, delivery="console", **YES),
     read("logs", "get_pod_logs", MEMBER, workspace=WS, pod=POD),
     write("send_feedback", "send_feedback", ACCOUNT, "send one feedback report", summary="The price label is missing.", **YES),
+    read("inference_requests", "list_inference_requests", MEMBER, workspace=WS),
+    write("cancel_inference_request", "cancel_inference_request", "request owner or workspace admin or billing",
+          "cancel a queued request", request_id="req_1", **OP),
+    read("inference_keys", "list_inference_keys", MEMBER, workspace=WS, delivery="metadata"),
+    write("create_inference_key", "create_inference_key", ADMIN, "issue an inference key", recorded=False,
+          delivery="console", workspace=WS, name="batch", expires_in_days=30, **YES),
+    write("roll_inference_key", "roll_inference_key", "key creator with workspace admin or billing role",
+          "rotate an inference key", recorded=False, delivery="console", key_id=3, workspace=WS, **YES),
+    write("revoke_inference_key", "revoke_inference_key", "key creator or workspace admin or billing",
+          "revoke an inference key", key_id=3, workspace=WS, **YES),
+    read("webhooks", "list_webhooks", ADMIN, workspace=WS, delivery="metadata"),
+    write("save_webhook", "create_webhook", ADMIN, "subscribe a webhook", workspace=WS,
+          url="https://hooks.example.org/events", event_types=["request.succeeded"], **YES),
+    write("delete_webhook", "delete_webhook", ADMIN, "remove a webhook", workspace=WS, webhook=5, **YES),
+    write("delete_credential", "delete_hf_token", ADMIN, "delete a saved credential",
+          kind="hf_token", credential_id=4, workspace=WS, **YES),
+    write("set_default_output_bucket", "set_asset_storage_setting", ADMIN, "change the default output destination",
+          output_bucket="managed", workspace=WS, **YES),
+    read("pod_history", "list_pod_alerts", ADMIN, workspace=WS),
+    write("remove_member", "remove_member", ADMIN, "remove a workspace member",
+          workspace=WS, user="bob@example.com", **YES),
+    write("update_account", "update_profile", ACCOUNT, "change the account display name", username="Ada", **OP),
+    write("set_fan_curve", "set_fan_curve", HOST, "change GPU fan control", machine=MACHINE_ID, mode="driver", **YES),
 )
 
 VARIANTS = (
@@ -157,4 +180,31 @@ VARIANTS = (
           pod=POD, title="Maintenance notice", **YES),
     write("mark_host_messages_read", "mark_workspace_messages_read", MEMBER, "mark renter messages read",
           workspace=WS, message_ids=[1], **OP),
+    read("account", "get_referral", ACCOUNT, include_referral=True, effect="create a referral code on first lookup"),
+    read("account", "get_email_preferences", ACCOUNT, include_email_preferences=True),
+    read("billing_history", "get_workspace_billing", MEMBER, kind="workspace", workspace=WS),
+    read("billing_history", "get_shared_earnings", MEMBER, kind="shared_earnings", workspace=WS),
+    read("workspaces", "list_invites", MEMBER, workspace=WS),
+    read("models", "list_shared_models", ACCOUNT, source="shared"),
+    read("machines", "get_fan_status", HOST, machine=MACHINE_ID, include_fan=True),
+    read("inference_requests", "get_inference_request", MEMBER, request_id="req_1", delivery="scoped file links"),
+    read("webhooks", "list_webhook_event_types", ACCOUNT, kind="events"),
+    read("webhooks", "list_webhook_deliveries", ADMIN, kind="deliveries", workspace=WS, delivery_id=1),
+    write("save_webhook", "update_webhook", ADMIN, "rename an endpoint", workspace=WS, webhook=5, label="demo", **OP),
+    write("save_webhook", "test_webhook", ADMIN, "send a test event", workspace=WS, webhook=5, send_test=True, **OP),
+    write("remove_member", "cancel_invite", ADMIN, "cancel an invitation", workspace=WS, invite=4, **YES),
+    read("pod_history", "get_pod_timeline", ADMIN, pod=POD, workspace=WS, include_timeline=True),
+    read("asset_files", "browse_reference_objects", MEMBER, asset="asset_ref", prefix="train/"),
+    write("import_asset", "register_bucket_prefix", ADMIN, "link a bucket folder", workspace=WS,
+          source="bucket:7/data/", **OP),
+    write("import_asset", "register_bucket_objects", ADMIN, "register bucket objects", workspace=WS,
+          source="bucket:7/data/", paths=["data/test.txt"], name="demo", **OP),
+    write("import_asset", "fetch_reference_subset", ADMIN, "copy a subset of a bucket folder",
+          source="asset_ref", paths=["train/*"], name="demo", **YES),
+    read("source_credentials", "get_hf_token_usage", ADMIN, workspace=WS, kind="hf_token", credential_id=4, delivery="metadata"),
+    read("source_credentials", "get_civitai_key_usage", ADMIN, workspace=WS, kind="civitai_key", credential_id=9, delivery="metadata"),
+    read("source_credentials", "get_registry_login_usage", ADMIN, workspace=WS, kind="registry_login", credential_id=3, delivery="metadata"),
+    write("delete_credential", "delete_civitai_key", ADMIN, "remove a CivitAI credential", workspace=WS, kind="civitai_key", credential_id=9, **YES),
+    write("delete_credential", "delete_registry_login", ADMIN, "remove a registry login", workspace=WS, kind="registry_login", credential_id=3, **YES),
+    write("delete_credential", "delete_storage_credential", ADMIN, "remove a bucket connection", workspace=WS, kind="bucket", credential_id=7, **YES),
 )

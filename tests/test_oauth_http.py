@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from test_http import HEADERS, _rpc, http
+from oauth_tool_cases import CASES
 from meshive_mcp import oauth
 from meshive_mcp.settings import settings
 
@@ -45,10 +46,13 @@ async def test_discovery_and_tool_schemes(private, http):
         metadata = (await http.get(path)).json()
         assert metadata["resource"] == RESOURCE and metadata["authorization_servers"] == [ISSUER]
     tools = (await http.post("/mcp", headers=HEADERS, json=_rpc("tools/list"))).json()["result"]["tools"]
-    assert len(tools) == 83
+    assert len(tools) == 98
     by_name = {t["name"]: t for t in tools}
-    for t in tools:
-        assert t["securitySchemes"] == t["_meta"]["securitySchemes"]
+    for case in CASES:
+        t = by_name[case.tool]
+        expected = ([{"type": "noauth"}, {"type": "oauth2", "scopes": ["read"]}] if case.scope == "public"
+                    else [{"type": "oauth2", "scopes": case.scope.split()}])
+        assert t["securitySchemes"] == t["_meta"]["securitySchemes"] == expected
     assert by_name["gpus"]["securitySchemes"][0] == {"type": "noauth"}
     assert by_name["command_status"]["securitySchemes"][0]["scopes"] == ["read", "write"]
 

@@ -31,7 +31,7 @@ class Resolutions:
 resolutions: ContextVar[Resolutions | None] = ContextVar("meshive_preview_resolutions", default=None)
 
 
-def resolved(field):
+def resolved(field, *, single_item_list=False):
     def decorator(fn):
         signature = inspect.signature(fn)
         @wraps(fn)
@@ -44,12 +44,18 @@ def resolved(field):
             params = {k: v for k, v in bound.arguments.items() if k not in {"client", "confirm"}}
             key = digest([fn.__name__, params])
             if capture.pinned is not None and key in capture.pinned:
-                return capture.pinned[key]
+                pinned = capture.pinned[key]
+                if single_item_list:
+                    # Preserve the list's current role and label metadata, using the ID the user approved.
+                    bound.arguments[field] = pinned
+                    return await fn(*bound.args, **bound.kwargs)
+                return pinned
             result = await fn(*args, **kwargs)
-            if isinstance(result, str):
-                capture.bindings[key] = result
+            target = result[0] if single_item_list and isinstance(result, list) and len(result) == 1 else result
+            if isinstance(target, str):
+                capture.bindings[key] = target
                 if field in capture.inputs and capture.inputs[field] == params[field]:
-                    capture.canonical[field] = result
+                    capture.canonical[field] = target
             return result
         return wrapper
     return decorator

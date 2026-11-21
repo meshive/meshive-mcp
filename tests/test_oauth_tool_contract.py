@@ -6,13 +6,11 @@ import pytest
 from oauth_tool_cases import CASES, VARIANTS
 from test_http import http, HEADERS, _rpc
 from test_oauth_http import private
-from test_templates_messages_tools import misc
-from test_pod_assets_tools import pa_fake
-from test_asset_files_tools import files_fake
 from meshive_mcp import oauth
 from meshive_mcp.settings import settings
 
 pytestmark = pytest.mark.anyio
+pytest_plugins = ("oauth_case_fixtures",)
 
 
 @pytest.mark.parametrize("case", (*CASES, *VARIANTS), ids=lambda c: c.tool)
@@ -51,7 +49,7 @@ async def test_confirmed_install_command_only_returns_console_link(private, http
 
 
 @pytest.mark.parametrize("case", [c for c in (*CASES, *VARIANTS) if c.delivery == "console"], ids=lambda c: c.tool)
-async def test_seven_sensitive_sdk_operations_stop_before_publication(private, http, monkeypatch, case):
+async def test_sensitive_sdk_operations_stop_before_publication(private, http, monkeypatch, case):
     prepared = []
     async def service(req):
         if req.url.path.endswith("/inspect"):
@@ -62,7 +60,10 @@ async def test_seven_sensitive_sdk_operations_stop_before_publication(private, h
             packet = json.loads(req.content)
             prepared.append(packet)
             return httpx.Response(200, json={"console_url": "https://console.example.test/oauth/action?request=test",
-                "status": "pending", "operation_id": packet["operation_id"], "password": "unexpected-value"})
+                "status": "pending", "operation_id": packet["operation_id"], "inferenceKey": "unexpected-value"})
+        if req.url.path == "/v1/sdk/workspaces":
+            return httpx.Response(200, json=[{"namespaceName": "0123456789abcdef", "workspaceName": "research",
+                                              "memberRole": "admin"}])
         if req.url.path == "/v1/sdk/storages":
             return httpx.Response(200, json={"storages": [{"pvName": "pv-a", "userAlias": "test"}]})
         raise AssertionError(req.url)
@@ -72,17 +73,34 @@ async def test_seven_sensitive_sdk_operations_stop_before_publication(private, h
         "tools/call", {"name": case.tool, "arguments": case.arguments}))
     assert len(prepared) == 1, response.text
     assert prepared[0]["tool"] == case.tool and response.json()["result"]["structuredContent"]["status"] == "pending"
+    if case.tool in {"create_inference_key", "roll_inference_key"}:
+        creating = case.tool == "create_inference_key"
+        path = "/v1/sdk/inference-keys" + ("" if creating else "/3/roll")
+        assert prepared[0]["method"] == "POST"
+        assert prepared[0]["target"] == path + "?workspace=" + case.arguments["workspace"]
+        assert prepared[0]["body"] == ({"name": "batch", "expiresInDays": 30} if creating else {})
+        assert prepared[0]["operation_id"] == case.arguments["operation_id"]
     assert "unexpected-value" not in response.text
 
 
+async def test_unrecognized_secret_issuing_route_cannot_exchange(private):
+    async with oauth.private_http() as backend:
+        transport = oauth.DelegatedTransport(backend, "mshoa_writer", "create_inference_key")
+        sensitive = oauth.action_inputs.set((True, "test-operation"))
+        try:
+            request = httpx.Request("POST", settings.oauth_internal_url + "/v1/sdk/inference-keys/new")
+            with pytest.raises(httpx.RequestError, match="Unsupported console confirmation"):
+                await transport.handle_async_request(request)
+        finally:
+            oauth.action_inputs.reset(sensitive)
+    assert not private
+
+
 @pytest.mark.parametrize("case", [c for c in (*CASES, *VARIANTS) if c.sdk and c.delivery != "console"], ids=lambda c: c.tool)
-async def test_authorized_oauth_call_reaches_expected_business_method(private, http, fake, case, monkeypatch, request):
+async def test_authorized_oauth_call_reaches_expected_business_method(private, http, fake, case, monkeypatch, case_prerequisites):
     from conftest import FakeMeshive
     from meshive_mcp import client
     from meshive.exceptions import AuthenticationError
-    fixtures = {"save_template": "misc", "add_pod_asset": "pa_fake", "export_asset": "files_fake"}
-    if case.tool in fixtures:
-        request.getfixturevalue(fixtures[case.tool])
     calls = []
     async def observed(self, *args, **kwargs):
         calls.append(kwargs)
@@ -90,7 +108,8 @@ async def test_authorized_oauth_call_reaches_expected_business_method(private, h
     observed.__name__ = case.sdk
     monkeypatch.setattr(FakeMeshive, case.sdk, observed, raising=False)
     monkeypatch.setattr(client, "AsyncMeshive", lambda key, **kw: client._new_client(key, "test"))
-    r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer mshoa_writer"}, json=_rpc("tools/call", {
+    bearer = "mshoa_reader" if case.scope == "read" else "mshoa_writer"
+    r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer " + bearer}, json=_rpc("tools/call", {
         "name": case.tool, "arguments": case.arguments}))
     assert r.status_code == 200 and len(calls) == 1, r.text
     if case.retry == "same operation ID":
@@ -193,3 +212,57 @@ def test_oauth_result_redacts_known_secrets_in_text_data_and_errors():
     assert clean["upload_token"] == payload["upload_token"] and clean["url"] == payload["url"]
     error = oauth.public_result({"code": "insufficient_credit", "message": "Buy more credits.", "next_step": "top up https://billing.test"})
     assert "http" not in str(error) and "top up" not in str(error)
+
+
+def test_oauth_redacts_inference_keys_and_webhook_receiver_urls_in_results():
+    key = "mk-" + "T" * 40
+    payload = {"inferenceKey": "private-key", "signing_secret": "private-secret",
+               "request_body": json.dumps({"log": "key " + key, "webhookSigningSecret": "private-signature",
+                                           "downloadUrls": ["https://files.test/out?sig=x"]}),
+               "last_error": "500 from https://discord.com/api/v10/webhooks/66/private-receiver",
+               "message": "Could not reach https://hooks.slack.com/services/T1/B1/private-receiver"}
+    clean = oauth.public_result(payload)
+    assert "private-" not in json.dumps(clean) and key not in json.dumps(clean)
+    assert json.loads(clean["request_body"])["downloadUrls"] == ["https://files.test/out?sig=x"]
+
+
+async def test_webhook_preview_pins_workspace_when_its_label_moves(private, http, monkeypatch):
+    original = "0123456789abcdef"
+    current = original
+    receipts, writes = [], []
+
+    async def backend(req):
+        path = req.url.path
+        if path.endswith("/inspect"):
+            return httpx.Response(200, json={"scope": "read write"})
+        if path.endswith("/previews/save"):
+            receipts.append(json.loads(req.content))
+            return httpx.Response(200, json={"bindings": receipts[-1]["bindings"]})
+        if path.endswith("/previews/check"):
+            assert receipts[-1]["input_hash"] == json.loads(req.content)["input_hash"]
+            return httpx.Response(200, json={"bindings": receipts[-1]["bindings"]})
+        if path.endswith("/exchange"):
+            return httpx.Response(200, json={"credential": "mshod_test"})
+        if path == "/v1/sdk/workspaces":
+            return httpx.Response(200, json=[{"namespaceName": current, "workspaceName": "lab", "memberRole": "admin"}])
+        if path == "/v1/sdk/webhooks/event-types":
+            return httpx.Response(200, json=[{"type": "request.succeeded"}])
+        if path == "/v1/sdk/webhooks" and req.method == "POST":
+            writes.append(req.url.params["workspace"])
+            return httpx.Response(201, json={"id": 5, **json.loads(req.content)})
+        raise AssertionError(req.url)
+
+    monkeypatch.setattr(oauth, "private_http", lambda: httpx.AsyncClient(transport=httpx.MockTransport(backend),
+                                                                         base_url=settings.oauth_internal_url))
+    async def save(args):
+        r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer mshoa_writer"}, json=_rpc(
+            "tools/call", {"name": "save_webhook", "arguments": args}))
+        assert not r.json()["result"].get("isError"), r.text
+        return r.json()["result"]["structuredContent"]
+
+    args = {"workspace": "lab", "url": "https://hooks.example.org/events", "event_types": ["request.succeeded"]}
+    preview = await save(args)
+    assert preview["workspace"] == original and preview["confirmed"] is False
+    current = "aaaaaaaaaaaaaaaa"
+    await save({**args, "confirm": True, "operation_id": preview["operation_id"]})
+    assert writes == [original]

@@ -289,6 +289,7 @@ def to_dict(obj: Any) -> Any:
         # userinfo can carry one); the SDK keeps it whole.
         if cls in ("WebhookEndpoint", "WebhookDelivery"):
             out["url"], out["url_masked"] = mask_webhook_url(obj.url)
+            out["url_masked"] |= obj.raw.get("urlMasked") is True
             out["platform"] = obj.platform or webhook_platform(obj.url)
         if cls == "WebhookEndpoint":
             out["signed"] = out["platform"] == "generic"

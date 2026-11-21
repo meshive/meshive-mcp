@@ -15,7 +15,7 @@ Use **`https://mcp.meshive.ai/mcp`** for public GPU prices, access with a Meshiv
 
 ### Sign in from an agent
 
-Add the remote URL without a header to check on-demand and spot GPU prices. On an OAuth-enabled deployment, asking for your pods starts sign-in. Review the callback host and signed-in account in the Meshive console. Keep Read for lookups and select Write if you want the app to manage resources. All 83 tools are discoverable.
+Add the remote URL without a header to check on-demand and spot GPU prices. On an OAuth-enabled deployment, asking for your pods starts sign-in. Review the callback host and signed-in account in the Meshive console. Keep Read for lookups and select Write if you want the app to manage resources. All 98 tools are discoverable.
 
 ```bash
 claude mcp add --scope user --transport http meshive https://mcp.meshive.ai/mcp
