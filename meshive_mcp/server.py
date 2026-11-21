@@ -12,7 +12,7 @@ from typing import Any
 import meshive
 import pydantic_core
 from mcp.server.mcpserver import MCPServer
-from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecuritySettings
+from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecurityMiddleware, TransportSecuritySettings
 from mcp.types import INVALID_REQUEST, PARSE_ERROR
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from . import __version__
+from . import __version__, oauth
 from .errors import invalid_argument
 from .settings import settings
 from .tools import register_all
@@ -275,9 +275,10 @@ class AdmitRequests:
     queued, because a queue would hold the bodies just the same.
     """
 
-    def __init__(self, app: ASGIApp, path: str = "/mcp") -> None:
+    def __init__(self, app: ASGIApp, path: str = "/mcp", security=None) -> None:
         self.app = app
         self.path = path.rstrip("/")
+        self.security = TransportSecurityMiddleware(security) if security else None
         self.read_body = RequestBodyLimitMiddleware(self.admit, MAX_REQUEST_BODY_BYTES)
         self.active = 0
         self.active_large = 0
@@ -320,8 +321,17 @@ class AdmitRequests:
         self.active += 1
         try:
             refusal = _refusal_on_reading(body)
+            rpc = None
+            if not refusal and settings.oauth_resource:
+                request = Request(scope)
+                refusal = await self.security.validate_request(request, is_post=True) if self.security else None
+                if not refusal:
+                    rpc = pydantic_core.from_json(body)
+                    refusal = await oauth.admit(request, rpc)
             if refusal:
                 await refusal(scope, receive, send)
+            elif isinstance(rpc, dict) and rpc.get("method") == "tools/list":
+                await self.app(scope, replay, oauth.tool_list_sender(send))
             else:
                 await self.app(scope, replay, send)
         finally:
@@ -347,7 +357,12 @@ class ArgumentLimitedServer(MCPServer):
                 pending.extend(value.values())
             elif isinstance(value, list):
                 pending.extend(value)
-        return await super().call_tool(name, arguments, context)
+        selected = oauth.current_tool.set(name)
+        try:
+            return await super().call_tool(name, arguments, context)
+        finally:
+            oauth.current_tool.reset(selected)
+
 
 
 def create_server() -> MCPServer:
@@ -362,6 +377,13 @@ def create_server() -> MCPServer:
         subscriptions=False,
     )
     register_all(server)
+
+    @server.custom_route("/.well-known/oauth-protected-resource", methods=["GET"], include_in_schema=False)
+    @server.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"], include_in_schema=False)
+    async def resource_metadata(_: Request):
+        if not settings.oauth_resource:
+            return JSONResponse({}, 404)
+        return JSONResponse(oauth.metadata())
 
     @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(_: Request) -> JSONResponse:
@@ -389,7 +411,7 @@ def create_http_app(server: MCPServer | None = None) -> Starlette:
         transport_security=security,
     )
     app.add_middleware(RefuseStreams)
-    app.add_middleware(AdmitRequests)
+    app.add_middleware(AdmitRequests, security=security)
     # Last added runs outermost, so this also covers every refusal above.
     app.add_middleware(OmitContentLength)
     return app

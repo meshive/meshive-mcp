@@ -19,6 +19,7 @@ from ..auth import api_key
 from ..client import meshive_client
 from ..errors import NEXT_STEP_NO_KEY, NEXT_STEP_UNAVAILABLE, ToolError, invalid_argument, tool_error
 from ..money import hourly
+from ..oauth import rental_mode
 from ..serialize import to_dict
 from ..settings import settings
 from ._common import READ_ONLY, call, meshive_tool
@@ -138,7 +139,7 @@ def register(server: MCPServer) -> None:
         Use `rental_type` "spot" for the cheaper preemptible tier and `min_vram_gb` to filter by VRAM.
         `rental_type` "task" lists the GPUs a task can get now (tasks use another pool than pods; it needs an API key):
         `price_per_gpu_hour`, `max_gpus_per_task` and the vCPUs and RAM a task gets per GPU."""
-        rental_type = (rental_type or "demand").lower()
+        rental_type = rental_mode(rental_type)
         if rental_type not in GPU_RENTAL_TYPES:
             raise invalid_argument("rental_type must be 'demand', 'spot' or 'task'.", allowed=list(GPU_RENTAL_TYPES))
         if rental_type == "task":
