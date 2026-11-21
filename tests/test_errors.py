@@ -261,7 +261,8 @@ def _not_empty_step():
 def test_a_workspace_that_is_not_empty_sorts_what_tools_can_delete_from_what_the_console_does():
     step = _not_empty_step()
     assert "Pods, storage, servings and custom models can be deleted with their tools" in step
-    assert "Assets, finished tasks, credentials, webhooks, custom templates, inference keys" in step
+    assert "assets with delete_asset" in step
+    assert "Finished tasks, credentials, webhooks, custom templates, inference keys" in step
     assert "templates and models" not in step
 
 

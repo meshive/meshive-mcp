@@ -15,7 +15,7 @@ from meshive.models import (AssetDownload, AssetImported, CpuLine, Credit, GpuAv
                             Workspace, WorkspaceCreated, WorkspaceDeleteCheck, WorkspaceEstimate, WorkspaceUpdated,
                             WorkspaceUpdateEstimate)
 
-from meshive.models import ActivityPage, FeedbackSent
+from meshive.models import ActivityPage, ApiKey, FeedbackSent
 from meshive.models import CommandResult, CommandRun, UploadedAsset, UploadSession
 from meshive.models import AccessKey, AccessKeyCreated, BrowserSessionsRevoked, PortLock, PortPreflight
 from meshive.models import (DowntimeEvent, HostMessage, InstallCommand, ListingCheck, ListingResult, Machine,
@@ -272,6 +272,9 @@ class FakeMeshive:
         self.model_sets_selectable = True
         self.workspace_blockers: dict[str, int] = {}    # check_workspace_delete
         self.tasks: list[dict] = []                     # get_task / list_tasks, as the API sends them
+        # list_api_keys, as the API sends it: the calling key is marked (a server without isCurrent leaves it out).
+        self.api_keys: list[dict] = [{"id": 5, "keyName": "agent", "keyPrefix": "meshive_a1b2c3d4",
+                                      "scopes": ["read", "write"], "status": "active", "isCurrent": True}]
         # Hosting
         self.machine_clients = {"pods": [_pod_use("aaaaaaaaaaaaaaaa", "running"),
                                          _pod_use("bbbbbbbbbbbbbbbb", "stopped"),
@@ -325,6 +328,10 @@ class FakeMeshive:
     async def me(self):
         self._rec("me")
         return WhoAmI.from_dict({"email": "u@example.com", "name": "U"})
+
+    async def list_api_keys(self):
+        self._rec("list_api_keys")
+        return [ApiKey.from_dict(k) for k in self.api_keys]
 
     async def get_credit(self):
         self._rec("get_credit")

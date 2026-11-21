@@ -28,8 +28,16 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 # login the machine doesn't have). A request for a locked port that the server can't lock goes back to the user, who
 # may change it; a failed lock change is repaired port by port, not by sending the edit again; and an access key call
 # without a clear answer, or one whose answer lost the value, is followed by the key list and the user's decision,
-# because calling again issues another key value.
-_OWN_RETRY_ADVICE_CODES = {"endpoint_lock_unavailable", "port_lock_change_failed", "access_key_outcome_unknown",
+# because calling again issues another key value. An asset change or deletion refused because the asset is in use,
+# frozen, still being uploaded into, or can't be changed says what has to happen first; a file selection that is the
+# whole asset, too large, empty or changed since the preview is previewed again, not sent again. A serving replica
+# whose log can't be read names the replicas to read instead, or says to wait. An invalid argument is refused before
+# anything runs (locally, or by a server 400 that releases the operation_id), so the fix is a different argument, not
+# the same arguments again.
+_OWN_RETRY_ADVICE_CODES = {"invalid_argument", "asset_in_use", "asset_frozen", "upload_in_progress", "asset_not_editable",
+                           "asset_type_locked", "whole_asset_delete_required", "selection_changed", "too_many_files",
+                           "no_files_matched", "replica_not_found", "replica_logs_expired", "replica_logs_unavailable",
+                           "endpoint_lock_unavailable", "port_lock_change_failed", "access_key_outcome_unknown",
                            "access_key_value_missing",
                            "name_taken", "pod_creation_failed", "data_loss_consent_required", "node_migration_required",
                            "cannot_change_resources", "harvest_roots_orphaned", "model_set_unavailable",
@@ -48,7 +56,8 @@ _WRITES = {"create_pod", "stop_pod", "start_pod", "restart_pod", "delete_pod", "
            "schedule_maintenance", "update_maintenance", "cancel_maintenance", "end_maintenance",
            "extend_maintenance", "set_machine_listing", "retry_machine_setup", "delete_machine",
            "send_host_message", "mark_host_messages_read", "set_port_lock", "set_port_preflight",
-           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions", "send_feedback"}
+           "revoke_access_key", "revoke_browser_sessions", "revoke_workspace_browser_sessions", "send_feedback",
+           "update_asset", "delete_asset", "delete_asset_files"}
 # SDK methods that change something but are sent without an operation_id, so the server keeps no operation record and
 # a repeated call runs again. connect_storage, ssh_access, reveal_machine_credentials and issue_install_command are
 # left out of _WRITES on purpose: their responses carry a password or an install command, which the server must not

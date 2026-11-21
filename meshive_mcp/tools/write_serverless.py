@@ -13,6 +13,10 @@ from ..serialize import to_dict
 from ..workspace import needs_input, resolve
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
 
+# The input_assets mapping keys the task body carries ("asset_id" is an alias of "asset"; "version" is ignored with a
+# deprecation warning by the SDK).
+_INPUT_ASSET_KEYS = frozenset({"asset", "asset_id", "target_dir", "version"})
+
 
 def _replicas_kept(current: Any, min_replicas: int | None, max_replicas: int | None, autoscale: bool | None) -> int:
     """How many replicas a serving keeps once a scale change is applied. The API removes running replicas above
@@ -190,6 +194,18 @@ with its contents; omitted = every file. Files left out still use /outputs disk 
 A task's `output_include` is null when no filter was given; if you passed `output_include` and the submitted task's is
 null, the server ignores the filter and uploads every file."""
 
+    def _check_input_assets(input_assets: list[Any] | None) -> None:
+        """Refuse input_assets keys the task body doesn't carry (the SDK would drop them without a word, e.g. a
+        task detail's `paths`/`strip_prefix`, and the task would download the whole asset in another layout)."""
+        for item in input_assets or []:
+            if isinstance(item, dict):
+                extra = sorted(set(item) - _INPUT_ASSET_KEYS)
+                if extra:
+                    raise invalid_argument(
+                        f"input_assets entries take only `asset` and `target_dir`; {', '.join(extra)} can't be "
+                        "submitted yet. Nothing was submitted: tell the user the task would get the whole asset.",
+                        unsupported=extra)
+
     async def estimate_task(ctx: Context[Any, Any], name: str, script: str, workspace: str | None = None,
                             image: str | None = None, template_id: int | None = None, requirements: str | None = None,
                             env: dict[str, str] | None = None, secret_keys: list[str] | None = None,
@@ -200,6 +216,7 @@ null, the server ignores the filter and uploads every file."""
                             output_include: list[str] | None = None) -> dict[str, Any]:
         """Estimate a one-off task's compute hourly price (total cost can be unknown) before submitting it; nothing runs.
         """
+        _check_input_assets(input_assets)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -229,6 +246,7 @@ null, the server ignores the filter and uploads every file."""
         `max_duration`. With confirm=false (default) it only returns the estimate; call again with confirm=true after the
         user agreed. Then poll the tasks tool for status and read output with logs.
         """
+        _check_input_assets(input_assets)
         kwargs = dict(image=image, template_id=template_id, requirements=requirements, env=env, secret_keys=secret_keys,
                       args=args, gpu_model=gpu_model, gpu_count=gpu_count, gpu_vram_gb=gpu_vram_gb, cpu_preset=cpu_preset,
                       max_duration=max_duration, webhook_url=webhook_url, input_assets=input_assets,

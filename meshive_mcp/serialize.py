@@ -39,22 +39,42 @@ _DROP_BY_CLASS: dict[str, set[str]] = {"Credit": {"paid_balance", "bonus_balance
                                        # exit and the create transaction with a pod that has no record yet, so items
                                        # carry none of them as a null.
                                        "Pod": {"recent_exits", "last_exit", "restart_count", "creation_failure",
-                                               "creation_failure_reason", "transaction_id"}}
+                                               "creation_failure_reason", "transaction_id"},
+                                       # A task's script and requirements were written by workspace members and can
+                                       # hold secrets: only the tasks tool with include_code shows them.
+                                       "Task": {"script", "requirements"},
+                                       # A serving's failure diagnostics carry program output, and a replica's pod
+                                       # name and log id are how the platform finds it, not something to show: only
+                                       # the servings detail adds the failures and live numbers back, so the scale,
+                                       # pause and delete previews (which carry the whole Serving) carry none.
+                                       "Serving": {"failure"},
+                                       "ServingReplica": {"failure", "metrics", "pod_name", "log_replica_id",
+                                                          "setup_step", "step", "step_status"},
+                                       "ServingStoppedReplica": {"pod_name"},
+                                       # Whether the server masked a template env value; `value_set` says it instead.
+                                       "TemplateEnv": {"masked"}}
 # A write result's `replayed` is sent only when true: the server answered with its stored answer to an earlier request
 # with the same operation_id, and the tool's next_step says so. In the activity log it is part of every row.
 _KEEP_REPLAYED_FALSE = {"ActivityEvent"}
 
 # Hourly rates have the same field name in every dataclass → decided by the name alone (3 decimals, like the console).
 # current_price_per_hour is the rate before an edit (pod and storage update estimates).
-_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour", "current_price_per_hour"}
+_HOURLY_FIELDS = {"price_per_hour", "storage_rate_per_hour", "price_cap_per_hour", "current_price_per_hour",
+                  # A task's hourly price split into compute and its own disk.
+                  "compute_rate_per_hour", "total_rate_per_hour"}
 # Hourly unit prices whose names don't say "per_hour" → checked together with the dataclass name. The console's CPU
 # picker shows the per-core and per-GiB RAM rates of a line with 3 decimals, like every other hourly rate.
-_HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "ram_price_per_gb"}}
+_HOURLY_FIELDS_BY_CLASS: dict[str, set[str]] = {"CpuLine": {"price_per_core", "ram_price_per_gb"},
+                                                 # What renters pay per GPU per hour on a host's machine.
+                                                 "MachinePrice": {"demand_per_hour", "spot_per_hour"}}
 # Other amounts can't be told apart by name alone (e.g. DailyCost.pod is an amount, WorkspaceResources.pod a count)
 # → checked together with the dataclass name. 2 decimals, like the console.
 _USD_FIELDS: dict[str, set[str]] = {
-    "Machine": {"earning_hourly"},                    # the console's host screen shows earnings /hr with 2 decimals too
-    "MachineDetail": {"earning_hourly"},
+    # The console's host screen shows earnings /hr with 2 decimals too.
+    "Machine": {"earning_hourly", "earning_daily", "pending_payout"},
+    "MachineDetail": {"earning_hourly", "earning_daily", "pending_payout"},
+    "MachinePrice": {"storage_per_gb_month"},
+    "Serving": {"shared_earned_this_month"},
     "WorkspaceDetail": {"weekly_avg_daily_cost"},
     "DailyCost": {"pod", "storage", "serverless", "task", "asset"},
     "Credit": {"balance", "auto_recharge_threshold", "auto_recharge_amount"},
@@ -62,7 +82,7 @@ _USD_FIELDS: dict[str, set[str]] = {
     "Earnings": {"current_hourly", "daily", "accumulated_until_payout"},
     "Payout": {"amount"},
     "PayoutAccount": {"pending_amount", "minimum_payout"},
-    "Task": {"cost_so_far", "total_cost"},
+    "Task": {"cost_so_far", "total_cost", "refunded_amount"},
     "AssetStorage": {"price_per_gb_month", "estimated_monthly_cost"},
     "StorageEstimate": {"price_per_gb_month"},
     "TaskEstimate": {"max_cost"},
@@ -156,6 +176,18 @@ def to_dict(obj: Any) -> Any:
         # carry the whole Pod too, so they're blocked here. Only the pods tool with show_secrets=true fills the values back in.
         if cls == "ConnectCredential" and getattr(obj, "is_secret", False):
             out["value"] = None
+        # A template's secret env value is never shown, whatever the server sent; `value_set` says one is stored.
+        if cls == "TemplateEnv":
+            if getattr(obj, "secret", False):
+                out["value"] = None
+            out["value_set"] = obj.value_set
+        # A task's env as submitted: only the values that aren't secret (the server sends "***" for a secret one,
+        # and `secret_env_keys` names them), in every response that carries a Task.
+        # `env` is a property over the raw response (not a dataclass field) from SDK 1.11 on; older SDKs had a field.
+        env = getattr(obj, "env", None) if cls == "Task" else None
+        if isinstance(env, dict):
+            secret = set(getattr(obj, "secret_env_keys", None) or ())
+            out["env"] = {str(k): to_dict(v) for k, v in env.items() if k not in secret and v != "***"}
         # Who can reach the port: internal (inside the workspace only), locked (signed-in workspace members and the
         # port's access keys) or unlocked (anyone with the URL). The SDK works it out; it isn't a dataclass field.
         if cls == "PodEndpoint":

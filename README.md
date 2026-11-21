@@ -152,7 +152,7 @@ Clients that only support stdio can bridge with the generic `mcp-remote` shim:
 | Storage | `storages`, `create_storage`, `update_storage`, `connect_storage`, `delete_storage` |
 | Serving models | `models`, `detect_model`, `register_model`, `delete_model`, `servings`, `deploy_serving`, `scale_serving`, `pause_serving`, `delete_serving` |
 | Serverless tasks | `tasks`, `estimate_task`, `submit_task`, `stop_task` |
-| Files (Asset Hub) | `assets`, `upload_asset`, `finish_upload`, `import_asset`, `download_links`, `source_credentials` |
+| Files (Asset Hub) | `assets`, `upload_asset`, `finish_upload`, `import_asset`, `update_asset`, `delete_asset`, `delete_asset_files`, `download_links`, `source_credentials` |
 | Hosting | `machines`, `machine_history`, `host_messages`, `send_host_message`, `mark_host_messages_read`, `schedule_maintenance`, `maintenance_window`, `set_machine_listing`, `retry_machine_setup`, `delete_machine`, `machine_credentials`, `host_install_command` |
 | Recovering a write | `operation_status` |
 | Reporting to the Meshive team | `send_feedback` (a bug, an idea or a complaint; the agent asks you first) |

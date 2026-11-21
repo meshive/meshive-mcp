@@ -64,9 +64,10 @@ NEXT_STEP_UNAVAILABLE = ("Wait {retry_after}s. For a read, retry once. For a wri
 # delete_workspace, on its preview and on the server's own refusal. A key can only delete an empty workspace, on purpose.
 NEXT_STEP_WORKSPACE_NOT_EMPTY = (
     "Nothing was deleted. Tell the user what `blockers` says is left, and clear nothing on your own. Pods, storage, "
-    "servings and custom models can be deleted with their tools and running tasks stopped with stop_task, but only if "
-    "the user asks. Assets, finished tasks, credentials, webhooks, custom templates, inference keys, members and "
-    "invitations are managed in the console. `pods` also counts serving replicas, which go with their serving, and "
+    "servings and custom models can be deleted with their tools, assets with delete_asset, and running tasks stopped "
+    "with stop_task, but only if the user asks. Finished tasks, credentials, webhooks, custom templates, inference "
+    "keys, members and invitations are managed in the console. `pods` also counts serving replicas, which go with "
+    "their serving, and "
     "system pods, which go with their storage volume (delete_storage); the pods tool lists those with "
     "include_system=true. A volume the storages tool still shows stays and bills until it is deleted; only a deleted "
     "pod's hidden temporary volume can stay under `storages` for a few minutes and clear by itself. "
@@ -460,6 +461,47 @@ _NOT_FOUND_CODES = {
     "port not found": ("port_not_found", NEXT_STEP_PORT_NOT_FOUND),
 }
 _LOCK_DISABLED_CODE = "endpoint_lock_disabled"
+
+# --- Asset changes and deletion (update_asset, delete_asset, delete_asset_files) ---
+# Told apart by detail.title, for these tools only: some titles ("Invalid Name", "No Files", "Too Many Files") come
+# from other routes too, where this advice would be wrong.
+NEXT_STEP_ASSET_IN_USE = ("Used by a pod or an unfinished task (assets `active_usage_contexts`). Stop or delete that pod "
+                          "or wait for the task, then preview again.")
+NEXT_STEP_ASSET_FROZEN = "Frozen by the platform; only Meshive support can release it. Don't retry."
+NEXT_STEP_WHOLE_ASSET = ("Tell the user. If they want the asset gone, call delete_asset with this asset (it shows its "
+                         "own preview).")
+_ASSET_WRITE_CODES = {
+    "asset name conflict": ("name_taken", "Another asset already has this name; it may be hidden because the catalog "
+                                          "added it (check with assets include_catalog=true). Ask the user for "
+                                          "another name."),
+    "output type is immutable": ("asset_type_locked", "Output assets keep their type; change only the name."),
+    "invalid asset type": ("invalid_argument", "Use dataset, model, adapter, checkpoint, config or file; no asset can "
+                                               "be made an output."),
+    "invalid name": ("invalid_argument", "Use 1-255 characters."),
+    "nothing to update": ("invalid_argument", "Pass `name`, `asset_type` or both."),
+    "asset not editable": ("asset_not_editable", "Merged, deleted or purged assets can't be changed."),
+    "asset not deletable": ("asset_not_editable", "Merged or purged assets can't be deleted, and don't need to be."),
+    "asset in use": ("asset_in_use", NEXT_STEP_ASSET_IN_USE),
+    "asset frozen": ("asset_frozen", NEXT_STEP_ASSET_FROZEN),
+    "upload session active": ("upload_in_progress", "A running pod is still saving files into this asset. Stop the pod "
+                                                    "or wait until its upload ends, then preview again."),
+    "whole collection delete required": ("whole_asset_delete_required", NEXT_STEP_WHOLE_ASSET),
+    "selection changed": ("selection_changed", "The files matching this selection changed since the preview. Preview "
+                                               "again (new operation_id)."),
+    "too many files": ("too_many_files", "At most 1000 files per call: split `file_ids` or narrow `paths`."),
+    "no files": ("no_files_matched", "Nothing matched; check the paths with the assets tool."),
+}
+
+
+def asset_write_error(exc: BaseException | None) -> ToolError | None:
+    """The asset tools' own reading of a server refusal, or None to keep the general one."""
+    if not isinstance(exc, MeshiveAPIError) or exc.status_code not in (400, 403, 404, 409, 422):
+        return None
+    found = _ASSET_WRITE_CODES.get((exc.title or "").strip().lower())
+    if found is None:
+        return None
+    code, next_step = found
+    return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
 
 
 def _server_code(exc: MeshiveAPIError) -> str | None:

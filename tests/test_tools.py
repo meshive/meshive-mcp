@@ -18,10 +18,11 @@ WRITE_TOOLS = {"set_port_lock", "set_port_preflight", "revoke_browser_sessions",
                "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace",
                "schedule_maintenance", "maintenance_window", "set_machine_listing", "retry_machine_setup",
                "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
-               "host_install_command", "run_command", "upload_asset", "finish_upload", "send_feedback"}
+               "host_install_command", "run_command", "upload_asset", "finish_upload", "send_feedback",
+               "update_asset", "delete_asset", "delete_asset_files"}
 # run_command can change or delete anything in the pod. A revoked access key can't be brought back.
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine",
-               "run_command", "revoke_access_key", "revoke_browser_sessions"}
+               "run_command", "revoke_access_key", "revoke_browser_sessions", "delete_asset", "delete_asset_files"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
 # reveals a login again or issues a new one-time password or install command (machine logins and install commands
 # also email the account owner every time). An access key call issues another key value every time.
@@ -45,7 +46,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 71
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 74
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -973,7 +974,8 @@ CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "
                       "set_port_preflight"}
 # Writes without `confirm`, as in the console.
 NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
-                     "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload"}
+                     "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload",
+                     "update_asset"}
 
 
 async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):

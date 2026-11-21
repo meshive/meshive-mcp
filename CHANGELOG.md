@@ -3,7 +3,105 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
-## Unreleased
+## v1.11.0
+
+Assets can be renamed, retyped and deleted, whole or file by file, and the assets tool shows more of what an asset
+is and where it came from. Built on the `meshive` Python SDK 1.11, which this release needs. There are 3 new tools;
+existing tool names are unchanged.
+
+The read tools also show what the console shows: how a task was submitted and what it costs per hour, a task's
+input download log, a serving's replicas, failures and live numbers and the logs of its replicas, a workspace's host
+maintenance and host conversations, a machine's price, setup and hardware, which API key is in use, a volume's
+maintenance and access pod, and a template's full spec.
+
+### New
+
+- `update_asset` renames an asset or changes its type (dataset, model, adapter, checkpoint, config or file). It needs
+  no `confirm`. Output assets keep their type, and no asset can be made an output. A name that another asset already
+  has fails with `name_taken`, whose `next_step` says that the other asset may be one the catalog added, which the
+  assets list hides unless `include_catalog=true`.
+- `delete_asset` deletes a whole asset and takes `confirm`. The preview shows the asset's name, type, size, file
+  count and where it is used, what deleting does (files in Meshive storage are removed for good; a linked asset only
+  loses the link; objects in the user's bucket stay; a task's output links stop working) and, for Meshive storage,
+  `storage_freed_gib` and `monthly_storage_saving` with its `_display`. An asset that is frozen, in use, merged or
+  purged is refused already at the preview (`asset_frozen`, `asset_in_use` with `active_usage_contexts`,
+  `asset_not_editable`), and an asset that is already deleted says so. A running pod still saving into the asset
+  fails with `upload_in_progress`.
+- `delete_asset_files` deletes some files of assets, chosen by `file_ids` (up to 1000, from any assets of one
+  workspace) or by `asset` with `paths` globs. Its preview counts the matched, deletable, blocked and missing files
+  and shows their size, up to 20 sample paths and, for Meshive storage, the monthly storage saving. It returns an
+  `expected_file_count` that the confirmed call passes back: the files are matched again on confirm, and if the
+  count changed nothing is deleted (`selection_changed`). Selecting every file of a collection is refused with
+  `whole_asset_delete_required`, which points to `delete_asset`. When some selected files will be skipped (their
+  asset is frozen or in use), the preview shows the size of every selected file as `selected_size_bytes`, leaves
+  `size_bytes` and the storage saving out, and its question says the size includes the skipped files. The answer
+  lists the files deleted, skipped and failed, lists ids that name no file of the workspace as `not_found` (not to be
+  retried), and says when an asset went with its last file (`asset_deleted`).
+
+### Changed
+
+- `assets` takes `collection` (true = folder assets, false = single files) and `include_catalog`. Assets that a
+  model set or catalog import added are hidden by default; the first page counts them in `catalog_hidden` (0 with
+  `include_catalog=true`, which lists them), with a note on how to list them. List rows gain `from_catalog`, `pickle_flag`, `has_unverified_format`, `weight_formats`,
+  `has_root_config` and a compact `source`.
+- A single asset (`assets` with `asset`) shows where it came from (`source`: Hugging Face repo, revision and commit,
+  a CivitAI or direct URL without its query string, the pod and folder it was saved from, or the asset it was copied
+  from), `reference` for an asset that points at its source, `child_type_summary`, `weight_formats`,
+  `has_root_config`, `active_upload`, and each file's `ext`, `file_type`, `media_kind`, `detected_format`,
+  `pickle_flag` and `format_unverified`. A note asks the agent to tell the user before loading pickle files.
+- **A single asset lists at most its first 200 files**, by path, with `files_total` and `files_truncated`. Before
+  this release every file was returned.
+- `delete_workspace` and the `workspace_not_empty` error name `delete_asset` for the workspace's assets.
+- `tasks` with `task` shows how the task was submitted: `template_id`, `gpu_vram_gb`, `cpu_preset`,
+  `max_duration_seconds`, `webhook_url`, `args`, `env` (values that aren't secret only; `secret_env_keys` names the
+  secret ones, whose values are never returned), `input_assets` with `paths`/`strip_prefix`/`is_project`, `project`
+  and `output_bucket_id` (null = Meshive storage), and `script_bytes`/`requirements_bytes`. The hourly price is split
+  into `compute_rate_per_hour`, `storage_rate_per_hour` and `total_rate_per_hour` (with `_display`), next to
+  `task_storage_gb`, `disk_billed_separately`, `refunded_amount`, `fault_class`, `failure_stage` ("fetch" or "run"),
+  the input download times and progress, `log_retention_days`, `live_metrics` and `log_containers`. New arguments:
+  `include_code` adds the full `script` and `requirements` with a note that scripts can hold secrets (requirements are
+  left out, with `requirements_truncated`, when both together pass 400 KiB), and `include_metrics` adds live CPU, RAM
+  and GPU use while the task runs on a Meshive machine. List items gain only `template_id`, `gpu_vram_gb`,
+  `cpu_preset`, `max_duration_seconds`, `fault_class`, `failure_stage`, `live_metrics` and `refunded_amount`. A task's
+  script, requirements and secret env values are left out of every other response that carries a task.
+- `logs` reads a task's input download with `container="fetch"` (`"run"` is the script) and a serving's replicas
+  with `serving` and `replica`: by default the first running replica whose log it can read, or the replica of a
+  failed deployment or of a paused serving, whose last run is in `previous`. New errors `replica_not_found` and
+  `replica_logs_unavailable` (both with the replicas and whether each has a log to read) and
+  `replica_logs_expired`. A replica on an external GPU, whose log is collected another way, can't be read by this
+  tool yet, and its error says so instead of telling the agent to wait.
+- `estimate_task` and `submit_task` refuse `input_assets` entries with keys they don't send (such as `paths` or
+  `strip_prefix` from a task's detail) with `invalid_argument`, instead of submitting a task that downloads the
+  whole asset.
+- An `invalid_argument` error from a write tool no longer tells the agent to retry with the same arguments: nothing
+  was run, and the fix is a different argument.
+- `servings` items gain `registration_id`, `model_retiring`, `is_official`, `endpoint_type`, `modality`,
+  `input_modalities`, `output_bucket_id`/`output_bucket_label`, `share_idle_capacity`, `sharing_state`,
+  `shared_earned_this_month`, `scale_up_blocked` with its reason and desired count, `cap_migration`, `has_failure`,
+  `oom_kind`, `failed_replica`, `stopped_replicas`, `replicas` (status, stage, price, GPU, download progress) and
+  `metrics`. One serving adds `failure` and each replica's `failure` and live numbers, with a note that failure text
+  can contain the program's output; the scale, pause and delete previews carry no failure text.
+- `models` items gain `modality`, `input_modalities`, `endpoint_type`, `is_official`, `takes_image`,
+  `can_share_idle_capacity` and the model's recommended context and size details.
+- `workspaces` with `workspace` adds `maintenance` (one entry per host maintenance window, with the pods and
+  volumes it touches) and `host_threads` (the conversations with the hosts of machines the workspace uses, with
+  message and unread counts; message text stays in `host_messages`).
+- `machines` items gain `listed`, `price` (per GPU per hour, or per GiB-month on a storage machine; null with a note
+  on a CPU machine), `earning_daily`, `pending_payout`, a `summary` of CPU, RAM and rentable disk in GiB, and `setup`
+  while a machine is being set up or a step failed. One machine adds `ip`, `gpu_supported`, the full `setup` with its
+  log and `specs` (disks in GiB with speeds in MB/s, temperatures and life left; internet speeds in Mbps); its
+  `metrics` add disk temperatures and the network interface.
+- **`account` always reads the account's API key list** to show `current_key`, the key in use (null, with a note,
+  from a server that doesn't say). `include_api_keys` lists every active key with `expired`, `expires_in_days` and
+  `is_current`.
+- `storages` items gain `usage_warning`, `usage_warning_threshold`, `maintenance_start`/`maintenance_end`,
+  `upcoming_maintenance`, `location`, `downloader_state` and `downloader_restarts`, with a note when a host wrote
+  something in a maintenance window.
+- `templates` list items are a summary with `port_count`, `env_count` and `has_registry_login`; one template adds its
+  `envs` (secret values are never shown; `value_set` says one is stored), `ports` with `locked`, `volume_mounts`,
+  `semantic_paths`, `command`, `command_argv`, `args`, `volume_required` and `registry_login`.
+- The server instructions name serving failures, host maintenance reasons, a machine's setup log and task scripts
+  and env as text from others, and task scripts with `include_code` as possibly holding secrets.
 
 ### Fixed
 
