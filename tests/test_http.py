@@ -18,6 +18,7 @@ pytestmark = pytest.mark.anyio
 from meshive_mcp.__main__ import BoundedHeadProtocol, BoundedLines, configure_logging, main, raise_open_file_limit
 from meshive_mcp.server import (AdmitRequests, OmitContentLength, RefuseStreams, _may_be_large, _read_and_drop,
                                 _too_complex, create_http_app, create_server)
+from meshive_mcp.settings import Settings
 
 HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
@@ -48,6 +49,35 @@ async def test_healthz(http, monkeypatch):
     assert body["sdk_version"] == meshive.__version__
     monkeypatch.delenv("MESHIVE_MCP_REVISION")
     assert (await http.get("/healthz")).json()["revision"] is None
+
+
+@pytest.mark.parametrize("resource", ["", "https://mcp.test/mcp"])
+async def test_openai_apps_challenge_is_public_plain_text(http, monkeypatch, resource):
+    token = "test-challenge_42.a-B"
+    monkeypatch.setenv("MESHIVE_OPENAI_APPS_CHALLENGE", token)
+    monkeypatch.setenv("MESHIVE_OAUTH_RESOURCE", resource)
+    monkeypatch.setattr("meshive_mcp.server.settings", Settings.from_env())
+
+    path = "/.well-known/openai-apps-challenge"
+    response = await http.get(path)
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == "text/plain"
+    assert response.content == token.encode()
+    assert response.headers["cache-control"] == "no-store"
+    assert (await http.post(path)).status_code == 405
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+async def test_openai_apps_challenge_is_unavailable_without_token(http, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("MESHIVE_OPENAI_APPS_CHALLENGE", raising=False)
+    else:
+        monkeypatch.setenv("MESHIVE_OPENAI_APPS_CHALLENGE", value)
+    monkeypatch.setattr("meshive_mcp.server.settings", Settings.from_env())
+
+    response = await http.get("/.well-known/openai-apps-challenge")
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store"
 
 
 async def test_get_mcp_is_not_a_stream(http):
