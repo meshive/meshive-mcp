@@ -115,17 +115,17 @@ async def admit(request, rpc):
     prefix, _, token = header[0].partition(" ")
     if len(header) != 1 or prefix.lower() != "bearer" or len(token) > 512:
         return denied(401, need, rpc, "invalid_token")
+    if token.startswith("meshive_"):
+        # Manual keys behave as before OAuth: the API checks them on each call and the tool explains a refusal.
+        # Checking here too would spend an extra request from the key's rate limit on every MCP message.
+        return None
+    if not token.startswith("mshoa_"):
+        return denied(401, need, rpc, "invalid_token")
     try:
-        if token.startswith("meshive_"):
-            async with httpx.AsyncClient(trust_env=False, timeout=settings.request_timeout) as client:
-                result = await client.get(resolve_base_url(settings.base_url) + "/v1/sdk/me", headers={"Authorization": header[0]})
-        elif token.startswith("mshoa_"):
-            async with private_http() as client:
-                result = await client.post("/internal/oauth/inspect", headers={"Authorization": header[0]})
-            if result.status_code == 200 and not set(need.split()) <= set(result.json()["scope"].split()):
-                return denied(403, need, rpc, "insufficient_scope")
-        else:
-            return denied(401, need, rpc, "invalid_token")
+        async with private_http() as client:
+            result = await client.post("/internal/oauth/inspect", headers={"Authorization": header[0]})
+        if result.status_code == 200 and not set(need.split()) <= set(result.json()["scope"].split()):
+            return denied(403, need, rpc, "insufficient_scope")
         if result.status_code == 401:
             return denied(401, need, rpc, "invalid_token")
         if result.status_code == 429:

@@ -97,7 +97,7 @@ async def test_openai_tool_error_cannot_change_admission(private, http):
     assert private == []
 
 
-async def test_enabled_public_catalog_manual_key_and_invalid_manual_key(private, http, monkeypatch, fake):
+async def test_enabled_public_catalog_and_manual_key_without_precheck(private, http, monkeypatch, fake):
     import meshive_mcp.tools.gpus as gpus
     from unittest.mock import AsyncMock
     monkeypatch.setattr(gpus, "_catalog_body", AsyncMock(return_value={"gpu_pod_prices": []}))
@@ -106,14 +106,13 @@ async def test_enabled_public_catalog_manual_key_and_invalid_manual_key(private,
     assert private == []
     manual = "meshive_" + "c" * 64
     actual_client = httpx.AsyncClient
-    def account_check(request):
-        assert request.url.path == "/v1/sdk/me"
-        return httpx.Response(200 if request.headers["authorization"] == "Bearer " + manual else 401)
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: actual_client(transport=httpx.MockTransport(account_check), **kw))
-    for token, status in [(manual, 200), ("meshive_invalid", 401)]:
-        r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer " + token},
-                            json=_rpc("tools/call", {"name": "account", "arguments": {}}))
-        assert r.status_code == status
+    def no_precheck(request):
+        raise AssertionError("manual keys must reach the tool without an admission request")
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: actual_client(transport=httpx.MockTransport(no_precheck), **kw))
+    # The API checks manual keys per call, as before OAuth. Admission must not spend their rate limit.
+    r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer " + manual},
+                        json=_rpc("tools/call", {"name": "account", "arguments": {}}))
+    assert r.status_code == 200
     assert fake["last"].key == manual and not private
 
 
