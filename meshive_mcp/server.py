@@ -382,6 +382,11 @@ def create_server() -> MCPServer:
     )
     register_all(server)
 
+    @server.custom_route("/.well-known/openai-apps-challenge", methods=["GET"], include_in_schema=False)
+    async def openai_apps_challenge(_: Request) -> PlainTextResponse:
+        token = settings.openai_apps_challenge
+        return PlainTextResponse(token, status_code=200 if token else 404, headers={"Cache-Control": "no-store"})
+
     @server.custom_route("/.well-known/oauth-protected-resource", methods=["GET"], include_in_schema=False)
     @server.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"], include_in_schema=False)
     async def resource_metadata(_: Request):

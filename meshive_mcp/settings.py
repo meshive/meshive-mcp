@@ -33,10 +33,12 @@ class Settings:
     # Cap for list tools. Full lists can overflow the context window and kill the session.
     default_limit: int = 20
     max_limit: int = 100
+    openai_apps_challenge: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
+            openai_apps_challenge=os.getenv("MESHIVE_OPENAI_APPS_CHALLENGE", "").strip(),
             oauth_resource=os.getenv("MESHIVE_OAUTH_RESOURCE", ""),
             oauth_issuer=os.getenv("MESHIVE_OAUTH_ISSUER", ""),
             oauth_internal_url=os.getenv("MESHIVE_OAUTH_INTERNAL_URL", ""),

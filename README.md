@@ -223,6 +223,7 @@ repository you can also run `pip install .` and then `meshive-mcp` (HTTP on `127
 | `MESHIVE_MCP_HOST`, `MESHIVE_MCP_PORT` | HTTP bind address |
 | `MESHIVE_MCP_ALLOWED_HOSTS` | Comma-separated `Host` allowlist; empty turns off DNS-rebinding checks (use behind a reverse proxy) |
 | `MESHIVE_API_KEY` | Fallback key, **stdio mode only** |
+| `MESHIVE_OPENAI_APPS_CHALLENGE` | OpenAI portal verification token for this MCP hostname. An unauthenticated GET to `/.well-known/openai-apps-challenge` returns the token as plain text, or 404 when unset. |
 
 Behind a reverse proxy, keep response buffering off. It can add a `Content-Length` back to short responses, and the
 HTTPS scanning in Norton (and in Avast, by user reports) breaks MCP responses that have one. Without request buffering,
