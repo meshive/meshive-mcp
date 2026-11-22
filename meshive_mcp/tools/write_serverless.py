@@ -209,6 +209,7 @@ def register(server: MCPServer) -> None:
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Deploy an already-registered model as a serverless serving (inference endpoint). Billing runs per replica per hour,
         capped at `price_cap_per_hour` each, so the worst case is price_cap × max_replicas per hour.
+        With autoscale off a new serving starts at most 10 replicas; raise the count with scale_serving once it is running. With autoscale on it starts from one replica.
         With confirm=false (default) it only returns that cost summary; call again with confirm=true after the user agreed.
         The summary also shows `availability`: how many GPUs that fit the model are free at or under the cap now
         (`gpus_within_cap`) and the suggested cap; with none, replicas wait until one is.

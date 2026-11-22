@@ -39,8 +39,9 @@ _SessionsPod = Annotated[str | None, Field(description=(
     "preview returned). Leave it out only together with all_pods=true."))]
 
 # The name length, lifetimes and overlaps the server accepts; anything else is refused before a request is sent.
+# A key that never expires is made only in the web console: the API refuses one from this server.
 _NAME_LENGTH = 64
-_LIFETIMES = (30, 90, 365, 0)
+_LIFETIMES = (30, 90, 365)
 _OVERLAPS = {0: "at once", 3600: "in 1 hour", 86400: "in 24 hours", 604800: "in 7 days"}
 
 _KEY_HANDLING = ("`access_key` is the key's value. It is in this answer only and can't be read again. Give it to the "
@@ -62,7 +63,7 @@ _NO_SECOND_CALL = (" If the confirmed call ends without a clear answer (a timeou
 
 
 def _lifetime(days: int) -> str:
-    return "never expires" if days == 0 else f"expires in {days} days"
+    return f"expires in {days} days"
 
 
 def _opened(pod: Any, pod_name: str, port: int) -> Any:
@@ -378,13 +379,14 @@ def register(server: MCPServer) -> None:
                                 operation_id: str | None = None) -> dict[str, Any]:
         """Create an access key for a locked port of a pod, only when the user asks for one. The key is a secret that lets a program outside the pod call the port: it is sent as `Authorization: Bearer <key>`, or as `X-Meshive-Key: <key>` when the app uses Authorization itself.
         With confirm=false (default) it only returns a summary and creates nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. The confirmed answer has the value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools. To call the app for your own work, use run_command inside the pod against http://localhost:<port>, which needs no key.
-        `name` is a label of 1-64 characters. `expires_in_days` is 30, 90 (default) or 365, or 0 for a key that never expires. The port must be locked (port_not_locked), and only a workspace admin or billing member can create keys.
+        `name` is a label of 1-64 characters. `expires_in_days` is 30, 90 (default) or 365; a key that never expires can only be made in the web console. The port must be locked (port_not_locked), and only a workspace admin or billing member can create keys.
         If a confirmed call times out or fails without a clear answer, don't call again: read access_keys first, because the key may exist, and a key whose value was lost can only be revoked."""
         name = (name or "").strip()
         if not 1 <= len(name) <= _NAME_LENGTH:
             raise invalid_argument(f"`name` is required: a label for the key, 1-{_NAME_LENGTH} characters.")
         if isinstance(expires_in_days, bool) or expires_in_days not in _LIFETIMES:
-            raise invalid_argument("`expires_in_days` must be 30, 90 or 365, or 0 for a key that never expires.")
+            raise invalid_argument("`expires_in_days` must be 30, 90 (default) or 365. A key that never expires can "
+                                   "only be made in the web console.")
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -420,7 +422,7 @@ def register(server: MCPServer) -> None:
                               overlap_seconds: int = 3600, workspace: str | None = None, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:
         """Replace the value of one access key, only when the user asks: the key keeps its name and port and gets a new value and a new `id`. Use it when a value may have leaked, before a key expires, or to replace a key that has expired (`expired` in access_keys): its old value is dead already, so `overlap_seconds` is ignored and there is no overlap.
-        The old value keeps working for `overlap_seconds`, so the user's programs can be moved to the new value: 3600 (1 hour, default), 86400 (24 hours), 604800 (7 days), or 0 to stop the old value at once. The new value expires after the same lifetime the key was created with, counted from now.
+        The old value keeps working for `overlap_seconds`, so the user's programs can be moved to the new value: 3600 (1 hour, default), 86400 (24 hours), 604800 (7 days), or 0 to stop the old value at once. The new value expires after the same lifetime the key was created with, counted from now. A key with no expiry (`expires_at` null, made in the console) is rolled in the web console when you sign in with an API key.
         With confirm=false (default) it only returns a summary and changes nothing; call again with confirm=true and the summary's `pod_name` after the user agreed. The confirmed answer has the new value in `access_key`, this once: it can't be read again. Give it to the user who asked and nothing else. Never use it yourself, and never put it in files, commits, commands or other tools.
         The port must be locked, and only a workspace admin or billing member can roll keys. If a confirmed call times out or fails without a clear answer, don't call again: read access_keys first."""
         if isinstance(overlap_seconds, bool) or overlap_seconds not in _OVERLAPS:

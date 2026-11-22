@@ -810,16 +810,32 @@ async def test_the_confirmed_answer_carries_the_value_once(mcp_client, fake, wit
 
 async def test_key_lifetimes(mcp_client, fake, with_key):
     _setup(fake, endpoints=LOCK_ENDPOINTS)
-    never = _payload(await mcp_client.call_tool("create_access_key", {**KEY_ARGS, "expires_in_days": 0}))
-    assert "It never expires." in never["question"]
-    done = _payload(await mcp_client.call_tool("create_access_key", {**KEY_ARGS, "expires_in_days": 0,
+    year = _payload(await mcp_client.call_tool("create_access_key", {**KEY_ARGS, "expires_in_days": 365}))
+    assert "It expires in 365 days." in year["question"]
+    done = _payload(await mcp_client.call_tool("create_access_key", {**KEY_ARGS, "expires_in_days": 365,
                                                                      "confirm": True, "operation_id": OP}))
-    assert _calls(fake, "create_access_key")[-1][2] == {"expires_in_days": 0} and done["key"]["expires_at"] is None
-    for bad in (7, 1, -1, 3650):
+    assert _calls(fake, "create_access_key")[-1][2] == {"expires_in_days": 365} and done["key"]["expires_at"]
+    for bad in (0, 7, 1, -1, 3650):
         result, body = await _call(mcp_client, "create_access_key", {**KEY_ARGS, "expires_in_days": bad,
                                                                      "confirm": True, "operation_id": OP})
-        assert result.is_error and body["code"] == "invalid_argument" and "30, 90 or 365, or 0" in body["message"], bad
+        assert result.is_error and body["code"] == "invalid_argument" and "30, 90 (default) or 365" in body["message"], bad
     assert len(_calls(fake, "create_access_key")) == 1          # the refused ones were never sent
+
+
+async def test_a_key_that_never_expires_is_refused_before_anything_is_sent(mcp_client, fake, with_key):
+    # The API refuses expires_in_days=0 from an API key and before an OAuth confirmation alike: only the web console
+    # makes a key that never expires. So neither the preview nor the confirmed call offers or sends it.
+    _setup(fake, endpoints=LOCK_ENDPOINTS)
+    for extra in ({}, {"confirm": True, "operation_id": OP}):
+        result, body = await _call(mcp_client, "create_access_key", {**KEY_ARGS, "expires_in_days": 0, **extra})
+        assert result.is_error and body["code"] == "invalid_argument", extra
+        assert "30, 90 (default) or 365" in body["message"] and "web console" in body["message"], extra
+        assert "It never expires." not in result.content[0].text
+    assert "last" not in fake or not _calls(fake, "create_access_key")      # refused before a client was even made
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    assert "0 for a key" not in tools["create_access_key"].description
+    assert "30, 90 (default) or 365" in tools["create_access_key"].description
+    assert "rolled in the web console" in tools["roll_access_key"].description
 
 
 async def test_a_key_needs_a_name(mcp_client, fake, with_key):

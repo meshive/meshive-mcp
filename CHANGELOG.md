@@ -393,6 +393,10 @@ maintenance and access pod, and a template's full spec.
 - The server instructions name pods' asset `failure_reason`, machines' network events, templates' `image_config` and
   bucket object keys as text from others, and name turning sharing on as needing `confirm` in `scale_serving`. A
   server test checks that every tool whose `confirm` applies only to some calls is named there.
+- `create_access_key` takes `expires_in_days` 30, 90 (default) or 365 and refuses 0 before anything is sent: the API
+  no longer makes a key that never expires for this server, only the web console does. `roll_access_key` says such a
+  key is rolled in the console, and `deploy_serving` says that with autoscale off a new serving starts at most 10
+  replicas.
 
 ### Fixed
 

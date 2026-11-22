@@ -187,6 +187,13 @@ async def test_deploy_preview_shows_availability_under_the_cap(mcp_client, fake,
     assert "(suggested cap: $0.500/hour)" in low["question"]
 
 
+async def test_deploy_description_names_the_first_start_replica_limit(mcp_client):
+    # With autoscale off the API starts a new serving with at most 10 replicas ('Too Many Replicas' otherwise).
+    tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
+    description = tools["deploy_serving"].description
+    assert "at most 10 replicas" in description and "scale_serving" in description
+
+
 async def test_deploy_preview_survives_a_failed_availability_check(mcp_client, fake, with_key, serving_state):
     fake["setup"] = lambda inst: inst.raise_on.update(get_model_availability=PermissionDeniedError(403, "Admin only"))
     prev = _payload(await mcp_client.call_tool("deploy_serving", {"model_registration_id": 5,
