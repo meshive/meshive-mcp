@@ -216,7 +216,7 @@ async def test_update_pod_description_covers_the_console_rules(mcp_client, fake,
     props = tool.input_schema["properties"]
     assert {"remove_env", "remove_ports", "detach_storages", "allow_node_migration", "allow_data_loss",
             "drop_watched_folders", "template_id", "max_price_per_hour"} <= set(props)
-    assert tool.annotations.destructive_hint is False and tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is True and tool.annotations.read_only_hint is False
 
 
 # --- update_storage -----------------------------------------------------------------------------------------------

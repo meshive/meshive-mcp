@@ -557,7 +557,7 @@ def register(server: MCPServer) -> None:
         Use delete_pod to remove the pod entirely."""
         return await _lifecycle(ctx, "stop_pod", pod, workspace, "stop")
 
-    @meshive_tool(server, "start_pod", title="Start Pod", annotations=MUTATE)
+    @meshive_tool(server, "start_pod", title="Start Pod", annotations=DESTRUCTIVE)
     async def start_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
                         placement: str | None = None, confirm: bool = False, allow_data_loss: bool = False,
                         operation_id: str | None = None) -> dict[str, Any]:
@@ -668,7 +668,7 @@ def register(server: MCPServer) -> None:
 
     # --- Edit (the console's Pod Edit) ---------------------------------------------------------------------
 
-    @meshive_tool(server, "update_pod", title="Edit Pod", annotations=MUTATE)
+    @meshive_tool(server, "update_pod", title="Edit Pod", annotations=DESTRUCTIVE)
     async def update_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, name: str | None = None,
                          template_id: int | None = None, rental_type: str | None = None,
                          gpu_model: str | None = None, gpu_vram_gb: int | None = None, gpu_count: int | None = None,
@@ -811,7 +811,7 @@ def register(server: MCPServer) -> None:
         out["revision"] = result.revision
         return out
 
-    @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=MUTATE,
+    @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=DESTRUCTIVE,
                   conditional_confirm=True)
     async def set_watched_folders(ctx: Context[Any, Any], pod: str, expected_version: int, workspace: str | None = None,
                                   template: dict[str, Any] | None = None, user: list[Any] | None = None,

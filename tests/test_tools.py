@@ -20,9 +20,10 @@ WRITE_TOOLS = {"set_port_lock", "set_port_preflight", "revoke_browser_sessions",
                "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
                "host_install_command", "run_command", "upload_asset", "finish_upload", "send_feedback",
                "update_asset", "delete_asset", "delete_asset_files"}
-# run_command can change or delete anything in the pod. A revoked access key can't be brought back.
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine",
-               "run_command", "revoke_access_key", "revoke_browser_sessions", "delete_asset", "delete_asset_files"}
+               "run_command", "revoke_access_key", "revoke_browser_sessions", "delete_asset", "delete_asset_files",
+               "finish_upload", "maintenance_window", "start_pod", "update_pod", "set_watched_folders",
+               "roll_access_key", "scale_serving", "stop_task"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
 # reveals a login again or issues a new one-time password or install command (machine logins and install commands
 # also email the account owner every time). An access key call issues another key value every time.

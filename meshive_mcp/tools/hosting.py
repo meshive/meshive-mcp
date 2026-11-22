@@ -443,7 +443,7 @@ def register(server: MCPServer) -> None:
                             f"with maintenance_id={mid}.")
         return out
 
-    @meshive_tool(server, "maintenance_window", title="Change Maintenance Window", annotations=MUTATE)
+    @meshive_tool(server, "maintenance_window", title="Change Maintenance Window", annotations=DESTRUCTIVE)
     async def maintenance_window(ctx: Context[Any, Any], maintenance_id: int, action: str = "edit",
                                  reason: str | None = None, description: str | None = None, start: str | None = None,
                                  end: str | None = None, hours: float | None = None, confirm: bool = False,

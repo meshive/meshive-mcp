@@ -310,7 +310,7 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "The registration was deleted."
         return out
 
-    @meshive_tool(server, "scale_serving", title="Scale Serving", annotations=MUTATE,
+    @meshive_tool(server, "scale_serving", title="Scale Serving", annotations=DESTRUCTIVE,
                   conditional_confirm=True)
     async def scale_serving(ctx: Context[Any, Any], serving: int, min_replicas: int | None = None,
                             max_replicas: int | None = None, autoscale: bool | None = None,
@@ -546,7 +546,7 @@ To re-run a task, copy its settings from tasks(task=...); a secret env value can
     submit_task.__doc__ = (submit_task.__doc__ or "") + "\n" + _TASK_DOC
     meshive_tool(server, "submit_task", title="Submit Task", annotations=CREATE)(submit_task)
 
-    @meshive_tool(server, "stop_task", title="Stop Task", annotations=MUTATE)
+    @meshive_tool(server, "stop_task", title="Stop Task", annotations=DESTRUCTIVE)
     async def stop_task(ctx: Context[Any, Any], task: str, operation_id: str | None = None) -> dict[str, Any]:
         """Stop a queued or running task. `task` is the task_id (task_...) from the tasks tool. Billing stops."""
         async with meshive_client(ctx) as client:
