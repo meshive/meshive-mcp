@@ -29,6 +29,30 @@ async def test_published_cases_enforce_scope_before_the_sdk(private, http, case)
         assert r.json()["result"]["isError"] and all(q.url.path.endswith("/inspect") for q in private)
 
 
+async def test_every_confirmed_write_requires_its_preview(private, http, monkeypatch):
+    checked = []
+    async def backend(request):
+        if request.url.path == "/internal/oauth/inspect":
+            return httpx.Response(200, json={"scope": "read write"})
+        assert request.url.path == "/internal/oauth/previews/check"
+        checked.append(json.loads(request.content)["tool"])
+        return httpx.Response(409)
+    monkeypatch.setattr(oauth, "private_http", lambda: httpx.AsyncClient(transport=httpx.MockTransport(backend),
+                                                                         base_url=settings.oauth_internal_url))
+    catalog = (await http.post("/mcp", headers=HEADERS, json=_rpc("tools/list"))).json()["result"]["tools"]
+    # Credential-producing writes are approved via the console. The other confirmed writes need a preview receipt.
+    confirmed = {tool["name"] for tool in catalog if "confirm" in tool["inputSchema"]["properties"]} - oauth.CONSOLE
+    for case in CASES:
+        if case.tool not in confirmed:
+            continue
+        arguments = {**case.arguments, "confirm": True, "operation_id": "missing-preview"}
+        r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer mshoa_writer"}, json=_rpc(
+            "tools/call", {"name": case.tool, "arguments": arguments}))
+        assert r.json()["result"]["isError"]
+        assert json.loads(r.json()["result"]["content"][0]["text"])["code"] == "preview_required", case.tool
+    assert len(checked) == len(confirmed) and set(checked) == confirmed
+
+
 async def test_confirmed_install_command_only_returns_console_link(private, http, monkeypatch):
     calls = []
     async def service(request):
@@ -205,6 +229,9 @@ def test_oauth_result_redacts_known_secrets_in_text_data_and_errors():
     key = "meshive_" + "a" * 64
     payload = {"log": "client used " + key, "env": [{"is_secret": True, "value": "private-value"}],
                "script": "export HF_TOKEN=hf_private_test", "password": "private-password",
+               "access_key": "private-access-key", "log_line": json.dumps({"accessKey": "private-key"}),
+               "error": "Failed to reach https://discord.com:443/api/v10/webhooks/66/private-receiver",
+               "body": "https://hooks.slack.com/services/T1/B1/private-receiver",
                "headers": "Authorization: Bearer private-bearer", "ports": {8888: "https"},
                "upload_token": "scoped-handle", "url": "https://files.example.test/file?signature=scoped"}
     clean = oauth.public_result(payload)

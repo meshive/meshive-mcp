@@ -117,17 +117,17 @@ async def admit(request, rpc):
     prefix, _, token = header[0].partition(" ")
     if len(header) != 1 or prefix.lower() != "bearer" or len(token) > 512:
         return denied(401, need, rpc, "invalid_token")
+    if token.startswith("meshive_"):
+        # Manual keys behave as before OAuth: the API checks them on each call and the tool explains a refusal.
+        # Checking here too would spend an extra request from the key's rate limit on every MCP message.
+        return None
+    if not token.startswith("mshoa_"):
+        return denied(401, need, rpc, "invalid_token")
     try:
-        if token.startswith("meshive_"):
-            async with httpx.AsyncClient(trust_env=False, timeout=settings.request_timeout) as client:
-                result = await client.get(resolve_base_url(settings.base_url) + "/v1/sdk/me", headers={"Authorization": header[0]})
-        elif token.startswith("mshoa_"):
-            async with private_http() as client:
-                result = await client.post("/internal/oauth/inspect", headers={"Authorization": header[0]})
-            if result.status_code == 200 and not set(need.split()) <= set(result.json()["scope"].split()):
-                return denied(403, need, rpc, "insufficient_scope")
-        else:
-            return denied(401, need, rpc, "invalid_token")
+        async with private_http() as client:
+            result = await client.post("/internal/oauth/inspect", headers={"Authorization": header[0]})
+        if result.status_code == 200 and not set(need.split()) <= set(result.json()["scope"].split()):
+            return denied(403, need, rpc, "insufficient_scope")
         if result.status_code == 401:
             return denied(401, need, rpc, "invalid_token")
         if result.status_code == 429:
@@ -218,8 +218,8 @@ _TOKEN_TEXT = re.compile(r"(?<![A-Za-z0-9_])(?:meshive_[0-9a-fA-F]{64}|msho[ar]_
 _URL_TEXT = re.compile(r"""https?://[^\s"'<>]+""", re.IGNORECASE)
 _BEARER_TEXT = re.compile(r"(?i)(\bAuthorization\s*:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+")
 _ASSIGNED_SECRET = re.compile(r"""(?im)(\b(?:HF_TOKEN|OPENAI_API_KEY|AWS_SECRET_ACCESS_KEY|ACCESS_PASSWORD|CLIENT_SECRET|API_KEY|PASSWORD)\s*=\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s;]+)""")
-_WEBHOOK_SECRET_TEXT = re.compile(
-    r'(?i)("(?:inference_?key|(?:webhook_?)?signing_?secret|webhook_?secret)"\s*:\s*)"(?:\\.|[^"\\])*"')
+_JSON_SECRET = re.compile(
+    r'(?i)("(?:access_?key|inference_?key|(?:webhook_?)?signing_?secret|webhook_?secret|password)"\s*:\s*)"(?:\\.|[^"\\])*"')
 _SECRET_FIELDS = {"password", "passwd", "apikey", "accesstoken", "refreshtoken", "clientsecret", "authorization",
                   "privatekey", "accesskey", "inferencekey", "signingsecret", "webhooksecret", "webhooksigningsecret"}
 
@@ -244,7 +244,7 @@ def public_result(result):
         if isinstance(value, str):
             # Error messages, logs and webhook deliveries can repeat the receiver URL inside text.
             value = _URL_TEXT.sub(_mask_receiver, value)
-            value = _WEBHOOK_SECRET_TEXT.sub(r'\1"[redacted]"', value)
+            value = _JSON_SECRET.sub(r'\1"[redacted]"', value)
             value = _BEARER_TEXT.sub(r"\1[redacted]", value)
             return _ASSIGNED_SECRET.sub(r"\1[redacted]", _TOKEN_TEXT.sub("[redacted]", value))
         return value

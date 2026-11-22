@@ -15,15 +15,15 @@ Use **`https://mcp.meshive.ai/mcp`** for public GPU prices, access with a Meshiv
 
 ### Sign in from an agent
 
-Add the remote URL without a header to check on-demand and spot GPU prices. On an OAuth-enabled deployment, asking for your pods starts sign-in. Review the callback host and signed-in account in the Meshive console. Keep Read for lookups and select Write if you want the app to manage resources. All 98 tools are discoverable.
+Add the remote URL without a header to check on-demand and spot GPU prices. On an OAuth-enabled deployment, asking for your pods starts sign-in. Review the callback host and signed-in account in the Meshive console. Keep Read for lookups and select Write if you want the app to manage resources. All 98 tools are discoverable. The examples use `meshive-oauth` so you can keep an existing `meshive` connection with a manual key.
 
 ```bash
-claude mcp add --scope user --transport http meshive https://mcp.meshive.ai/mcp
+claude mcp add --scope user --transport http meshive-oauth https://mcp.meshive.ai/mcp
 ```
 
 ```bash
-codex mcp add meshive --url https://mcp.meshive.ai/mcp
-codex mcp login meshive
+codex mcp add meshive-oauth --url https://mcp.meshive.ai/mcp
+codex mcp login meshive-oauth
 ```
 
 For credentials and one-time keys, open the confirmation link and receive the value in the signed-in console. Revoke an OAuth connection under **Account → API keys** to end access and refresh.

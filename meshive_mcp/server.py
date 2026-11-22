@@ -108,10 +108,10 @@ confusing or missing, you may ask once per conversation whether to report it wit
 they agreed to, with no secrets, env values, log text or resource names. Don't promise a reward: the team reviews \
 every report.
 
-Authentication: every tool except `gpus` needs the user's Meshive API key sent as \
-'Authorization: Bearer meshive_...' by the MCP client. If a tool answers with code `no_api_key` \
-or `invalid_api_key`, follow its `next_step` and do not retry until the user confirms. Write tools need a key with \
-the write scope; on `write_scope_required`, tell the user how to issue one.
+Authentication: GPU prices are public. For live availability and other tools, sign in through the MCP client's \
+OAuth flow when enabled, or configure a Meshive API key. Writes require the write scope. For sensitive OAuth \
+operations, give the user the returned console_url to review the operation and receive the result. On \
+`no_api_key`, `invalid_api_key` or `write_scope_required`, follow the tool's next_step.
 
 Workspaces: most resources live in a workspace. If `workspace` is omitted and the user has several, \
 the tool returns `needs_input: "workspace"` with the list — ask the user, then call again. A user with none \

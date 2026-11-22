@@ -1,8 +1,4 @@
-"""Request → API key / client identification.
-
-Authentication passes the HTTP header straight through. The server neither stores nor validates keys —
-when the API returns 401/403, errors.translate turns it into a sentence for the model.
-"""
+"""Extract MCP bearer credentials and the calling client label for the SDK."""
 from __future__ import annotations
 
 import os

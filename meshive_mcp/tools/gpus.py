@@ -117,7 +117,7 @@ async def _public_catalog(rental_type: str, min_vram_gb: int | None) -> dict[str
         "items": items,
         "total": len(items),
         "authenticated": False,
-        "note": "Prices only. Live availability needs a Meshive API key in the Authorization header.",
+        "note": "Prices only. For live availability, sign in when OAuth is enabled or connect with a Meshive API key.",
     }
 
 
@@ -135,16 +135,16 @@ def register(server: MCPServer) -> None:
     async def gpus(ctx: Context[Any, Any], rental_type: str = "demand",
                    min_vram_gb: int | None = None) -> dict[str, Any]:
         """Show which GPU types can be rented right now, with per-GPU hourly prices in USD.
-        Works without an API key (prices only); with a key it also shows live availability and max GPUs per pod.
+        GPU prices are public. Sign in or supply an API key for live availability and max GPUs per pod.
         Use `rental_type` "spot" for the cheaper preemptible tier and `min_vram_gb` to filter by VRAM.
-        `rental_type` "task" lists the GPUs a task can get now (tasks use another pool than pods; it needs an API key):
+        `rental_type` "task" lists the GPUs a task can get now (tasks use another pool than pods and require sign-in or an API key):
         `price_per_gpu_hour`, `max_gpus_per_task` and the vCPUs and RAM a task gets per GPU."""
         rental_type = rental_mode(rental_type)
         if rental_type not in GPU_RENTAL_TYPES:
             raise invalid_argument("rental_type must be 'demand', 'spot' or 'task'.", allowed=list(GPU_RENTAL_TYPES))
         if rental_type == "task":
             if not api_key(ctx):
-                raise tool_error("no_api_key", "The GPUs a task can get are shown only with a Meshive API key.",
+                raise tool_error("no_api_key", "Sign in or supply a Meshive API key to see the GPUs available for tasks.",
                                  NEXT_STEP_NO_KEY)
             async with meshive_client(ctx) as client:
                 found = await call(client.list_task_gpus)
