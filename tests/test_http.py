@@ -18,6 +18,7 @@ pytestmark = pytest.mark.anyio
 from meshive_mcp.__main__ import BoundedHeadProtocol, BoundedLines, configure_logging, main, raise_open_file_limit
 from meshive_mcp.server import (AdmitRequests, OmitContentLength, RefuseStreams, _may_be_large, _read_and_drop,
                                 _too_complex, create_http_app, create_server)
+from meshive_mcp.settings import Settings
 
 HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
@@ -48,6 +49,35 @@ async def test_healthz(http, monkeypatch):
     assert body["sdk_version"] == meshive.__version__
     monkeypatch.delenv("MESHIVE_MCP_REVISION")
     assert (await http.get("/healthz")).json()["revision"] is None
+
+
+@pytest.mark.parametrize("resource", ["", "https://mcp.test/mcp"])
+async def test_openai_apps_challenge_is_public_plain_text(http, monkeypatch, resource):
+    token = "test-challenge_42.a-B"
+    monkeypatch.setenv("MESHIVE_OPENAI_APPS_CHALLENGE", token)
+    monkeypatch.setenv("MESHIVE_OAUTH_RESOURCE", resource)
+    monkeypatch.setattr("meshive_mcp.server.settings", Settings.from_env())
+
+    path = "/.well-known/openai-apps-challenge"
+    response = await http.get(path)
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == "text/plain"
+    assert response.content == token.encode()
+    assert response.headers["cache-control"] == "no-store"
+    assert (await http.post(path)).status_code == 405
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+async def test_openai_apps_challenge_is_unavailable_without_token(http, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("MESHIVE_OPENAI_APPS_CHALLENGE", raising=False)
+    else:
+        monkeypatch.setenv("MESHIVE_OPENAI_APPS_CHALLENGE", value)
+    monkeypatch.setattr("meshive_mcp.server.settings", Settings.from_env())
+
+    response = await http.get("/.well-known/openai-apps-challenge")
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store"
 
 
 async def test_get_mcp_is_not_a_stream(http):
@@ -582,3 +612,39 @@ async def test_missing_bearer_is_tool_error_not_http_401(http, fake):
     assert r.status_code == 200
     payload = r.json()["result"]
     assert payload["isError"] and json.loads(payload["content"][0]["text"])["code"] == "no_api_key"
+
+
+async def test_public_gpu_prices_and_private_availability_share_one_endpoint(http, fake, monkeypatch):
+    from meshive_mcp.tools import gpus
+
+    requests = []
+
+    def catalog(request):
+        requests.append(request)
+        return httpx.Response(200, json={"gpu_pod_prices": [
+            {"model": "GPU A", "vram": 32, "demand_price": "0.60", "spot_price": "0.30"},
+            {"model": "GPU B", "vram": 12, "demand_price": "0.10", "spot_price": "0.05"},
+        ]})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(gpus.httpx, "AsyncClient", lambda **kw: client(transport=httpx.MockTransport(catalog), **kw))
+
+    async def call(arguments, headers=HEADERS):
+        r = await http.post("/mcp", headers=headers, json=_rpc("tools/call", {"name": "gpus", "arguments": arguments}))
+        assert r.status_code == 200, r.text
+        return json.loads(r.json()["result"]["content"][0]["text"])
+
+    demand = await call({})
+    spot = await call({"rental_type": "spot", "min_vram_gb": 16})
+    assert not demand["authenticated"] and not spot["authenticated"]
+    assert [i["price_per_hour"] for i in demand["items"]] == ["0.60", "0.10"]
+    assert [(i["gpu_model"], i["price_per_hour"]) for i in spot["items"]] == [("GPU A", "0.30")]
+    assert all(i["availability"] == "unknown" for i in demand["items"] + spot["items"])
+    assert (await call({"rental_type": "task"}))["code"] == "invalid_argument"
+    assert "last" not in fake
+
+    live = await call({}, {**HEADERS, "Authorization": "Bearer meshive_" + "a" * 64})
+    assert live["authenticated"] and live["items"][0]["max_gpus_per_pod"] == 2
+    assert [name for name, _, _ in fake["last"].calls if name != "close"] == ["list_gpus"]
+    request, = requests
+    assert request.url.path == "/v1/landing/pricing-catalog" and "authorization" not in request.headers

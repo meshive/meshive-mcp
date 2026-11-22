@@ -19,6 +19,7 @@ from ..auth import api_key
 from ..client import meshive_client
 from ..errors import NEXT_STEP_UNAVAILABLE, ToolError, invalid_argument, tool_error
 from ..money import hourly
+from ..oauth import rental_mode
 from ..serialize import to_dict
 from ..settings import settings
 from ._common import READ_ONLY, call, meshive_tool
@@ -114,7 +115,7 @@ async def _public_catalog(rental_type: str, min_vram_gb: int | None) -> dict[str
         "items": items,
         "total": len(items),
         "authenticated": False,
-        "note": "Prices only. Live availability needs a Meshive API key in the Authorization header.",
+        "note": "Prices only. For live availability, sign in when OAuth is enabled or connect with a Meshive API key.",
     }
 
 
@@ -128,9 +129,9 @@ def register(server: MCPServer) -> None:
     async def gpus(ctx: Context[Any, Any], rental_type: str = "demand",
                    min_vram_gb: int | None = None) -> dict[str, Any]:
         """Show which GPU types can be rented right now, with per-GPU hourly prices in USD.
-        Works without an API key (prices only); with a key it also shows live availability and max GPUs per pod.
+        GPU prices are public. Sign in or supply an API key for live availability and max GPUs per pod.
         Use `rental_type` "spot" for the cheaper preemptible tier and `min_vram_gb` to filter by VRAM."""
-        rental_type = (rental_type or "demand").lower()
+        rental_type = rental_mode(rental_type)
         if rental_type not in RENTAL_TYPES:
             raise invalid_argument("rental_type must be 'demand' or 'spot'.", allowed=list(RENTAL_TYPES))
         if not api_key(ctx):

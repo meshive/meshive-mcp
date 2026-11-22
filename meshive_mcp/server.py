@@ -12,7 +12,7 @@ from typing import Any
 import meshive
 import pydantic_core
 from mcp.server.mcpserver import MCPServer
-from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecuritySettings
+from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecurityMiddleware, TransportSecuritySettings
 from mcp.types import INVALID_REQUEST, PARSE_ERROR
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from . import __version__
+from . import __version__, oauth
 from .errors import invalid_argument
 from .settings import settings
 from .tools import register_all
@@ -109,10 +109,10 @@ confusing or missing, you may ask once per conversation whether to report it wit
 they agreed to, with no secrets, env values, log text or resource names. Don't promise a reward: the team reviews \
 every report.
 
-Authentication: every tool except `gpus` needs the user's Meshive API key sent as \
-'Authorization: Bearer meshive_...' by the MCP client. If a tool answers with code `no_api_key` \
-or `invalid_api_key`, follow its `next_step` and do not retry until the user confirms. Write tools need a key with \
-the write scope; on `write_scope_required`, tell the user how to issue one.
+Authentication: GPU prices are public. For live availability and other tools, sign in through the MCP client's \
+OAuth flow when enabled, or configure a Meshive API key. Writes require the write scope. For sensitive OAuth \
+operations, give the user the returned console_url to review the operation and receive the result. On \
+`no_api_key`, `invalid_api_key` or `write_scope_required`, follow the tool's next_step.
 
 Workspaces: most resources live in a workspace. If `workspace` is omitted and the user has several, \
 the tool returns `needs_input: "workspace"` with the list — ask the user, then call again. A user with none \
@@ -269,9 +269,10 @@ class AdmitRequests:
     queued, because a queue would hold the bodies just the same.
     """
 
-    def __init__(self, app: ASGIApp, path: str = "/mcp") -> None:
+    def __init__(self, app: ASGIApp, path: str = "/mcp", security=None) -> None:
         self.app = app
         self.path = path.rstrip("/")
+        self.security = TransportSecurityMiddleware(security) if security else None
         self.read_body = RequestBodyLimitMiddleware(self.admit, MAX_REQUEST_BODY_BYTES)
         self.active = 0
         self.active_large = 0
@@ -314,8 +315,20 @@ class AdmitRequests:
         self.active += 1
         try:
             refusal = _refusal_on_reading(body)
+            rpc = None
+            if not refusal and settings.oauth_resource:
+                request = Request(scope)
+                refusal = await self.security.validate_request(request, is_post=True) if self.security else None
+                if not refusal:
+                    rpc = pydantic_core.from_json(body)
+                    refusal = await oauth.admit(request, rpc)
+            if (not refusal and not settings.oauth_resource and any(
+                    h.lower().startswith(("bearer mshoa_", "bearer mshod_")) for h in Headers(scope=scope).getlist("authorization"))):
+                refusal = _error(401, -32001, "The OAuth connection is unavailable.", {"Cache-Control": "no-store"})
             if refusal:
                 await refusal(scope, receive, send)
+            elif isinstance(rpc, dict) and rpc.get("method") == "tools/list":
+                await self.app(scope, replay, oauth.tool_list_sender(send))
             else:
                 await self.app(scope, replay, send)
         finally:
@@ -341,7 +354,13 @@ class ArgumentLimitedServer(MCPServer):
                 pending.extend(value.values())
             elif isinstance(value, list):
                 pending.extend(value)
-        return await super().call_tool(name, arguments, context)
+        selected = oauth.current_tool.set(name)
+        action = oauth.action_inputs.set((oauth.console_only(name, parsed), parsed.get("operation_id")))
+        try:
+            return await super().call_tool(name, arguments, context)
+        finally:
+            oauth.action_inputs.reset(action)
+            oauth.current_tool.reset(selected)
 
 
 def create_server() -> MCPServer:
@@ -356,6 +375,18 @@ def create_server() -> MCPServer:
         subscriptions=False,
     )
     register_all(server)
+
+    @server.custom_route("/.well-known/openai-apps-challenge", methods=["GET"], include_in_schema=False)
+    async def openai_apps_challenge(_: Request) -> PlainTextResponse:
+        token = settings.openai_apps_challenge
+        return PlainTextResponse(token, status_code=200 if token else 404, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/.well-known/oauth-protected-resource", methods=["GET"], include_in_schema=False)
+    @server.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"], include_in_schema=False)
+    async def resource_metadata(_: Request):
+        if not settings.oauth_resource:
+            return JSONResponse({}, 404)
+        return JSONResponse(oauth.metadata())
 
     @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(_: Request) -> JSONResponse:
@@ -383,7 +414,7 @@ def create_http_app(server: MCPServer | None = None) -> Starlette:
         transport_security=security,
     )
     app.add_middleware(RefuseStreams)
-    app.add_middleware(AdmitRequests)
+    app.add_middleware(AdmitRequests, security=security)
     # Last added runs outermost, so this also covers every refusal above.
     app.add_middleware(OmitContentLength)
     return app

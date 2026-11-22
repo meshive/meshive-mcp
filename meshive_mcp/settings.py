@@ -20,6 +20,10 @@ def _split_csv(raw: str | None) -> list[str]:
 @dataclass
 class Settings:
     base_url: str | None = None
+    oauth_resource: str = ""
+    oauth_issuer: str = ""
+    oauth_internal_url: str = ""
+    oauth_tls_dir: str = "/var/run/meshive-mcp-tls"
     host: str = "127.0.0.1"
     port: int = 8080
     allowed_hosts: list[str] = field(default_factory=list)
@@ -29,10 +33,15 @@ class Settings:
     # Cap for list tools. Full lists can overflow the context window and kill the session.
     default_limit: int = 20
     max_limit: int = 100
+    openai_apps_challenge: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
+            openai_apps_challenge=os.getenv("MESHIVE_OPENAI_APPS_CHALLENGE", "").strip(),
+            oauth_resource=os.getenv("MESHIVE_OAUTH_RESOURCE", ""),
+            oauth_issuer=os.getenv("MESHIVE_OAUTH_ISSUER", ""),
+            oauth_internal_url=os.getenv("MESHIVE_OAUTH_INTERNAL_URL", ""),
             base_url=os.getenv("MESHIVE_BASE_URL") or None,
             host=os.getenv("MESHIVE_MCP_HOST", "127.0.0.1"),
             port=int(os.getenv("MESHIVE_MCP_PORT", "8080")),
