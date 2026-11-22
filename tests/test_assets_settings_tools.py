@@ -57,7 +57,13 @@ def settings_fake(monkeypatch):
                          "fileCount": 40, "totalTrackedBytes": GIB, "isWorkspaceDefault": True,
                          "blockers": {"runningPods": [{"name": "p"}], "runningTasks": []}},
         "hf_usage": [{"assetExternalId": "asset_hf", "name": "llama", "activePodCount": 2}],
+        # Operation records by operation_id; any other id has none.
+        "operations": {},
     }
+
+    async def get_operation(self, operation_id, *, method, path):
+        self._rec("get_operation", operation_id, method=method, path=path)
+        return state["operations"].get(operation_id, {"state": "not_found", "accepted": False})
 
     async def get_asset(self, asset_id):
         self._rec("get_asset", asset_id)
@@ -142,7 +148,7 @@ def settings_fake(monkeypatch):
     fns = [get_asset, browse_reference_objects, list_asset_detail_files, register_bucket_objects,
            register_bucket_prefix, preview_reference_subset, fetch_reference_subset, get_asset_storage,
            list_storage_credentials, get_asset_storage_setting, set_asset_storage_setting, get_hf_token_usage,
-           get_civitai_key_usage, get_registry_login_usage, check_storage_credential_delete]
+           get_civitai_key_usage, get_registry_login_usage, check_storage_credential_delete, get_operation]
     fns += [_deleter(n) for n in ("delete_hf_token", "delete_civitai_key", "delete_registry_login",
                                   "delete_storage_credential")]
     for fn in fns:
@@ -396,6 +402,60 @@ async def test_delete_credential_on_a_bucket_connection_already_removed(mcp_clie
     live = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 7,
                                                                      "workspace": WS}))
     assert live["confirmed"] is False and "already_removed" not in live
+
+
+def _removed_bucket_nine(settings_fake):
+    settings_fake["credentials"].append({"id": 9, "label": "old bucket", "provider": "aws_s3", "bucket": "old",
+                                         "deletedAt": "2026-10-02T00:00:00Z"})
+
+
+async def test_confirming_the_removal_of_a_bucket_connection_already_removed(mcp_client, fake, with_key,
+                                                                             settings_fake):
+    """A confirm with a new operation_id on a connection removed earlier (in the console, or by another call) answers
+    already_removed like the preview: the server would accept it and change nothing, so "Removed." would be false."""
+    _removed_bucket_nine(settings_fake)
+    body = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 9,
+                                                                     "workspace": WS, "confirm": True,
+                                                                     "operation_id": "op-new-confirm-01"}))
+    assert body["already_removed"] is True and body["credential_id"] == 9 and body["label"] == "old bucket"
+    assert "nothing to do" in body["next_step"] and "Removed." not in body["next_step"]
+    assert not _calls(fake, "delete_storage_credential")
+    (_, args, kw), = _calls(fake, "get_operation")
+    assert args == ("op-new-confirm-01",) and kw == {"method": "DELETE", "path": "/storage-credentials/9"}
+
+
+async def test_replaying_the_confirm_that_removed_a_bucket_connection_gets_the_first_answer(mcp_client, fake, with_key,
+                                                                                           settings_fake):
+    """The connection is removed now, but by this very operation: the same operation_id is sent again so the server
+    replays its first answer, not already_removed."""
+    _removed_bucket_nine(settings_fake)
+    settings_fake["operations"]["op-first-confirm1"] = {"state": "done", "accepted": True}
+    body = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 9,
+                                                                     "workspace": WS, "confirm": True,
+                                                                     "operation_id": "op-first-confirm1"}))
+    assert body["deleted"] is True and "already_removed" not in body
+    assert body["next_step"].startswith("Removed.")
+    assert _calls(fake, "delete_storage_credential")[0][2] == {"idempotency_key": "op-first-confirm1"}
+
+
+async def test_a_bucket_connection_removed_when_its_operation_cant_be_looked_up(mcp_client, fake, with_key,
+                                                                              settings_fake):
+    """When the operation record can't be read, the delete is sent as before: a replay still gets its first answer."""
+    _removed_bucket_nine(settings_fake)
+    _raise(fake, "get_operation", MeshiveAPIError(503, "Operation store unavailable."))
+    body = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 9,
+                                                                     "workspace": WS, "confirm": True,
+                                                                     "operation_id": OP}))
+    assert body["deleted"] is True and _calls(fake, "delete_storage_credential")
+
+
+async def test_confirming_the_removal_of_a_live_bucket_connection(mcp_client, fake, with_key, settings_fake):
+    body = _payload(await mcp_client.call_tool("delete_credential", {"kind": "bucket", "credential_id": 7,
+                                                                     "workspace": WS, "confirm": True,
+                                                                     "operation_id": OP}))
+    assert body["deleted"] is True and "already_removed" not in body and body["next_step"].startswith("Removed.")
+    assert _calls(fake, "delete_storage_credential")[0][2] == {"idempotency_key": OP}
+    assert not _calls(fake, "get_operation")
 
 
 @pytest.mark.parametrize("error, code", [

@@ -100,6 +100,20 @@ async def _removed_bucket(client: Any, credential_id: int, ws: str) -> dict[str,
             "note": _NAMES_NOTE}
 
 
+async def _operation_recorded(client: Any, operation_id: str | None, credential_id: int) -> bool:
+    """Whether the server already has a removal of this connection under this operation_id, so that a confirm sent
+    again gets that first answer back (the connection reads as removed because of it). True when the record can't be
+    read: the delete is then sent, and the server replays or does nothing."""
+    if not operation_id:
+        return False
+    try:
+        record = await call(client.get_operation, operation_id, method="DELETE",
+                            path=f"/storage-credentials/{credential_id}")
+    except ToolError:
+        return True
+    return not (isinstance(record, dict) and record.get("state") == "not_found")
+
+
 async def _bucket_preview(client: Any, credential_id: int, ws: str) -> tuple[dict[str, Any], str]:
     check = await credential_call(client.check_storage_credential_delete, credential_id, ws)
     payload: dict[str, Any] = {
@@ -175,6 +189,10 @@ def register(server: MCPServer) -> None:
                 payload["workspace"] = ws
                 payload["note"] = _NAMES_NOTE
                 return {**preview("delete_credential", payload, question), "next_step": _CONFIRM_BY_ID.format(ws=ws)}
+            if kind == "bucket":
+                removed = await _removed_bucket(client, credential_id, ws)
+                if removed is not None and not await _operation_recorded(client, operation_id, credential_id):
+                    return removed
             deleter = {"hf_token": client.delete_hf_token, "civitai_key": client.delete_civitai_key,
                        "registry_login": client.delete_registry_login,
                        "bucket": client.delete_storage_credential}[kind]

@@ -149,7 +149,8 @@ maintenance and access pod, and a template's full spec.
   running pods and tasks and whether task outputs go there by default (then with the Meshive storage price they go
   back to). Removing a bucket connection deletes nothing in the bucket; files registered from it stay readable by
   pods and tasks. An id that isn't there fails with `credential_not_found`; a bucket connection that is already
-  removed answers `already_removed: true` without a preview (removing it again would do nothing).
+  removed answers `already_removed: true` without a preview (removing it again would do nothing), and so does a
+  confirm with a new `operation_id`; the same `operation_id` as the confirm that removed it gets that first answer.
 - `set_default_output_bucket` chooses where a workspace's task outputs go by default: a verified `bucket_id` from
   `buckets`, or `"managed"` (Meshive storage, whose price the preview names). It takes `confirm`; `workspace` is
   required and must be the id on confirm. A call that changes nothing answers `changed: false` without a preview (a
@@ -233,7 +234,9 @@ maintenance and access pod, and a template's full spec.
 - `assets` takes `collection` (true = folder assets, false = single files) and `include_catalog`. Assets that a
   model set or catalog import added are hidden by default; the first page counts them in `catalog_hidden` (0 with
   `include_catalog=true`, which lists them), with a note on how to list them. List rows gain `from_catalog`, `pickle_flag`, `has_unverified_format`, `weight_formats`,
-  `has_root_config` and a compact `source`.
+  `has_root_config` and a compact `source`. List rows and a single asset show the connected bucket an asset in the
+  user's bucket reads through: `bucket_id`, `bucket_label` and `bucket_status` ("ok", or "removed" once that
+  connection was removed); a folder linked from a bucket also names it in `reference`.
 - A single asset (`assets` with `asset`) shows where it came from (`source`: Hugging Face repo, revision and commit,
   a CivitAI or direct URL without its query string, the pod and folder it was saved from, or the asset it was copied
   from), `reference` for an asset that points at its source, `child_type_summary`, `weight_formats`,

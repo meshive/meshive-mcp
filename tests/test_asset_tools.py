@@ -48,12 +48,13 @@ def _asset(**over):
 @pytest.fixture
 def assets_fake(monkeypatch):
     """The asset methods of the fake client, answering from `state` (changed per test)."""
-    state = {"asset": _asset(), "catalog_hidden": 4, "plan": None, "deleted": None, "update": None}
+    state = {"asset": _asset(), "catalog_hidden": 4, "plan": None, "deleted": None, "update": None, "row": {}}
 
     async def list_assets(self, workspace, **kw):
         self._rec("list_assets", workspace, **kw)
         start = (kw["page"] - 1) * kw["page_size"]
-        rows = [_asset(assetExternalId=f"asset_{i}", files=None) for i in range(3)][start:start + kw["page_size"]]
+        rows = [_asset(assetExternalId=f"asset_{i}", files=None, **state["row"])
+                for i in range(3)][start:start + kw["page_size"]]
         return AssetPage.from_dict({"items": rows, "total": 3, "page": kw["page"], "pageSize": kw["page_size"],
                                     "catalogAddedTotal": state["catalog_hidden"] if kw["page"] == 1 else 0},
                                    namespace_name=workspace)
@@ -164,6 +165,58 @@ async def test_asset_detail_with_few_files_is_not_truncated(mcp_client, fake, wi
     body = _payload(await mcp_client.call_tool("assets", {"asset": "asset_abc"}))
     assert body["asset"]["files_truncated"] is False and body["asset"]["files_total"] == 2
     assert "next_step" not in body and "note" not in body
+
+
+_BUCKET_KEYS = {"storageCredentialId": 30, "storageCredentialLabel": "team bucket", "storageCredentialStatus": "ok"}
+
+
+@pytest.mark.parametrize("over, reference", [
+    # A file registered from a bucket: no reference, the bucket comes only from the asset fields.
+    ({"ingestSource": "s3_register"}, None),
+    # A linked folder: its reference names the same bucket connection.
+    ({"ingestSource": "s3_prefix_reference", "referenceMode": "prefix", "referencePrefix": "data/"},
+     {"mode": "prefix", "prefix": "data/", "credential_label": "team bucket", "credential_status": "ok"}),
+])
+async def test_assets_say_which_bucket_connection_an_asset_reads_through(mcp_client, fake, with_key, assets_fake,
+                                                                        over, reference):
+    asset = {"storageProvider": "user_s3", "importSourceRef": None, **_BUCKET_KEYS, **over}
+    assets_fake["asset"] = _asset(**asset)
+    body = _payload(await mcp_client.call_tool("assets", {"asset": "asset_abc"}))["asset"]
+    assert (body["bucket_id"], body["bucket_label"], body["bucket_status"]) == (30, "team bucket", "ok")
+    if reference is None:
+        assert body["reference"] is None
+    else:
+        assert {k: body["reference"][k] for k in reference} == reference
+
+    assets_fake["row"] = asset
+    row = _payload(await mcp_client.call_tool("assets", {"workspace": WS}))["items"][0]
+    assert (row["bucket_id"], row["bucket_label"], row["bucket_status"]) == (30, "team bucket", "ok")
+
+
+async def test_assets_say_when_the_bucket_connection_was_removed(mcp_client, fake, with_key, assets_fake):
+    assets_fake["asset"] = _asset(storageProvider="user_s3", ingestSource="s3_register", importSourceRef=None,
+                                  storageCredentialId=None, storageCredentialLabel=None,
+                                  storageCredentialStatus="removed")
+    body = _payload(await mcp_client.call_tool("assets", {"asset": "asset_abc"}))["asset"]
+    assert (body["bucket_id"], body["bucket_label"], body["bucket_status"]) == (None, None, "removed")
+
+
+async def test_an_asset_in_meshive_storage_reads_through_no_bucket(mcp_client, fake, with_key, assets_fake):
+    body = _payload(await mcp_client.call_tool("assets", {"asset": "asset_abc"}))["asset"]
+    assert (body["bucket_id"], body["bucket_label"], body["bucket_status"]) == (None, None, None)
+
+
+async def test_a_copy_out_of_a_bucket_folder_names_the_asset_it_was_copied_from(mcp_client, fake, with_key,
+                                                                               assets_fake):
+    """The server's source reference of such a copy is "s3subset:<asset_id>:<bucket>/<prefix>?include=..."."""
+    copy = {"storageProvider": "meshive_r2", "ingestSource": "s3_subset_fetch",
+            "importSourceRef": "s3subset:asset_0a62378e51791846:test/e2e/run/?include=sub%2F%2A"}
+    assets_fake["asset"] = _asset(**copy)
+    body = _payload(await mcp_client.call_tool("assets", {"asset": "asset_abc"}))["asset"]
+    assert body["source"]["from_asset_id"] == "asset_0a62378e51791846"
+    assets_fake["row"] = copy
+    row = _payload(await mcp_client.call_tool("assets", {"workspace": WS}))["items"][0]
+    assert row["source"]["from_asset_id"] == "asset_0a62378e51791846"
 
 
 # --- update_asset ------------------------------------------------------------------------------------------------------
