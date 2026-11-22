@@ -424,7 +424,7 @@ def register(server: MCPServer) -> None:
                            model_set: _ModelSet = None, hf_token_id: _HfTokenId = None,
                            lock_public_ports: _LockPublicPorts = True) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
-        Call this first, show the user the price and hardware, then call create_pod with the same arguments.
+        Takes the same arguments as create_pod and returns the price and hardware a pod with them would get.
         `locked_ports` and `open_ports` list the ports the pod would expose over HTTPS, by the lock each would get
         (`open_by_template`: open because the template sets them so, not because of this call).
         """
@@ -483,7 +483,7 @@ def register(server: MCPServer) -> None:
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
-        after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
+        after the user explicitly agreed to the price. The pod starts asynchronously; its status appears in pods.
         With `model_set` or `hf_token_id` the confirmed call returns only after the set's files were added, which can
         take minutes.
         The preview's `locked_ports` and `open_ports` list the ports the pod exposes over HTTPS, by the lock each
