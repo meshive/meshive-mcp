@@ -81,15 +81,15 @@ def _bounded_result(result: dict[str, Any], *, is_error: bool = False) -> CallTo
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 # Create/deploy/submit: repeating the same call adds resources (the server's Idempotency-Key is for SDK retries).
 CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
-# Stop/start/restart/scale/pause: repeating converges to the same state.
+# State changes that converge on repeated calls.
 MUTATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True)
 # Reveal a secret or issue something anew: every call reveals a login again or issues a new one-time password or
 # install command, so repeating it does more than the first call (machine logins and install commands also email the
 # account owner every time).
 REVEAL = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True)
-# Run a command in the user's pod: it can change or delete anything there, and running it again runs it again.
-EXECUTE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True)
+# Repeating a command can change the pod again, and rolling a key replaces its value.
+DESTRUCTIVE_NON_IDEMPOTENT = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True)
 
 CONFIRM_STEP = ("Show this to the user and ask for an explicit go-ahead. Only then call this tool again with the same "
                 "arguments and confirm=true. Never set confirm=true on your own.")

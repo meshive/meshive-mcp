@@ -10,7 +10,7 @@ from ..paging import clamp_limit, decode_cursor, encode_cursor
 from ..serialize import to_dict
 from ..workspace import in_workspace, needs_input, resolve, resolve_many
 from ..errors import invalid_argument, tool_error
-from ._common import CREATE, MUTATE, READ_ONLY, call, meshive_tool
+from ._common import CREATE, DESTRUCTIVE, READ_ONLY, call, meshive_tool
 
 _LINKS_NOTE = ("These links are temporary and work for anyone who has one until they expire. Give them only to the "
                "user; they can also run `meshive asset-download` or `meshive task-outputs --download` to save files. "
@@ -117,7 +117,7 @@ def register(server: MCPServer) -> None:
                               "Windows) before the links expire, then call finish_upload with this upload_id. If a "
                               "PUT fails, call finish_upload with cancel=true and start again.")}
 
-    @meshive_tool(server, "finish_upload", title="Finish Upload", annotations=MUTATE, operation_record=False)
+    @meshive_tool(server, "finish_upload", title="Finish Upload", annotations=DESTRUCTIVE, operation_record=False)
     async def finish_upload(ctx: Context[Any, Any], upload_id: str, cancel: bool = False) -> dict[str, Any]:
         """Finish an upload started with upload_asset, after every file was PUT to its link: the server checks each file's size and makes the asset ready (`asset_id`). Calling it again after success returns the same asset.
         With cancel=true it cancels instead and removes what was uploaded. If a file is missing or its size is wrong, it says so: PUT that file again (or cancel and start over if its link expired)."""

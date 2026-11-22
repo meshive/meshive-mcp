@@ -24,7 +24,8 @@ from ..errors import (NEXT_STEP_PORT_NOT_FOUND, NEXT_STEP_PORT_NOT_LOCKED, NEXT_
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_target
-from ._common import DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, bind_pod, call, meshive_tool, preview
+from ._common import (DESTRUCTIVE, DESTRUCTIVE_NON_IDEMPOTENT, MUTATE, READ_ONLY, REVEAL, bind_pod, call,
+                      meshive_tool, preview)
 from ._ports import OPEN_MEANS, ports_text
 
 _Pod = Annotated[str, Field(description=(
@@ -411,7 +412,8 @@ def register(server: MCPServer) -> None:
                             "another.")
         return out
 
-    @meshive_tool(server, "roll_access_key", title="Roll Port Access Key", annotations=REVEAL, operation_record=False)
+    @meshive_tool(server, "roll_access_key", title="Roll Port Access Key",
+                  annotations=DESTRUCTIVE_NON_IDEMPOTENT, operation_record=False)
     async def roll_access_key(ctx: Context[Any, Any], pod: _Pod, port: _Port, key_id: _KeyId,
                               overlap_seconds: int = 3600, workspace: str | None = None, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:
