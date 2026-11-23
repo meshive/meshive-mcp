@@ -828,7 +828,7 @@ def register(server: MCPServer) -> None:
                                    operation_id: str | None = None) -> dict[str, Any]:
         """Get the command that installs the Meshive agent on a new machine and registers it to the user's account,
         like the console's Add machine: `agent_type` "compute" for a GPU or CPU machine, "storage" for a storage
-        machine.
+        machine (storage hosting is invitation only; other accounts get Storage Hosting Not Available).
         For about 10 minutes, whoever has the command can register machines to this account, so it is a secret. The
         account owner is emailed each time one is issued.
         With confirm=false (default) it only says what it is and issues nothing; call again with confirm=true after the

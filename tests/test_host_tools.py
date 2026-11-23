@@ -682,6 +682,22 @@ async def test_install_command_rejects_an_unknown_agent_type(mcp_client, fake, w
     assert result.is_error and body["code"] == "invalid_argument" and "last" not in fake
 
 
+async def test_install_command_says_storage_hosting_is_invitation_only(mcp_client):
+    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["host_install_command"]
+    assert "storage hosting is invitation only" in desc and "Storage Hosting Not Available" in desc
+    assert len(desc.encode("utf-16-le")) // 2 < 4096
+
+
+async def test_install_command_storage_refusal_reaches_the_model(mcp_client, fake, with_key):
+    # An account without storage hosting permission gets the backend's 400; its message must not be lost.
+    message = ("Storage node hosting is available by invitation only. "
+               "You can still add this machine as a compute node.")
+    _fail(fake, "issue_install_command", _api(MeshiveAPIError, 400, "Storage Hosting Not Available", message))
+    result, body = await _call(mcp_client, "host_install_command", {"agent_type": "storage", "confirm": True,
+                                                                    "operation_id": OP})
+    assert result.is_error and body["message"] == message and INSTALL_TOKEN not in json.dumps(body)
+
+
 def test_secrets_never_go_out_through_to_dict():
     from meshive.models import InstallCommand, MachineCredentials
     from meshive_mcp.serialize import to_dict
