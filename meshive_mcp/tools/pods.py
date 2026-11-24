@@ -105,7 +105,14 @@ def _has_locked_port(pod: dict[str, Any]) -> bool:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "pods", title="List Pods", annotations=READ_ONLY)
+    @meshive_tool(server, "pods", title="List Pods", annotations=READ_ONLY, arg_docs={
+        "pod": "pod_name (the display name also works), to show one pod in detail.",
+        "status": "Filter the list by pod status.",
+        "include_metrics": "true adds one pod's live CPU/RAM/GPU usage.",
+        "include_system": "true also lists system-managed downloader pods.",
+        "show_secrets": "true shows one pod's login values; only when the user asks for the login.",
+        "include_assets": "true adds one pod's input assets, input slots and asset volume usage.",
+    })
     async def pods(ctx: Context[Any, Any], workspace: str | None = None, pod: str | None = None,
                    status: str | None = None, include_metrics: bool = False, include_system: bool = False,
                    show_secrets: bool = False, include_assets: bool = False, limit: int | None = None,

@@ -159,7 +159,9 @@ def _issued(pod: str, ws: str, created: Any, *, rolled: bool) -> dict[str, Any]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "access_keys", title="List Port Access Keys", annotations=READ_ONLY)
+    @meshive_tool(server, "access_keys", title="List Port Access Keys", annotations=READ_ONLY, arg_docs={
+        "port": "One port the pod opens; omit for every port it exposes over HTTPS.",
+    })
     async def access_keys(ctx: Context[Any, Any], pod: _Pod, port: int | None = None, workspace: str | None = None,
                           limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the access keys of a pod's ports: each key's `id`, `name`, `prefix` (its first characters), who issued it (`created_by`), when it expires (`expires_at`, null = never) and when a program last got through with it (`last_used_at`, null = not used yet; collected about every 5 minutes, so a use from the last 5 minutes or so may not show yet). `expired` is true once it has; such a key no longer works but stays listed for 30 days, and roll_access_key or revoke_access_key still apply to it. A key's value is never listed; it is shown once, by create_access_key or roll_access_key.
@@ -199,7 +201,9 @@ def register(server: MCPServer) -> None:
         return page
 
     @meshive_tool(server, "set_port_lock", title="Lock or Unlock Port", annotations=MUTATE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "locked": "true locks the port at once; false unlocks it, only when the user explicitly asks.",
+    })
     async def set_port_lock(ctx: Context[Any, Any], pod: _Pod, port: _Port, locked: bool, workspace: str | None = None,
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Lock or unlock one port a pod exposes over HTTPS. The pod isn't restarted. The change takes a few seconds to take effect: the answer's `state` is `locking` or `unlocking` until it does (read `lock_state` with the pods tool). Repeating the call doesn't speed this up: wait by reading `lock_state` with the pods tool instead.
@@ -252,7 +256,9 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "set_port_preflight", title="Allow Preflight Requests on Port", annotations=MUTATE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "allow": "true lets CORS preflight (OPTIONS) requests through without a key; false refuses them.",
+    })
     async def set_port_preflight(ctx: Context[Any, Any], pod: _Pod, port: _Port, allow: bool,
                                  workspace: str | None = None, confirm: bool = False,
                                  operation_id: str | None = None) -> dict[str, Any]:
@@ -301,7 +307,9 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "revoke_browser_sessions", title="Sign Out Browser Sessions",
-                  annotations=DESTRUCTIVE)
+                  annotations=DESTRUCTIVE, arg_docs={
+        "all_pods": "true (with no `pod`) covers every pod of the workspace.",
+    })
     async def revoke_browser_sessions(ctx: Context[Any, Any], pod: _SessionsPod = None, all_pods: bool = False,
                                       workspace: str | None = None, confirm: bool = False,
                                       operation_id: str | None = None) -> dict[str, Any]:
@@ -374,7 +382,10 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "create_access_key", title="Create Port Access Key", annotations=REVEAL,
-                  operation_record=False)
+                  operation_record=False, arg_docs={
+        "name": "Label of 1-64 characters.",
+        "expires_in_days": "30, 90 (default) or 365.",
+    })
     async def create_access_key(ctx: Context[Any, Any], pod: _Pod, port: _Port, name: str, expires_in_days: int = 90,
                                 workspace: str | None = None, confirm: bool = False,
                                 operation_id: str | None = None) -> dict[str, Any]:
@@ -419,7 +430,9 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "roll_access_key", title="Roll Port Access Key",
-                  annotations=DESTRUCTIVE_NON_IDEMPOTENT, operation_record=False)
+                  annotations=DESTRUCTIVE_NON_IDEMPOTENT, operation_record=False, arg_docs={
+        "overlap_seconds": "How long the old value keeps working: 3600 (default), 86400, 604800 or 0.",
+    })
     async def roll_access_key(ctx: Context[Any, Any], pod: _Pod, port: _Port, key_id: _KeyId,
                               overlap_seconds: int = 3600, workspace: str | None = None, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:

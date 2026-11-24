@@ -109,7 +109,9 @@ async def _model_detail(client: Any, workspace: str | None, registration_id: int
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "servings", title="List Servings", annotations=READ_ONLY)
+    @meshive_tool(server, "servings", title="List Servings", annotations=READ_ONLY, arg_docs={
+        "serving": "Serving id, to show one serving with its failure details.",
+    })
     async def servings(ctx: Context[Any, Any], workspace: str | None = None, serving: int | None = None,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the serverless model deployments (servings) in a workspace, or show one by `serving`. Only servings you
@@ -141,7 +143,10 @@ def register(server: MCPServer) -> None:
         page["workspace"] = ALL if len(targets) > 1 else targets[0]
         return page
 
-    @meshive_tool(server, "models", title="List Registered Models", annotations=READ_ONLY)
+    @meshive_tool(server, "models", title="List Registered Models", annotations=READ_ONLY, arg_docs={
+        "registration_id": "Shows this model with its GPU availability in the workspace.",
+        "max_context_tokens": "With `registration_id`: the maximum context to check availability for.",
+    })
     async def models(ctx: Context[Any, Any], workspace: str | None = None,
                      source: Annotated[Literal["workspace", "official", "shared"], Field(description=(
                          '"workspace" (default): the models this workspace registered; "official": Meshive\'s '
@@ -242,7 +247,10 @@ def register(server: MCPServer) -> None:
                                            "them in the console.")
         return out
 
-    @meshive_tool(server, "detect_model", title="Check Model Compatibility", annotations=READ_ONLY)
+    @meshive_tool(server, "detect_model", title="Check Model Compatibility", annotations=READ_ONLY, arg_docs={
+        "huggingface_repo": 'Hugging Face repo id, e.g. "Qwen/Qwen3-0.6B". Pass this or `asset`.',
+        "hf_token_id": "Saved Hugging Face token id from source_credentials, for a private repo.",
+    })
     async def detect_model(ctx: Context[Any, Any], huggingface_repo: str | None = None, workspace: str | None = None,
                            hf_token_id: int | None = None,
                            asset: Annotated[str | None, Field(description=(

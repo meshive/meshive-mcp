@@ -20,7 +20,9 @@ def _host_text(volumes: list[Any]) -> bool:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "storages", title="List Storage", annotations=READ_ONLY)
+    @meshive_tool(server, "storages", title="List Storage", annotations=READ_ONLY, arg_docs={
+        "storage": "pv_name or display name, to show one volume.",
+    })
     async def storages(ctx: Context[Any, Any], workspace: str | None = None, storage: str | None = None,
                        limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """List the storage volumes in a workspace, or show one volume by its `pv_name` or display name.

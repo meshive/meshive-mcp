@@ -239,7 +239,11 @@ def _machine_view(m: Any, full: bool) -> dict[str, Any]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "machines", title="List Hosted Machines", annotations=READ_ONLY)
+    @meshive_tool(server, "machines", title="List Hosted Machines", annotations=READ_ONLY, arg_docs={
+        "machine": "machine_id, to show one machine in detail.",
+        "include_metrics": "true adds one machine's live CPU/RAM/GPU/network usage.",
+        "include_fan": "true adds one GPU machine's fan curve and fan status. Don't call it in a loop.",
+    })
     async def machines(ctx: Context[Any, Any], machine: str | None = None, include_metrics: bool = False,
                        include_fan: bool = False, limit: int | None = None,
                        cursor: str | None = None) -> dict[str, Any]:

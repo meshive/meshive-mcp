@@ -83,7 +83,11 @@ def _catalog(catalog: Any, ws: str, targets: Any, *, entries: bool, category: st
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "templates", title="List Pod Templates", annotations=READ_ONLY)
+    @meshive_tool(server, "templates", title="List Pod Templates", annotations=READ_ONLY, arg_docs={
+        "template": "`template_id`, to show one template's full spec.",
+        "app_type": "Filter by app type, such as ide, framework or custom.",
+        "hardware_type": "Filter: gpu, cpu or any.",
+    })
     async def templates(ctx: Context[Any, Any], workspace: str | None = None, template: int | None = None,
                         app_type: str | None = None, hardware_type: str | None = None,
                         limit: int | None = None, cursor: str | None = None,

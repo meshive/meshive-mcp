@@ -37,7 +37,9 @@ def _not_found(exc: ToolError) -> bool:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "transactions", title="Show Pod and Storage Operations", annotations=READ_ONLY)
+    @meshive_tool(server, "transactions", title="Show Pod and Storage Operations", annotations=READ_ONLY, arg_docs={
+        "transaction_id": "Shows how this one operation ended; no time window.",
+    })
     async def transactions(ctx: Context[Any, Any], workspace: str | None = None, transaction_id: int | None = None,
                            limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """Show the pod and storage operations still in flight, or one operation by `transaction_id`, and why one is taking so long or failed. Each item's `kind` is "pod" or "storage", newest first.

@@ -163,7 +163,9 @@ async def _token_preview(client: Any, kind: str, credential_id: int, ws: str) ->
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "delete_credential", title="Delete Credential", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_credential", title="Delete Credential", annotations=DESTRUCTIVE, arg_docs={
+        "kind": "The kind of saved credential to delete.",
+    })
     async def delete_credential(
             ctx: Context[Any, Any],
             kind: Literal["hf_token", "civitai_key", "registry_login", "bucket"],

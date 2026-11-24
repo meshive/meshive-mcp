@@ -103,7 +103,9 @@ def _key_view(key: Any, now: datetime) -> dict[str, Any]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "account", title="Show Account", annotations=READ_ONLY)
+    @meshive_tool(server, "account", title="Show Account", annotations=READ_ONLY, arg_docs={
+        "include_api_keys": "true lists every active account API key (never its value).",
+    })
     async def account(ctx: Context[Any, Any], include_api_keys: bool = False,
                       include_referral: Annotated[bool, Field(description=(
                           "Add `referral`: the account's referral link, what it earned and the reward rule. The "
@@ -193,7 +195,14 @@ def register(server: MCPServer) -> None:
         return {"user": _user(updated), "previous_username": me.username, "changed": True,
                 "next_step": "The display name is changed; the sign-in email stays the same."}
 
-    @meshive_tool(server, "activity", title="Show API Key Activity", annotations=READ_ONLY)
+    @meshive_tool(server, "activity", title="Show API Key Activity", annotations=READ_ONLY, arg_docs={
+        "kind": '"actions" (default) lists requests one by one; "reads" gives hourly counts of read requests.',
+        "key": "A `key_id` from the account tool (include_api_keys), to keep one key's activity.",
+        "outcome": 'Filter: "accepted", "refused" or "error".',
+        "action": 'Filter by action name, such as "pod.create" or "storage.delete".',
+        "since": "Start: YYYY-MM-DD (UTC) or an ISO 8601 time.",
+        "until": "End: YYYY-MM-DD (UTC, that whole day included) or an ISO 8601 time.",
+    })
     async def activity(ctx: Context[Any, Any], kind: str = "actions", key: int | None = None,
                        outcome: str | None = None, action: str | None = None, since: str | None = None,
                        until: str | None = None, limit: int | None = None,

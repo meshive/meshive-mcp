@@ -30,6 +30,11 @@ input download log, a serving's replicas, failures and live numbers and the logs
 maintenance and host conversations, a machine's price, setup and hardware, which API key is in use, a volume's
 maintenance and access pod, and a template's full spec.
 
+Every argument of every tool now has its own description in the tool's input schema, where clients show it; before,
+most formats were only in the tool description. The rule for `operation_id` moved from the end of each write tool's
+description into that argument's description. Input schemas no longer carry generated titles, and tools no longer
+publish an output schema that allowed any object; results still carry `structuredContent`.
+
 ### New
 
 - `update_asset` renames an asset or changes its type (dataset, model, adapter, checkpoint, config or file). It needs

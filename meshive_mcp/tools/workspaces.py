@@ -207,7 +207,9 @@ def register(server: MCPServer) -> None:
             out["note"] = HOST_TEXT_NOTE
         return out
 
-    @meshive_tool(server, "create_workspace", title="Create Workspace", annotations=CREATE)
+    @meshive_tool(server, "create_workspace", title="Create Workspace", annotations=CREATE, arg_docs={
+        "name": "At most 63 characters, unlike the user's other workspace names; omit for a generated name.",
+    })
     async def create_workspace(ctx: Context[Any, Any], name: str | None = None, confirm: bool = False,
                                operation_id: str | None = None) -> dict[str, Any]:
         """Create a workspace, the place pods, storage, tasks and servings live in. An empty workspace costs nothing;
@@ -239,7 +241,9 @@ def register(server: MCPServer) -> None:
                             "also be missing from the list for a moment: keep polling.")
         return out
 
-    @meshive_tool(server, "update_workspace", title="Rename Workspace", annotations=MUTATE)
+    @meshive_tool(server, "update_workspace", title="Rename Workspace", annotations=MUTATE, arg_docs={
+        "name": "New name: at most 63 characters, unlike the user's other workspace names.",
+    })
     async def update_workspace(ctx: Context[Any, Any], workspace: str, name: str, confirm: bool = False,
                                operation_id: str | None = None) -> dict[str, Any]:
         """Rename a workspace (it needs the admin or billing role). Only the name changes: the id stays, so whatever uses

@@ -60,7 +60,13 @@ def _refusal(error: ToolError) -> ToolError:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "send_feedback", title="Send Feedback to Meshive", annotations=CREATE)
+    @meshive_tool(server, "send_feedback", title="Send Feedback to Meshive", annotations=CREATE, arg_docs={
+        "summary": "One line, under 200 characters.",
+        "kind": "bug, idea or complaint.",
+        "details": "In your own words: what the user did, what they expected and what happened.",
+        "tool": "For a failed call: that tool's name.",
+        "error_code": "For a failed call: the error's `code`.",
+    })
     async def send_feedback(ctx: Context[Any, Any], summary: str, kind: str | None = None, details: str | None = None,
                             tool: str | None = None, error_code: str | None = None, confirm: bool = False,
                             operation_id: str | None = None) -> dict[str, Any]:

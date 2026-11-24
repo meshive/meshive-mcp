@@ -52,7 +52,11 @@ def _workspace_billing(billing: Any, since: date | None, until: date | None) -> 
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "billing_history", title="Show Billing History", annotations=READ_ONLY)
+    @meshive_tool(server, "billing_history", title="Show Billing History", annotations=READ_ONLY, arg_docs={
+        "kind": '"credit" (default), "earnings", "payouts", "workspace" or "shared_earnings".',
+        "since": "Start date, YYYY-MM-DD.",
+        "until": "End date, YYYY-MM-DD.",
+    })
     async def billing_history(
             ctx: Context[Any, Any], kind: str = "credit", since: str | None = None, until: str | None = None,
             limit: int | None = None, cursor: str | None = None,

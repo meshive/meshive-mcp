@@ -208,9 +208,52 @@ def price_change(est: Any) -> str:
             f" Its price goes from {before}/hour to {after}/hour.")
 
 
-_RECORDED_NOTE = ("\nEvery write requires operation_id. Reuse the ID returned by the preview, or generate a UUID "
-                  "before the first call. Keep it for confirmation and all retries; a new ID means a new operation. "
-                  "After a timeout, check operation_status and resource state before retrying.")
+# Arguments many tools share, described once. They fill an argument the tool doesn't describe itself, so that every
+# argument's format is in the input schema, where clients look for it. The operation_id text replaces a paragraph that
+# every write tool's description used to repeat; the server instructions hold the full rule.
+SHARED_ARG_DOC = {
+    "workspace": "Workspace id from the workspaces tool (a label also works).",
+    "operation_id": ("Required for a write: the preview's operation_id, or a UUID made before the first call. Reuse it "
+                     "for the confirmation and every retry; a new ID is a new operation. After a timeout, check "
+                     "operation_status before retrying."),
+    "confirm": "false (default) only previews and changes nothing. true does it: only after the user agreed.",
+    "cursor": "`next_cursor` from the previous response. Omit it for the first page.",
+    "limit": "Maximum number of items to return.",
+}
+# What a tool's `pod` or `storage` argument takes. A write that previews first accepts a display name only on the
+# preview, so a renamed or deleted resource can't change the target of the confirmed call.
+POD_ARG = "pod_name from the pods tool (the display name also works)."
+POD_ARG_CONFIRM = ("pod_name from the pods tool. A display name works on the preview; confirm=true needs the returned "
+                   "`pod_name`.")
+STORAGE_ARG_CONFIRM = ("pv_name from the storages tool. A display name works on the preview; confirm=true needs the "
+                       "returned pv_name.")
+SERVING_ARG = "Serving id from the servings tool."
+TASK_ARG = "task_id (task_...) from the tasks tool."
+MACHINE_ARG = "machine_id from the machines tool."
+# The operation_id of a write the server keeps no record of: it only ties the confirmation to its preview.
+_UNRECORDED_OPERATION_ID = ("The preview's operation_id, or a UUID made before the first call. Reuse it for the "
+                            "confirmation.")
+
+
+def _tidy_schema(schema: Any, docs: dict[str, str]) -> None:
+    """Fill the shared argument descriptions and drop the titles pydantic generates ("Operation Id"), which repeat
+    each argument's name."""
+    if not isinstance(schema, dict):
+        return
+    schema.pop("title", None)
+    for name, sub in schema.get("properties", {}).items():
+        if docs.get(name) and isinstance(sub, dict):
+            sub.setdefault("description", docs[name])
+        _tidy_schema(sub, {})
+    for sub in schema.get("$defs", {}).values():
+        _tidy_schema(sub, {})
+    for key in ("items", "additionalProperties"):
+        _tidy_schema(schema.get(key), {})
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        for sub in schema.get(key, ()):
+            _tidy_schema(sub, {})
+
+
 _UNRECORDED_NOTE = ("\nThe server keeps no operation record of this call, so operation_status can't look it up and a "
                     "repeated {}call runs again.")
 _RECORDED_RETRY = (" Check the resource/operation state first. Any retry MUST reuse this operation_id and the same "
@@ -259,7 +302,8 @@ def _outcome_open(operation: dict) -> bool:
 
 
 def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolAnnotations,
-                 operation_record: bool = True, conditional_confirm: bool = False):
+                 operation_record: bool = True, conditional_confirm: bool = False,
+                 arg_docs: dict[str, str] | None = None):
     """One layer over `server.tool`: (1) a normal result as compact JSON text + structured_content,
     (2) a ToolError raised by the tool as an `isError` result whose body is **pure JSON with no prefix**. The SDK's default prepends "Error executing tool <name>: ...",
     but the error body must be the `{code, message, next_step}` JSON itself — the model has to parse it
@@ -270,6 +314,9 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
     keeps the default; its failed unrecorded call still gets the unrecorded retry advice.
 
     conditional_confirm=True registers a tool whose `confirm` applies only to some calls in CONDITIONAL_CONFIRM.
+
+    arg_docs describes the tool's arguments ({argument: description}) in its input schema. An argument annotated
+    with its own `Field(description=...)` keeps that one, and SHARED_ARG_DOC covers the arguments many tools share.
     """
     if conditional_confirm:
         CONDITIONAL_CONFIRM.add(name)
@@ -336,15 +383,22 @@ def meshive_tool(server: MCPServer, name: str, *, title: str, annotations: ToolA
                                             if operation_record else " Reuse this operation_id for the confirmation.")
             return _bounded_result(oauth.public_result(result) if oauth_call else result)
 
-        if not annotations.read_only_hint:
-            if operation_record:
-                note = _RECORDED_NOTE
-            else:
-                takes_confirm = "confirm" in signature.parameters
-                note = _UNRECORDED_NOTE.format("confirmed " if takes_confirm else "")
-            wrapper.__doc__ = (wrapper.__doc__ or "") + note
-        # Several tools share the common annotation constants, so the title goes only on the copy.
-        server.tool(name=name, title=title, annotations=annotations.model_copy(update={"title": title}))(wrapper)
+        if not annotations.read_only_hint and not operation_record:
+            takes_confirm = "confirm" in signature.parameters
+            wrapper.__doc__ = (wrapper.__doc__ or "") + _UNRECORDED_NOTE.format("confirmed " if takes_confirm else "")
+        # Several tools share the common annotation constants, so the title goes only on the copy. A result is any JSON
+        # object, so an output schema would say nothing; the result still carries structured_content.
+        server.tool(name=name, title=title, annotations=annotations.model_copy(update={"title": title}),
+                    structured_output=False)(wrapper)
+        unknown = set(arg_docs or ()) - set(signature.parameters)
+        if unknown:
+            raise ValueError(f"{name}: arg_docs names arguments the tool doesn't take: {sorted(unknown)}")
+        docs = {**SHARED_ARG_DOC, **(arg_docs or {})}
+        if annotations.read_only_hint:
+            docs["operation_id"] = (arg_docs or {}).get("operation_id", "")  # not a write: the tool says what it is
+        elif not operation_record:
+            docs["operation_id"] = _UNRECORDED_OPERATION_ID
+        _tidy_schema(server._tool_manager.get_tool(name).parameters, docs)
         return fn
 
     return decorator

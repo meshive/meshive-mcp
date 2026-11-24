@@ -265,7 +265,11 @@ def _file_ref(r: Any, *, reason: bool = False) -> dict[str, Any]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "assets", title="List Assets", annotations=READ_ONLY)
+    @meshive_tool(server, "assets", title="List Assets", annotations=READ_ONLY, arg_docs={
+        "asset": 'Asset id ("asset_..."), to show one asset in detail.',
+        "asset_type": "Filter by type: dataset, model, adapter, checkpoint, config or file.",
+        "status": "Filter by the asset's status.",
+    })
     async def assets(ctx: Context[Any, Any], workspace: str | None = None, asset: str | None = None,
                      asset_type: str | None = None, status: str | None = None,
                      collection: Annotated[bool | None, Field(description=(
@@ -329,7 +333,11 @@ def register(server: MCPServer) -> None:
                                "include_catalog=true to list them.")
         return out
 
-    @meshive_tool(server, "download_links", title="Get Download Links", annotations=READ_ONLY)
+    @meshive_tool(server, "download_links", title="Get Download Links", annotations=READ_ONLY, arg_docs={
+        "asset": 'Asset id ("asset_...") whose files to link.',
+        "task": 'task_id ("task_...") whose output files to link.',
+        "paths": 'Globs that narrow an asset to some files, such as ["config/*", "*.safetensors"].',
+    })
     async def download_links(ctx: Context[Any, Any], asset: str | None = None, task: str | None = None,
                              paths: list[str] | None = None,
                              file_ids: Annotated[list[str] | None, Field(description=(
@@ -377,7 +385,13 @@ def register(server: MCPServer) -> None:
         return {"task_id": task, "files": [to_dict(f) for f in outs.files], "expired": outs.expired,
                 "expires_at": None, "note": _LINKS_NOTE + " Task output links last a few hours."}
 
-    @meshive_tool(server, "import_asset", title="Import Asset", annotations=CREATE, conditional_confirm=True)
+    @meshive_tool(server, "import_asset", title="Import Asset", annotations=CREATE, conditional_confirm=True, arg_docs={
+        "name": "Display name of the asset; omit for one taken from the source.",
+        "asset_type": "Dataset, model, adapter, checkpoint, config or file; guessed when omitted.",
+        "revision": "Hugging Face branch, tag or commit to pin.",
+        "hf_token_id": "Saved Hugging Face token id from source_credentials, for a private or gated repo.",
+        "civitai_key_id": "Saved CivitAI key id from source_credentials.",
+    })
     async def import_asset(ctx: Context[Any, Any],
                            source: Annotated[str, Field(description=(
                                'A Hugging Face repo ("owner/name" or its URL), a CivitAI model URL or a direct file '
@@ -437,7 +451,11 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Imported. Use asset_id in input_assets of submit_task, or look at its files with the assets tool."
         return out
 
-    @meshive_tool(server, "upload_asset", title="Upload Files", annotations=CREATE, operation_record=False)
+    @meshive_tool(server, "upload_asset", title="Upload Files", annotations=CREATE, operation_record=False, arg_docs={
+        "files": '[{"path": name inside the asset, "size_bytes": exact size, "sha256": optional}].',
+        "name": "Display name of the new asset; defaults from the files.",
+        "asset_type": "Dataset, model, adapter, checkpoint, config or file; guessed when omitted.",
+    })
     async def upload_asset(ctx: Context[Any, Any], files: list[dict[str, Any]], workspace: str | None = None,
                            name: str | None = None, asset_type: str | None = None,
                            asset: Annotated[str | None, Field(description=(
@@ -475,7 +493,11 @@ def register(server: MCPServer) -> None:
                               "Windows) before the links expire, then call finish_upload with this upload_id. If a "
                               "PUT fails, call finish_upload with cancel=true and start again.")}
 
-    @meshive_tool(server, "finish_upload", title="Finish Upload", annotations=DESTRUCTIVE, operation_record=False)
+    @meshive_tool(server, "finish_upload", title="Finish Upload", annotations=DESTRUCTIVE, operation_record=False,
+                  arg_docs={
+        "upload_id": "The `upload_id` upload_asset returned.",
+        "cancel": "true cancels the upload and removes what was uploaded.",
+    })
     async def finish_upload(ctx: Context[Any, Any], upload_id: str, cancel: bool = False) -> dict[str, Any]:
         """Finish an upload started with upload_asset, after every file was PUT to its link: the server checks each file's size and makes the asset ready (`asset_id`), or adds the files to the collection. Calling it again after success returns the same success and adds nothing twice (for a new asset, the same asset). Cancelling (cancel=true) an add to a collection that already finished answers upload_already_completed: the files were added.
         With cancel=true it cancels instead and removes what was uploaded. If a file is missing or its size is wrong, it says so: PUT that file again (or cancel and start over if its link expired)."""
@@ -502,7 +524,9 @@ def register(server: MCPServer) -> None:
                             "/inputs/<asset name>/ unless you give a target_dir), or look at it with the assets tool.")
         return out
 
-    @meshive_tool(server, "update_asset", title="Update Asset", annotations=MUTATE)
+    @meshive_tool(server, "update_asset", title="Update Asset", annotations=MUTATE, arg_docs={
+        "asset_type": "New type: dataset, model, adapter, checkpoint, config or file.",
+    })
     async def update_asset(ctx: Context[Any, Any],
                            asset: Annotated[str, Field(description='The "asset_..." id from the assets tool.')],
                            name: Annotated[str | None, Field(description=(

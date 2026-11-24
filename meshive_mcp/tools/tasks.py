@@ -259,7 +259,11 @@ async def _task_counts(client: Any, ws: str) -> dict[str, Any] | None:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "operation_status", title="Check Operation Status", annotations=READ_ONLY)
+    @meshive_tool(server, "operation_status", title="Check Operation Status", annotations=READ_ONLY, arg_docs={
+        "operation_id": "The operation_id the write was sent with.",
+        "method": "`operation_lookup.method` from the write's result or error, e.g. POST.",
+        "path": "`operation_lookup.path` from the write's result or error, e.g. /tasks.",
+    })
     async def operation_status(ctx: Context[Any, Any], operation_id: str, method: str, path: str) -> dict[str, Any]:
         """Check a write's durable acceptance record without submitting it again. Use operation_id and
         operation_lookup.method/path from the write result/error. Examples: submit_task=POST /tasks,
@@ -268,7 +272,12 @@ def register(server: MCPServer) -> None:
         async with meshive_client(ctx) as client:
             return await call(client.get_operation, operation_id, method=method, path=path)
 
-    @meshive_tool(server, "tasks", title="List Tasks", annotations=READ_ONLY)
+    @meshive_tool(server, "tasks", title="List Tasks", annotations=READ_ONLY, arg_docs={
+        "task": "task_id (task_...), to show one task in detail.",
+        "status": "Filter: queued, scheduling, pulling, fetching, running, succeeded, failed, timed_out or stopped.",
+        "include_code": "true adds the full `script` and `requirements`; scripts can contain secrets.",
+        "include_metrics": "true adds live CPU/RAM/GPU use while the task runs.",
+    })
     async def tasks(ctx: Context[Any, Any], workspace: str | None = None, task: str | None = None,
                     status: str | None = None, include_code: bool = False, include_metrics: bool = False,
                     limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:

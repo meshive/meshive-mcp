@@ -140,7 +140,9 @@ def _ports_by_access(template: Any) -> tuple[list[int], list[int]]:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "save_template", title="Save Custom Template", annotations=MUTATE)
+    @meshive_tool(server, "save_template", title="Save Custom Template", annotations=MUTATE, arg_docs={
+        "description": "The template's description.",
+    })
     async def save_template(
             ctx: Context[Any, Any],
             template_id: Annotated[int | None, Field(description=(

@@ -1090,13 +1090,38 @@ async def test_only_writes_without_an_operation_record_say_a_repeated_call_runs_
     tools = {t.name: t for t in (await mcp_client.list_tools()).tools}
     for name in WRITE_TOOLS:
         desc = tools[name].description
+        # The operation_id rule is in that argument's own description, not repeated in every tool description.
+        op_doc = tools[name].input_schema["properties"].get("operation_id", {}).get("description", "")
         if name in UNRECORDED_TOOLS:
-            assert "check operation_status" not in desc and "keeps no operation record" in desc, name
-            assert "runs again" in desc and "Every write requires operation_id" not in desc, name
+            assert "check operation_status" not in desc + op_doc and "keeps no operation record" in desc, name
+            assert "runs again" in desc, name
         else:
-            assert "check operation_status" in desc and "Every write requires operation_id" in desc, name
+            assert "check operation_status" in op_doc and "Required for a write" in op_doc, name
     # ssh_access has no `confirm`: every call runs.
     assert "a repeated call runs again" in tools["ssh_access"].description
     assert "repeated confirmed call runs again" in tools["machine_credentials"].description
     # retry_machine_setup sends a recorded write (setup) and an unrecorded one (ports); its description says which.
     assert "A port check keeps no operation record" in tools["retry_machine_setup"].description
+
+
+async def test_every_argument_is_described_in_the_input_schema(mcp_client):
+    """Clients show an argument's schema description next to it, so that is where its format has to be. Titles
+    pydantic generates and an output schema that allows anything only make the tool list longer."""
+    tools = (await mcp_client.list_tools()).tools
+    assert [f"{t.name}.{arg}" for t in tools for arg, schema in t.input_schema["properties"].items()
+            if not schema.get("description")] == []
+    for t in tools:
+        assert t.output_schema is None, t.name
+        assert not any("title" in schema for schema in (t.input_schema, *t.input_schema["properties"].values())), t.name
+
+
+async def test_arg_docs_naming_an_argument_the_tool_does_not_take_is_refused():
+    from mcp.server.mcpserver import MCPServer
+
+    from meshive_mcp.tools._common import READ_ONLY, meshive_tool
+
+    async def tool(pod: str) -> dict:
+        return {}
+
+    with pytest.raises(ValueError, match="podd"):
+        meshive_tool(MCPServer(name="t"), "tool", title="T", annotations=READ_ONLY, arg_docs={"podd": "typo"})(tool)

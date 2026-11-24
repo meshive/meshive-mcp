@@ -13,7 +13,9 @@ from .gpus import RENTAL_TYPES
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "cpus", title="List CPU Lines", annotations=READ_ONLY)
+    @meshive_tool(server, "cpus", title="List CPU Lines", annotations=READ_ONLY, arg_docs={
+        "rental_type": '"demand" (default) or "spot", the cheaper preemptible tier.',
+    })
     async def cpus(ctx: Context[Any, Any], rental_type: str = "demand") -> dict[str, Any]:
         """Show the CPU lines a CPU pod can run on right now, with hourly USD prices per vCPU core and per GiB of RAM.
         A line is a CPU vendor, product line and generation with a fixed RAM type (`ddr_type`, 0 = unknown). Pass its

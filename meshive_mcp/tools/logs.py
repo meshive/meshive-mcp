@@ -154,7 +154,15 @@ def _expired(_exc: Any = None) -> Any:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "logs", title="Read Logs", annotations=READ_ONLY)
+    @meshive_tool(server, "logs", title="Read Logs", annotations=READ_ONLY, arg_docs={
+        "pod": "pod_name or display name; needs `workspace`. Pass one of `pod`, `task` and `serving`.",
+        "task": "task_id (task_...).",
+        "serving": "Serving id from the servings tool.",
+        "replica": "Serving only: `replica_index` from servings; omit for the first running replica.",
+        "tail": "Last lines to return: at most 1000, default 200.",
+        "wait": "Seconds to wait for a log watcher to start when nothing is buffered (default 8).",
+        "container": 'Task only: "run" (the script, default) or "fetch" (the download of its input assets).',
+    })
     async def logs(ctx: Context[Any, Any], pod: str | None = None, task: str | None = None,
                    workspace: str | None = None, serving: int | None = None, replica: int | None = None,
                    tail: int = 200, wait: float | None = None, container: str | None = None,

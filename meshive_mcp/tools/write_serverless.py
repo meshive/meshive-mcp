@@ -18,6 +18,7 @@ from ..errors import invalid_argument, serving_write_error, tool_error
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_target
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, call, meshive_tool, preview
+from ._common import SERVING_ARG, TASK_ARG
 from .servings import _unsupported
 from .tasks import _FINISHED, _SAVING_PHASES, _outputs
 
@@ -197,7 +198,16 @@ async def _task_echo(client: Any, ws: str, image: str | None, template_id: int |
 def register(server: MCPServer) -> None:
     # --- Serving -------------------------------------------------------------------
 
-    @meshive_tool(server, "deploy_serving", title="Deploy Serving", annotations=CREATE)
+    @meshive_tool(server, "deploy_serving", title="Deploy Serving", annotations=CREATE, arg_docs={
+        "model_registration_id": "`registration_id` from the models tool or register_model.",
+        "price_cap_per_hour": "Most one replica may cost per hour, in USD.",
+        "min_replicas": "Fewest replicas to keep (default 1).",
+        "max_replicas": "Most replicas to run (default 3).",
+        "autoscale": "true (default) scales between the two replica counts by load.",
+        "max_context_tokens": "Maximum context in tokens; omit for the model's own.",
+        "share_idle_capacity": "true lets other workspaces use the serving's idle capacity; needs sharing_consent.",
+        "sharing_consent": "true only after the user agreed to the sharing terms the summary lists.",
+    })
     async def deploy_serving(ctx: Context[Any, Any], model_registration_id: int, price_cap_per_hour: float,
                              workspace: str | None = None, min_replicas: int = 1, max_replicas: int = 3,
                              autoscale: bool = True, max_context_tokens: int | None = None,
@@ -262,7 +272,13 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deployment was accepted. Poll the servings tool until status is `active`; it returns the endpoint URL."
         return out
 
-    @meshive_tool(server, "register_model", title="Register Model", annotations=CREATE)
+    @meshive_tool(server, "register_model", title="Register Model", annotations=CREATE, arg_docs={
+        "huggingface_repo": 'Hugging Face repo id, e.g. "Qwen/Qwen3-0.6B".',
+        "name": "Display name of the registration.",
+        "framework": "Leave it out: it is read from the repo.",
+        "hf_token_id": "Saved Hugging Face token id from source_credentials, for a private repo.",
+        "context_length": "Maximum context in tokens; omit for the detected one (detect_model).",
+    })
     async def register_model(ctx: Context[Any, Any], huggingface_repo: str, workspace: str | None = None,
                              name: str | None = None, framework: str | None = None, hf_token_id: int | None = None,
                              context_length: int | None = None,
@@ -289,7 +305,9 @@ def register(server: MCPServer) -> None:
                             "price cap, after showing the user the cost.")
         return out
 
-    @meshive_tool(server, "delete_model", title="Delete Model", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_model", title="Delete Model", annotations=DESTRUCTIVE, arg_docs={
+        "registration_id": "`registration_id` from the models tool.",
+    })
     async def delete_model(ctx: Context[Any, Any], registration_id: int, workspace: str | None = None,
                            confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a model registration. It fails while a serving of that model is still deployed.
@@ -311,7 +329,15 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "scale_serving", title="Scale Serving", annotations=DESTRUCTIVE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "serving": SERVING_ARG,
+        "min_replicas": "New fewest replicas.",
+        "max_replicas": "New most replicas.",
+        "autoscale": "Turns autoscaling on or off.",
+        "price_cap_per_hour": "New most one replica may cost per hour, in USD.",
+        "share_idle_capacity": "Turns idle-capacity sharing on or off; turning it on needs sharing_consent.",
+        "sharing_consent": "true only after the user agreed to the sharing terms the preview lists.",
+    })
     async def scale_serving(ctx: Context[Any, Any], serving: int, min_replicas: int | None = None,
                             max_replicas: int | None = None, autoscale: bool | None = None,
                             price_cap_per_hour: float | None = None, output_bucket: _OutputBucket = None,
@@ -418,7 +444,10 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "pause_serving", title="Pause or Resume Serving", annotations=MUTATE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "serving": SERVING_ARG,
+        "paused": "true (default) pauses, false resumes.",
+    })
     async def pause_serving(ctx: Context[Any, Any], serving: int, paused: bool = True,
                             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Pause (paused=true) or resume (paused=false) a serving. Paused servings stop billing and stop answering requests.
@@ -435,7 +464,9 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Accepted. Poll the servings tool for the new state."
         return out
 
-    @meshive_tool(server, "delete_serving", title="Delete Serving", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_serving", title="Delete Serving", annotations=DESTRUCTIVE, arg_docs={
+        "serving": SERVING_ARG,
+    })
     async def delete_serving(ctx: Context[Any, Any], serving: int, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a serving and its endpoint. With confirm=false (default) it only returns the serving's current state;
         call again with confirm=true after the user agreed."""
@@ -452,6 +483,29 @@ def register(server: MCPServer) -> None:
 
     # --- Tasks -------------------------------------------------------------------
 
+    # Each argument of estimate_task and submit_task in a line; _TASK_DOC below says how they work together.
+    _TASK_ARG_DOCS = {
+        "name": "Display name of the task.",
+        "script": "Python source to run, at most 256 KiB. Pass this or `project`.",
+        "image": "Container image to run in. Pass this or `template_id`.",
+        "template_id": "Template id from the templates tool, instead of `image`.",
+        "requirements": "Extra pip packages, as the text of a requirements.txt.",
+        "env": "Environment variables, as {name: value}.",
+        "secret_keys": "Names of the `env` variables that are secret.",
+        "args": "Arguments passed to the script, as a list of strings.",
+        "gpu_model": 'GPU task: a model from the gpus tool with rental_type "task". Pass this or `cpu_preset`.',
+        "gpu_count": "GPU task: number of GPUs.",
+        "gpu_vram_gb": "GPU task: VRAM of the GPU in GB, as `vram_gb` in the gpus tool.",
+        "cpu_preset": 'CPU task: a preset such as "micro-2c8g", "small-4c16g" or "standard-8c32g".',
+        "max_duration": "Hard stop in seconds, 3600 to 86400 (default 3600).",
+        "webhook_url": "Webhook URL for this task.",
+        "input_assets": 'Asset Hub assets placed under /inputs: ["asset_id" or {"asset": id, "target_dir": dir}].',
+        "max_price_per_hour": "Cap on the compute hourly rate in USD; storage and asset charges are separate.",
+        "output_include": 'Globs of the /outputs files to upload, e.g. ["*.safetensors"]; omitted = every file.',
+        "project": ('An uploaded folder asset to run instead of `script`: {"asset": id, "entrypoint": "train.py", '
+                    '"requirements_path": "requirements.txt"}.'),
+        "registry_login_id": "Saved registry login for a private `image`.",
+    }
     _TASK_DOC = """`script` is Python source (max 256 KiB) run inside `image` (or a `template_id`); use print(..., flush=True) so output
 reaches the logs. Pass exactly one of `script` or `project` ({"asset": an uploaded folder asset, "entrypoint":
 "train.py", "requirements_path": "requirements.txt"}; `requirements` then adds extra packages). A private `image` needs
@@ -503,7 +557,8 @@ To re-run a task, copy its settings from tasks(task=...); a secret env value can
         return out
 
     estimate_task.__doc__ = (estimate_task.__doc__ or "") + "\n" + _TASK_DOC
-    meshive_tool(server, "estimate_task", title="Estimate Task Price", annotations=READ_ONLY)(estimate_task)
+    meshive_tool(server, "estimate_task", title="Estimate Task Price", annotations=READ_ONLY,
+                 arg_docs=_TASK_ARG_DOCS)(estimate_task)
 
     async def submit_task(ctx: Context[Any, Any], name: str, script: str | None = None, workspace: str | None = None,
                           image: str | None = None, template_id: int | None = None, requirements: str | None = None,
@@ -544,11 +599,13 @@ To re-run a task, copy its settings from tasks(task=...); a secret env value can
         return out
 
     submit_task.__doc__ = (submit_task.__doc__ or "") + "\n" + _TASK_DOC
-    meshive_tool(server, "submit_task", title="Submit Task", annotations=CREATE)(submit_task)
+    meshive_tool(server, "submit_task", title="Submit Task", annotations=CREATE, arg_docs=_TASK_ARG_DOCS)(submit_task)
 
-    @meshive_tool(server, "stop_task", title="Stop Task", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "stop_task", title="Stop Task", annotations=DESTRUCTIVE, arg_docs={
+        "task": TASK_ARG,
+    })
     async def stop_task(ctx: Context[Any, Any], task: str, operation_id: str | None = None) -> dict[str, Any]:
-        """Stop a queued or running task. `task` is the task_id (task_...) from the tasks tool. Billing stops."""
+        """Stop a queued or running task. Billing stops."""
         async with meshive_client(ctx) as client:
             result = await call(client.stop_task, task)
         out = to_dict(result)
@@ -626,12 +683,14 @@ To re-run a task, copy its settings from tasks(task=...); a secret env value can
             steps.append(advice.get(reason, "{} were skipped: see `skipped`.").format(", ".join(task_ids)))
         return {"deleted": result.deleted, "skipped": skipped, "workspace": ws, "next_step": " ".join(steps)}
 
-    @meshive_tool(server, "cancel_task_upload", title="Cancel Task Output Upload", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "cancel_task_upload", title="Cancel Task Output Upload", annotations=DESTRUCTIVE, arg_docs={
+        "task": TASK_ARG,
+    })
     async def cancel_task_upload(ctx: Context[Any, Any], task: str, confirm: bool = False,
                                  operation_id: str | None = None) -> dict[str, Any]:
         """Stop saving the rest of a finished task's /outputs files while they upload. Files already uploaded stay and
         become an asset; the rest are lost, and the task's /outputs disk stops being billed. It works while the task's
-        `outputs.phase` (tasks tool) is preparing, uploading or retrying. `task` is the task_id (task_...).
+        `outputs.phase` (tasks tool) is preparing, uploading or retrying.
         With confirm=false (default) it only shows how far the upload got; call again with confirm=true after the user
         agreed. Needs the admin or billing role."""
         nothing = ("Nothing was changed. Check the task with the tasks tool: its outputs aren't uploading, so there is "

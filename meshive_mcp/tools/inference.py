@@ -214,7 +214,10 @@ def _key_preview(kind: str, payload: dict[str, Any], question: str) -> dict[str,
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "inference_requests", title="List Inference Requests", annotations=READ_ONLY)
+    @meshive_tool(server, "inference_requests", title="List Inference Requests", annotations=READ_ONLY, arg_docs={
+        "status": "Filter: queued, running, succeeded, failed, canceled or expired.",
+        "modality": "Filter by the request's modality.",
+    })
     async def inference_requests(
             ctx: Context[Any, Any], workspace: str | None = None,
             request_id: Annotated[str | None, Field(description=(

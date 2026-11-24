@@ -14,6 +14,7 @@ from ..errors import invalid_argument
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_storage
 from ._common import CREATE, DESTRUCTIVE, MUTATE, REVEAL, call, meshive_tool, preview, price_change
+from ._common import STORAGE_ARG_CONFIRM
 
 # How long connect_storage waits for the storage to be ready. Hosted MCP requests sit behind a proxy that ends calls
 # after about 100 seconds, so a call never waits longer than this and tells the agent to call again instead.
@@ -50,7 +51,17 @@ def _volume_size(mib: Any) -> str:
 
 
 def register(server: MCPServer) -> None:
-    @meshive_tool(server, "create_storage", title="Create Storage", annotations=CREATE)
+    @meshive_tool(server, "create_storage", title="Create Storage", annotations=CREATE, arg_docs={
+        "name": "Display name of the new volume.",
+        "size_gb": "Capacity in GiB, at least 10.",
+        "storage_type": 'Leave it "nfs"; "hostPath" is refused.',
+        "disk_type": "Accepted for compatibility and ignored.",
+        "encrypted": "true turns on at-rest encryption.",
+        "region": "Accepted for compatibility and ignored.",
+        "max_price_per_hour": "Cap on the hourly price in USD; a higher price is refused.",
+        "usage_warning": "true warns the user when the volume fills past `usage_warning_threshold`.",
+        "usage_warning_threshold": "Fill level from 0 to 1 that triggers the usage warning (default 0.9).",
+    })
     async def create_storage(ctx: Context[Any, Any], name: str, size_gb: int, workspace: str | None = None,
                              storage_type: str = "nfs", disk_type: str = "NVMe", encrypted: bool = False,
                              region: str | None = None, max_price_per_hour: float | None = None,
@@ -62,8 +73,6 @@ def register(server: MCPServer) -> None:
         `encrypted` turns on at-rest encryption. `usage_warning` warns the user when the volume fills past
         `usage_warning_threshold` (0-1, default 0.9 = 90% full), like the console's usage warning.
         Local storage can't be created on its own: create it together with a pod through create_pod `local_volumes`.
-        `storage_type` stays "nfs" ("hostPath" is refused); `disk_type` and `region` are accepted for compatibility
-        and ignored.
         The volume appears in the storages tool shortly after; attach it to a pod with create_pod `volumes`."""
         if size_gb < _MIN_SIZE_GB:
             # The server's own refusal names its field (sizeGb); this one names the argument, and nothing is sent.
@@ -95,10 +104,12 @@ def register(server: MCPServer) -> None:
                             "in the storages tool once it is `running`.")
         return out
 
-    @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE, arg_docs={
+        "storage": STORAGE_ARG_CONFIRM,
+    })
     async def delete_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                              confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Delete a storage volume and all data on it. `storage` is its pv_name or display name from the storages tool.
+        """Delete a storage volume and all data on it.
         With confirm=false (default) it only returns what would be deleted (including pods that still mount it);
         call again with confirm=true after the user agreed. Volumes mounted by a user pod are refused (storage_in_use)."""
         async with meshive_client(ctx) as client:
@@ -116,14 +127,19 @@ def register(server: MCPServer) -> None:
         out["next_step"] = "Deletion was accepted. The volume disappears from the storages list within a minute."
         return out
 
-    @meshive_tool(server, "update_storage", title="Edit Storage", annotations=MUTATE)
+    @meshive_tool(server, "update_storage", title="Edit Storage", annotations=MUTATE, arg_docs={
+        "storage": STORAGE_ARG_CONFIRM,
+        "name": "New display name.",
+        "size_gb": "New capacity in GiB. Storage can grow but never shrink.",
+        "usage_warning": "Turns the usage warning on or off.",
+        "usage_warning_threshold": "Fill level from 0 to 1 that triggers the usage warning (default 0.9).",
+    })
     async def update_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                              name: str | None = None, size_gb: int | None = None, usage_warning: bool | None = None,
                              usage_warning_threshold: float | None = None, confirm: bool = False,
                              operation_id: str | None = None) -> dict[str, Any]:
         """Change a storage volume like the console's Edit: rename it (`name`), grow it (`size_gb`, in GiB) or set its
-        usage warning (`usage_warning` on/off, `usage_warning_threshold` 0-1). Pass only what changes; `storage` is the
-        pv_name or display name from the storages tool.
+        usage warning (`usage_warning` on/off, `usage_warning_threshold` 0-1). Pass only what changes.
         Storage can grow but never shrink (storage_cannot_shrink), and growing raises its hourly price, which is billed
         for as long as the volume exists.
         With confirm=false (default) it only returns the estimate (new and current size and hourly price) and changes
@@ -169,12 +185,16 @@ def register(server: MCPServer) -> None:
                             if tx is not None else "Saved; the change applies right away.")
         return out
 
-    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=REVEAL, operation_record=False)
+    @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=REVEAL, operation_record=False,
+                  arg_docs={
+        "storage": STORAGE_ARG_CONFIRM,
+        "wait": "Seconds the confirmed call waits for the storage to be ready: 0-90, default 60.",
+    })
     async def connect_storage(ctx: Context[Any, Any], storage: str, workspace: str | None = None,
                               wait: float = _CONNECT_WAIT_DEFAULT, confirm: bool = False,
                               operation_id: str | None = None) -> dict[str, Any]:
         """Get an SSH login to a storage volume's files, like the console's Connect, only when the user asks to connect: the `command` to run and a one-time `password` that expires in a few minutes (`expires_at`).
-        `storage` is its pv_name or display name from the storages tool. Encrypted storage is unlocked and an access pod is started for it; it locks again by itself after `auto_lock_minutes` (`remaining_seconds` left). Other storage is reached through the access pod that already runs for it.
+        Encrypted storage is unlocked and an access pod is started for it; it locks again by itself after `auto_lock_minutes` (`remaining_seconds` left). Other storage is reached through the access pod that already runs for it.
         With confirm=false (default) it only returns the storage's connection state and changes nothing; call again with confirm=true after the user agreed. It needs a read & write key.
         The confirmed call waits up to `wait` seconds (0-90, default 60) for the storage to be ready; if it isn't yet, the result has no password and says to call again.
         Give the command and password to the user and nobody else: never run the command yourself or put the password in files, commits or other tools. Each confirmed call issues a new password."""

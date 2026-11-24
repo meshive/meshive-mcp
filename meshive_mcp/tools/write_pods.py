@@ -22,6 +22,7 @@ from ..workspace import needs_input, resolve, resolve_pod, resolve_storage
 from . import _ports
 from ._common import (CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, bind_pod, call, meshive_tool, preview,
                       price_change)
+from ._common import POD_ARG, POD_ARG_CONFIRM
 
 # What estimate_pod and create_pod say about all their arguments together. The format of each argument is in that
 # argument's own description below (the tool's input schema), which keeps the tool descriptions short enough for
@@ -35,6 +36,18 @@ CPU pod: omit `gpu_model`; `cpu_line` picks the CPU line (from the cpus tool; de
 `input_assets` places Asset Hub assets in the pod. New files in the template's output folders and in `watched_folders` are uploaded as assets; `watched_template_folders` changes the template's folders and `harvest_destination` where the files go.
 `model_set` adds one model set to the pod, and `hf_token_id` is the token a set gated on Hugging Face needs; the set's files are added before the pod is created, often several minutes.
 Ports exposed over HTTPS are created locked: only workspace members signed in to the console and requests with one of the port's access keys get through, and anything else gets 401. `lock_public_ports=false` (or "locked": false on a port) creates them open to anyone who knows the URL: only when the user explicitly asks for that. One exception: a template port whose template sets it open is created open; the preview lists it as `open_by_template` and says how to lock it."""
+
+# The arguments of estimate_pod and create_pod that have no annotated type below.
+_PREMIUM = "Premium option: only machines that meet the premium {} requirement, which narrows the eligible machines."
+_NEW_POD_ARG_DOCS = {
+    "name": "Display name of the new pod.",
+    "gpu_count": "Number of GPUs (default 1); the gpus tool shows the most one pod can get.",
+    "gpu_vram_gb": "VRAM of the GPU in GB, as `vram_gb` in the gpus tool.",
+    "rental_type": '"demand" (default) or "spot", the cheaper preemptible tier.',
+    "internet_premium": _PREMIUM.format("internet speed"),
+    "uptime_premium": _PREMIUM.format("uptime"),
+    "cpu_premium": _PREMIUM.format("CPU"),
+}
 
 _Workspace = Annotated[str | None, Field(description="Workspace id from the workspaces tool (a label also works).")]
 _TemplateId = Annotated[int, Field(description="Template id from the templates tool.")]
@@ -463,7 +476,8 @@ def register(server: MCPServer) -> None:
         return out
 
     estimate_pod.__doc__ = (estimate_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
-    meshive_tool(server, "estimate_pod", title="Estimate Pod Price", annotations=READ_ONLY)(estimate_pod)
+    meshive_tool(server, "estimate_pod", title="Estimate Pod Price", annotations=READ_ONLY,
+                 arg_docs=_NEW_POD_ARG_DOCS)(estimate_pod)
 
     async def create_pod(ctx: Context[Any, Any], name: str, template_id: _TemplateId, workspace: _Workspace = None,
                          gpu_model: _GpuModel = None, gpu_count: int = 1, gpu_vram_gb: int | None = None,
@@ -537,7 +551,7 @@ def register(server: MCPServer) -> None:
         return out
 
     create_pod.__doc__ = (create_pod.__doc__ or "") + "\n" + _POD_ARGS_DOC
-    meshive_tool(server, "create_pod", title="Create Pod", annotations=CREATE)(create_pod)
+    meshive_tool(server, "create_pod", title="Create Pod", annotations=CREATE, arg_docs=_NEW_POD_ARG_DOCS)(create_pod)
 
     async def _lifecycle(ctx, method: str, pod: str, workspace: str | None, action: str, **extra: Any) -> dict[str, Any]:
         async with meshive_client(ctx) as client:
@@ -550,21 +564,27 @@ def register(server: MCPServer) -> None:
         out["next_step"] = f"The {action} was accepted and runs asynchronously. Poll the pods tool for the new status."
         return out
 
-    @meshive_tool(server, "stop_pod", title="Stop Pod", annotations=MUTATE)
+    @meshive_tool(server, "stop_pod", title="Stop Pod", annotations=MUTATE, arg_docs={
+        "pod": POD_ARG,
+    })
     async def stop_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, operation_id: str | None = None) -> dict[str, Any]:
         """Stop a running pod (scale to zero). Pod billing stops; attached storage keeps being billed.
-        `pod` is the pod_name from the pods tool (the display name also works). The change is asynchronous — poll pods for `stopped`.
+        The change is asynchronous — poll pods for `stopped`.
         Use delete_pod to remove the pod entirely."""
         return await _lifecycle(ctx, "stop_pod", pod, workspace, "stop")
 
-    @meshive_tool(server, "start_pod", title="Start Pod", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "start_pod", title="Start Pod", annotations=DESTRUCTIVE, arg_docs={
+        "pod": POD_ARG_CONFIRM,
+        "placement": ("Omit it to let the server pick what the console's Start button would. Or \"same_node\", "
+                      '"wait_same_node", "any_node" or "wait_any_node".'),
+        "allow_data_loss": ("true only after separate explicit consent to permanently losing this pod's scratch disk "
+                            "in a move (placement any_node or wait_any_node)."),
+    })
     async def start_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
                         placement: str | None = None, confirm: bool = False, allow_data_loss: bool = False,
                         operation_id: str | None = None) -> dict[str, Any]:
         """Start a stopped pod; hourly billing resumes. With confirm=false (default) it only returns the pod's current
         state and hourly price and changes nothing; call again with confirm=true after the user agreed to pay again.
-        `pod` is the pod_name from the pods tool; a display name works on the preview, and confirm=true needs the
-        returned `pod_name`.
         `placement`: omit it (default) and the server picks what the console's Start button would; the result's
         `placement` says which one it used. Or choose: "same_node" starts it on its original machine now;
         "wait_same_node" waits until that machine has room and then starts it there; "any_node" moves it to another
@@ -632,19 +652,25 @@ def register(server: MCPServer) -> None:
         out["next_step"] = step
         return out
 
-    @meshive_tool(server, "restart_pod", title="Restart Pod", annotations=MUTATE)
+    @meshive_tool(server, "restart_pod", title="Restart Pod", annotations=MUTATE, arg_docs={
+        "pod": POD_ARG,
+    })
     async def restart_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, operation_id: str | None = None) -> dict[str, Any]:
         """Restart a pod in place (same machine, same storage). Asynchronous — poll pods for `running`.
         A 401 from a port whose `access` is locked (pods tool) is the lock working; a restart doesn't change it."""
         return await _lifecycle(ctx, "restart_pod", pod, workspace, "restart")
 
-    @meshive_tool(server, "delete_pod", title="Delete Pod", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_pod", title="Delete Pod", annotations=DESTRUCTIVE, arg_docs={
+        "pod": POD_ARG_CONFIRM,
+        "delete_local_storages": ("Local volumes to delete with the pod, by pv_name (a display name works on the "
+                                  "preview). Volumes not listed are kept and stay billed."),
+    })
     async def delete_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None,
                          delete_local_storages: list[str] | None = None, confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Delete a pod permanently. With confirm=false (default) it only returns what would be deleted; call again
         with confirm=true after the user agreed. Attached network storage survives; local (hostPath) volumes are deleted
-        only if listed in `delete_local_storages` by pv_name or display name on the preview. Confirm with the returned
-        `pod_name` and storage ids: a display name is refused with confirm=true."""
+        only if listed in `delete_local_storages`. Confirm with the returned `pod_name` and storage ids: a display name
+        is refused with confirm=true."""
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
             if needs_input(ws):
@@ -668,7 +694,39 @@ def register(server: MCPServer) -> None:
 
     # --- Edit (the console's Pod Edit) ---------------------------------------------------------------------
 
-    @meshive_tool(server, "update_pod", title="Edit Pod", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "update_pod", title="Edit Pod", annotations=DESTRUCTIVE, arg_docs={
+        "pod": POD_ARG_CONFIRM,
+        "name": "New display name. Renaming alone doesn't restart the pod.",
+        "template_id": "Template id (templates tool) to move the pod to.",
+        "rental_type": '"demand" or "spot".',
+        "gpu_model": "GPU pods: new GPU model from the gpus tool.",
+        "gpu_vram_gb": "GPU pods: VRAM of the GPU in GB, as `vram_gb` in the gpus tool.",
+        "gpu_count": "GPU pods: new number of GPUs.",
+        "vcpu": "vCPUs for the whole pod, one of the sizes the console offers.",
+        "ram_gb": "RAM for the whole pod in GiB, one of the sizes the console offers.",
+        "cpu_line": "CPU pods: a `cpu_line` value from the cpus tool.",
+        "env": "Environment variables to set or add, as {name: value}.",
+        "secret_keys": "Names of the `env` variables that are secret.",
+        "remove_env": "Names of variables the user added, to remove. Template variables can't be removed.",
+        "ports": 'New ports to open: a list like [8888, {"port": 6006, "name": "tb", "external": false}].',
+        "template_ports": ('Changes to current ports: [{"port": 8188, "name": "ui", "new_port": 8189, "external": '
+                           'false}]; "name", "new_port", "external" and "locked" are optional.'),
+        "remove_ports": "Port numbers the user added, to close. Template ports can't be removed.",
+        "command": "Replaces the start command; \"\" goes back to the template's.",
+        "volumes": ('Existing storage to attach: [{"storage": pv_name, "mount_path": "/data"}]. Network storage, or '
+                    "local storage on the pod's current machine."),
+        "local_volumes": ('New local storage to create: [{"name": "scratch", "mount_path": "/scratch", "size_gb": '
+                          "50}], at least 10 GiB each, billed hourly until deleted."),
+        "detach_storages": "pv_names to detach; the storage and its data stay.",
+        "allow_node_migration": ("true only after the user agreed to move the pod to another machine (after "
+                                 "node_migration_required)."),
+        "allow_data_loss": ("true only after separate explicit consent to permanently losing the pod's scratch disk "
+                            "in that move. Only sent together with allow_node_migration."),
+        "drop_watched_folders": ("The `paths` a harvest_roots_orphaned refusal named, once the user agreed to remove "
+                                 "them."),
+        "max_price_per_hour": "Refuses the edit when the new hourly estimate (USD) is above it.",
+        "enable_folder_saving": "true adds the uploader to an older pod that has none; restarts a running pod once.",
+    })
     async def update_pod(ctx: Context[Any, Any], pod: str, workspace: str | None = None, name: str | None = None,
                          template_id: int | None = None, rental_type: str | None = None,
                          gpu_model: str | None = None, gpu_vram_gb: int | None = None, gpu_count: int | None = None,
@@ -683,7 +741,7 @@ def register(server: MCPServer) -> None:
                          enable_folder_saving: bool = False, lock_public_ports: _LockNewPublicPorts = True,
                          add_input_assets: _InputAssets = None, remove_input_assets: _RemoveInputAssets = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name works on the preview; confirm with the returned `pod_name`).
+        """Change an existing pod like the console's Edit: pass only what changes.
         With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
         A running pod restarts with the new settings and a stopped pod uses them at its next start; renaming alone (`name`) doesn't restart it. Watched folders are kept.
         Locked like the console: the pod type (GPU or CPU), premiums and the image can't change.
@@ -795,7 +853,9 @@ def register(server: MCPServer) -> None:
 
     # --- Watched folders (harvest folders of a running Pod) ---------------------------------------------------
 
-    @meshive_tool(server, "watched_folders", title="Show Watched Folders", annotations=READ_ONLY)
+    @meshive_tool(server, "watched_folders", title="Show Watched Folders", annotations=READ_ONLY, arg_docs={
+        "pod": POD_ARG,
+    })
     async def watched_folders(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Show a pod's watched folders: folders whose new files are uploaded as Asset Hub assets.
         Each folder has `origin` (template or user), `enabled`, its include patterns and `blocked_reason` (network_storage = on network storage, nested_volume = overlaps your volume; never watched).
@@ -812,7 +872,12 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=DESTRUCTIVE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "pod": POD_ARG_CONFIRM,
+        "expected_version": "The `revision` read from watched_folders.",
+        "template": 'The whole set of template folders: {folder path: {"enabled": bool, "include": [...] or null}}.',
+        "user": 'The whole set of user folders: [{"path", "include", "enabled", "include_existing"}].',
+    })
     async def set_watched_folders(ctx: Context[Any, Any], pod: str, expected_version: int, workspace: str | None = None,
                                   template: dict[str, Any] | None = None, user: list[Any] | None = None,
                                   confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
@@ -850,7 +915,9 @@ def register(server: MCPServer) -> None:
 
     # --- SSH (G04) ---------------------------------------------------------------------------------
 
-    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=REVEAL, operation_record=False)
+    @meshive_tool(server, "ssh_access", title="Get SSH Access", annotations=REVEAL, operation_record=False, arg_docs={
+        "pod": POD_ARG,
+    })
     async def ssh_access(ctx: Context[Any, Any], pod: str, workspace: str | None = None) -> dict[str, Any]:
         """Get a one-time SSH login for a pod, only when the user asks to connect: the `command` to run and a `password` that expires in a few minutes (`expires_at`).
         It needs a read & write key; each call issues a new password. Give both to the user and nothing else — never run the command yourself or put the password in files, commits or other tools."""

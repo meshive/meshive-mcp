@@ -23,6 +23,7 @@ from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_target
 from ._common import CREATE, DESTRUCTIVE, MUTATE, READ_ONLY, REVEAL, call, meshive_tool, preview
+from ._common import MACHINE_ARG
 from .machines import FAN_GPU_ONLY_NOTE, FAN_UNSUPPORTED_NOTE, fan_curve_view, fan_unsupported
 
 _HISTORY_KINDS = ("downtime", "stress_test")
@@ -330,11 +331,16 @@ async def _message_to_host(client: Any, title: str, content: str, *, machine: st
 def register(server: MCPServer) -> None:
     # --- Reads -----------------------------------------------------------------------------------
 
-    @meshive_tool(server, "machine_history", title="Show Machine History", annotations=READ_ONLY)
+    @meshive_tool(server, "machine_history", title="Show Machine History", annotations=READ_ONLY, arg_docs={
+        "machine": MACHINE_ARG,
+        "kind": '"downtime" (default) or "stress_test".',
+        "since": "Start date, YYYY-MM-DD in UTC (downtime only).",
+        "until": "End date, YYYY-MM-DD in UTC (downtime only).",
+    })
     async def machine_history(ctx: Context[Any, Any], machine: str, kind: str = "downtime", since: str | None = None,
                               until: str | None = None, limit: int | None = None,
                               cursor: str | None = None) -> dict[str, Any]:
-        """Show a hosted machine's history; `machine` is the machine_id from the machines tool.
+        """Show a hosted machine's history.
         `kind` "downtime" lists the state changes that count against its uptime (offline, not ready, a failed step),
         newest first: at most 20 events, from the last 90 days unless `since`/`until` (dates in YYYY-MM-DD, UTC) say
         otherwise.
@@ -362,7 +368,10 @@ def register(server: MCPServer) -> None:
             out["note"] = "This machine has no stress test yet."
         return out
 
-    @meshive_tool(server, "host_messages", title="Read Host Messages", annotations=READ_ONLY)
+    @meshive_tool(server, "host_messages", title="Read Host Messages", annotations=READ_ONLY, arg_docs={
+        "machine": "A machine_id, to keep one machine's messages.",
+        "unread_only": "true keeps only the incoming messages that aren't read yet.",
+    })
     async def host_messages(ctx: Context[Any, Any], machine: str | None = None, unread_only: bool = False,
                             workspace: str | None = None, limit: int | None = None,
                             cursor: str | None = None) -> dict[str, Any]:
@@ -400,13 +409,18 @@ def register(server: MCPServer) -> None:
 
     # --- Maintenance ------------------------------------------------------------------------------
 
-    @meshive_tool(server, "schedule_maintenance", title="Schedule Maintenance", annotations=CREATE)
+    @meshive_tool(server, "schedule_maintenance", title="Schedule Maintenance", annotations=CREATE, arg_docs={
+        "machine": MACHINE_ARG,
+        "reason": "Why the maintenance is needed; the affected workspaces see it.",
+        "start": "Window start. ISO 8601 time; UTC when it has no offset.",
+        "end": "Window end. ISO 8601 time; UTC when it has no offset.",
+        "description": "Optional details about the work.",
+        "emergency": "true only when the user chose emergency maintenance: it can start sooner but counts as downtime.",
+    })
     async def schedule_maintenance(ctx: Context[Any, Any], machine: str, reason: str, start: str, end: str,
                                    description: str = "", emergency: bool = False, confirm: bool = False,
                                    operation_id: str | None = None) -> dict[str, Any]:
-        """Schedule a maintenance window on a hosted machine, like the console's Maintenance tab. `machine` is the
-        machine_id from the machines tool, `reason` is required, and `start` and `end` are ISO 8601 times (UTC when
-        they have no offset).
+        """Schedule a maintenance window on a hosted machine, like the console's Maintenance tab. `reason` is required.
         The workspaces using the machine are emailed when it is scheduled. While the window is open their pods and
         volumes on it aren't billed and the machine earns nothing from them; pods keep running unless the work
         interrupts them. A regular window must start at least 48 hours ahead (insufficient_notice) and doesn't affect
@@ -443,15 +457,22 @@ def register(server: MCPServer) -> None:
                             f"with maintenance_id={mid}.")
         return out
 
-    @meshive_tool(server, "maintenance_window", title="Change Maintenance Window", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "maintenance_window", title="Change Maintenance Window", annotations=DESTRUCTIVE, arg_docs={
+        "maintenance_id": "A window `id` from the machines tool (a machine's `maintenance`).",
+        "action": '"edit" (default), "cancel", "extend" or "end".',
+        "reason": "New reason (edit), or why the window is extended (extend, required).",
+        "description": "New details (edit).",
+        "start": "New start (edit). ISO 8601 time; UTC when it has no offset.",
+        "end": "New end (edit). ISO 8601 time; UTC when it has no offset.",
+        "hours": "Hours to add to a window in progress (extend); more than 0.",
+    })
     async def maintenance_window(ctx: Context[Any, Any], maintenance_id: int, action: str = "edit",
                                  reason: str | None = None, description: str | None = None, start: str | None = None,
                                  end: str | None = None, hours: float | None = None, confirm: bool = False,
                                  operation_id: str | None = None) -> dict[str, Any]:
         """Change one maintenance window of a hosted machine, like the buttons in the console's Maintenance tab.
-        `maintenance_id` is a window `id` from the machines tool (a machine's `maintenance`).
         `action` "edit" changes a window that hasn't started: pass only what changes among `reason`, `description`,
-        `start` and `end` (ISO 8601, UTC when there is no offset). New times email the affected workspaces again, and a
+        `start` and `end`. New times email the affected workspaces again, and a
         regular window still needs 48 hours' notice unless it only moves later.
         "cancel" removes a window that hasn't started, for good; the workspaces that were notified get no cancellation
         email. "extend" makes a window in progress longer by `hours` (more than 0) and needs a `reason`, which the
@@ -518,11 +539,14 @@ def register(server: MCPServer) -> None:
     # --- Listing, setup retries, removal -----------------------------------------------------------
 
     @meshive_tool(server, "set_machine_listing", title="Set Machine Listing", annotations=MUTATE,
-                  conditional_confirm=True)
+                  conditional_confirm=True, arg_docs={
+        "machine": MACHINE_ARG,
+        "listed": "true lists the machine for new pods, false unlists it.",
+    })
     async def set_machine_listing(ctx: Context[Any, Any], machine: str, listed: bool, confirm: bool = False,
                                   operation_id: str | None = None) -> dict[str, Any]:
         """List a hosted machine (listed=true) so new pods can be placed on it, or unlist it (listed=false), like the
-        console's listing switch. `machine` is the machine_id from the machines tool.
+        console's listing switch.
         Listing needs no confirmation. It is checked first: a machine that can't be listed yet is refused with the
         console's reason (listing_refused), and nothing changes.
         Unlisting stops new pods from being placed on the machine, and stopped pods can't start on it again until it is
@@ -559,7 +583,9 @@ def register(server: MCPServer) -> None:
                             "listed=true.")
         return out
 
-    @meshive_tool(server, "set_fan_curve", title="Set Fan Curve", annotations=MUTATE)
+    @meshive_tool(server, "set_fan_curve", title="Set Fan Curve", annotations=MUTATE, arg_docs={
+        "machine": MACHINE_ARG,
+    })
     async def set_fan_curve(
             ctx: Context[Any, Any], machine: str,
             mode: Annotated[Literal["default", "custom", "driver"], Field(description=(
@@ -570,8 +596,7 @@ def register(server: MCPServer) -> None:
                 "never falling, the last one 100% at or below `fan_curve.limits.max_full_speed_temperature`. With "
                 "another mode they are kept as the saved custom curve."))] = None,
             confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
-        """Set a hosted GPU machine's fan curve, like the console's Fan curve tab. `machine` is the machine_id from the
-        machines tool. `mode` "default" uses Meshive's curve, "custom" uses your `points`, and "driver" stops Meshive
+        """Set a hosted GPU machine's fan curve, like the console's Fan curve tab. `mode` "default" uses Meshive's curve, "custom" uses your `points`, and "driver" stops Meshive
         from controlling the fans so that the NVIDIA driver (or the host's own fan tool) does. `points` are
         [temperature °C, fan %] pairs: 2 to 8 of them, temperatures rising, fan % never falling, and the last one 100%
         at or below the limit that machines include_fan=true shows. A custom curve without points is refused. `points`
@@ -623,11 +648,14 @@ def register(server: MCPServer) -> None:
                             "again. Check later with machines include_fan=true.")
         return out
 
-    @meshive_tool(server, "retry_machine_setup", title="Retry Machine Setup", annotations=MUTATE)
+    @meshive_tool(server, "retry_machine_setup", title="Retry Machine Setup", annotations=MUTATE, arg_docs={
+        "machine": MACHINE_ARG,
+        "check": '"setup" (default) retries the failed setup step, "ports" checks the ports again.',
+    })
     async def retry_machine_setup(ctx: Context[Any, Any], machine: str, check: str = "setup",
                                   operation_id: str | None = None) -> dict[str, Any]:
         """Retry a hosted machine's failed setup step (check="setup") or check its ports again (check="ports"), like
-        the console's Retry buttons; neither asks for confirmation. `machine` is the machine_id from the machines tool.
+        the console's Retry buttons; neither asks for confirmation.
         Retrying a step the machine's agent runs reboots the machine first, and only a failed step can be retried
         (not_retryable). Port checks have a cooldown of about 30 seconds between them (port_check_cooldown).
         Both run in the background: poll the machines tool for the machine's state, and its `boot_report` for the
@@ -645,7 +673,9 @@ def register(server: MCPServer) -> None:
                                                  else "; a step the agent runs reboots the machine first."))
         return out
 
-    @meshive_tool(server, "delete_machine", title="Remove Machine", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "delete_machine", title="Remove Machine", annotations=DESTRUCTIVE, arg_docs={
+        "machine": "The exact machine_id from the machines tool; its name doesn't work.",
+    })
     async def delete_machine(ctx: Context[Any, Any], machine: str, confirm: bool = False,
                              operation_id: str | None = None) -> dict[str, Any]:
         """Remove a hosted machine from Meshive. This can't be undone. `machine` is the exact machine_id from the
@@ -694,7 +724,13 @@ def register(server: MCPServer) -> None:
 
     # --- Messages ---------------------------------------------------------------------------------
 
-    @meshive_tool(server, "send_host_message", title="Send Host Message", annotations=CREATE)
+    @meshive_tool(server, "send_host_message", title="Send Host Message", annotations=CREATE, arg_docs={
+        "title": "Message title.",
+        "content": "Message text.",
+        "machine": "As a host: your machine_id. As a renter: the machine_id of the host to write to.",
+        "to": "As a host: a `workspace` id from the machine's `clients`, or \"all\".",
+        "pod": "As a renter: a pod, to write to the host of the machine it runs on.",
+    })
     async def send_host_message(ctx: Context[Any, Any], title: str, content: str = "", machine: str | None = None,
                                 to: str | None = None, workspace: str | None = None, pod: str | None = None,
                                 confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
@@ -759,7 +795,10 @@ def register(server: MCPServer) -> None:
                             "replies show up in host_messages.")
         return out
 
-    @meshive_tool(server, "mark_host_messages_read", title="Mark Host Messages Read", annotations=MUTATE)
+    @meshive_tool(server, "mark_host_messages_read", title="Mark Host Messages Read", annotations=MUTATE, arg_docs={
+        "message_ids": 'Message `id` values from host_messages (direction "in").',
+        "machine": "As a host: your machine_id. Pass this or `workspace`.",
+    })
     async def mark_host_messages_read(ctx: Context[Any, Any], message_ids: list[int], machine: str | None = None,
                                       workspace: str | None = None,
                                       operation_id: str | None = None) -> dict[str, Any]:
@@ -786,13 +825,15 @@ def register(server: MCPServer) -> None:
     # --- Secrets ----------------------------------------------------------------------------------
 
     @meshive_tool(server, "machine_credentials", title="Reveal Machine Credentials", annotations=REVEAL,
-                  operation_record=False)
+                  operation_record=False, arg_docs={
+        "machine": MACHINE_ARG,
+        "kind": '"ssh" (default), "ipmi" or "grafana".',
+    })
     async def machine_credentials(ctx: Context[Any, Any], machine: str, kind: str = "ssh", confirm: bool = False,
                                   operation_id: str | None = None) -> dict[str, Any]:
         """Reveal one login of a hosted machine, as its console view shows it, only when the user asks for it.
         `kind` "ssh" is a shell on the host machine itself (host, port, username, password and the `command`), "ipmi"
-        controls its power and console out of band, and "grafana" opens its metrics dashboard. `machine` is the
-        machine_id from the machines tool.
+        controls its power and console out of band, and "grafana" opens its metrics dashboard.
         The account owner is emailed every time a login is revealed, and it needs a read & write key.
         With confirm=false (default) it only says what would be revealed and reveals nothing; call again with
         confirm=true after the user agreed. Give the login to that user and nobody else: never use it yourself or put it
@@ -823,7 +864,9 @@ def register(server: MCPServer) -> None:
         return out
 
     @meshive_tool(server, "host_install_command", title="Get Host Install Command", annotations=REVEAL,
-                  operation_record=False)
+                  operation_record=False, arg_docs={
+        "agent_type": '"compute" (default) for a GPU or CPU machine, or "storage".',
+    })
     async def host_install_command(ctx: Context[Any, Any], agent_type: str = "compute", confirm: bool = False,
                                    operation_id: str | None = None) -> dict[str, Any]:
         """Get the command that installs the Meshive agent on a new machine and registers it to the user's account,
