@@ -211,7 +211,7 @@ async def test_update_pod_description_covers_the_console_rules(mcp_client, fake,
                    "Template variables and ports can't be removed", "recommended sizes", "keeps the per-GPU ratio",
                    "console's default", "current machine", "Spot pods can't have local storage",
                    "node_migration_required", "allow_data_loss", "harvest_roots_orphaned", "drop_watched_folders",
-                   "Input assets and watched folders are kept", "`ram_gb`"):
+                   "Watched folders are kept", "`ram_gb`"):
         assert phrase in desc, phrase
     props = tool.input_schema["properties"]
     assert {"remove_env", "remove_ports", "detach_storages", "allow_node_migration", "allow_data_loss",
@@ -441,7 +441,8 @@ async def test_server_instructions_cover_editing_connect_and_model_sets():
     # update_pod, update_storage and connect_storage take `confirm`, which the instructions cover for every tool.
     for phrase in ("every tool with a `confirm` argument needs it", "node_migration_required",
                    "allow_node_migration=true", "it never shrinks", "pass one `slug` as model_set",
-                   "`ssh_access`, `connect_storage` and `machine_credentials` return passwords", "model set names"):
+                   "`ssh_access`, `connect_storage` and `machine_credentials` return passwords",
+                   "Resource and user names"):
         assert phrase in INSTRUCTIONS, phrase
 
 

@@ -76,10 +76,13 @@ _LockPublicPorts = Annotated[bool, Field(description=(
     "anyone who knows the URL: pass it only when the user explicitly asked for open ports. \"locked\" on a port's "
     "item in `ports` or `template_ports` decides for that port alone."))]
 _LockNewPublicPorts = Annotated[bool, Field(description=(
-    "Leave it true (the default): a port this edit newly exposes over HTTPS is locked (a new template's ports follow "
+    "Leave it true (the default): a port this edit newly exposes over HTTPS is locked (an external port in `ports`, a "
+    "port set to \"external\": true), so only workspace members signed in to the console and requests with one of "
+    "the port's access keys get through (a new template's ports follow "
     "that template's own setting, and the preview lists the ones it leaves open as `open_by_template`). false leaves "
     "the newly exposed ports open to anyone who knows the URL: pass it only when the user explicitly asked for that. "
-    "A port that is exposed already keeps its lock either way."))]
+    "\"locked\": false on a port's item in `ports` or `template_ports` decides for that port alone, with the same "
+    "rule. A port that is exposed already keeps its lock either way."))]
 _Command = Annotated[str | None, Field(description="Overrides the start command (at most 32,000 characters).")]
 _Region = Annotated[str | None, Field(description="Accepted for compatibility and ignored.")]
 _MaxPricePerHour = Annotated[float | None, Field(description=(
@@ -92,6 +95,8 @@ _InputAssets = Annotated[list[Any] | None, Field(description=(
     'path for that role); "paths" picks some files or folders, copied from the asset\'s file list exactly as written '
     'there, and "strip_prefix": "" keeps their folder structure (left out, the folder they share is stripped). Only '
     "these keys are accepted. They add an input volume billed by size."))]
+_RemoveInputAssets = Annotated[list[int] | None, Field(description=(
+    "Removes input assets: connection_ids of the pod's active input assets from pods with include_assets."))]
 _WatchedFolders = Annotated[list[Any] | None, Field(description=(
     'Uploads new files in these folders as assets: ["/workspace/results" or {"path": p, "include": ["*.png"], '
     '"include_existing": false, "enabled": true}] (the template\'s own output folders are watched already). It works '
@@ -104,7 +109,7 @@ _WatchedTemplateFolders = Annotated[dict[str, dict[str, Any]] | None, Field(desc
     "storage follow; output folders only)."))]
 _HarvestDestination = Annotated[dict[str, Any] | None, Field(description=(
     '{"mode": "user_s3", "credential_id": n} sends the uploaded files to the user\'s bucket instead of managed '
-    "storage."))]
+    "storage. `credential_id` takes a `bucket_id` from buckets."))]
 _ModelSet = Annotated[str | None, Field(description=(
     "Adds one model set to the pod: a `slug` from the model_sets tool for this template (only templates whose list "
     "is `selectable`; one set per pod). Its files are added as input assets before the pod is created, so creating "
@@ -139,7 +144,7 @@ def _local_storage_note(est: Any) -> str:
 
 
 def _bytes_size(value: Any) -> str:
-    """Byte count → GiB like the console's other sizes (MiB under 1 GiB)."""
+    """Byte count → GiB like the console's other sizes (MiB under 1 GiB, KiB or bytes under 1 MiB, never "0 MiB")."""
     try:
         raw = float(value)
     except (TypeError, ValueError):
@@ -151,7 +156,11 @@ def _bytes_size(value: Any) -> str:
         return f"{gib:,.0f} GiB"
     if gib >= 1:
         return f"{gib:.1f} GiB"
-    return f"{raw / 1024 ** 2:.0f} MiB"
+    if raw >= 1024 ** 2:
+        return f"{raw / 1024 ** 2:.0f} MiB"
+    if raw >= 1024:
+        return f"{round(raw / 1024, 1)} KiB"
+    return f"{int(raw)} bytes"
 
 
 def _model_set(est: Any) -> dict[str, Any] | None:
@@ -239,6 +248,19 @@ def _model_set_note(est: Any) -> str:
         if isinstance(have, (int, float)) and have < need:
             note += f", more than the {have:g} GB of the chosen GPU"
     return note + ". Its files are fetched before the pod is created, which can take several minutes."
+
+
+# Said in an update_pod preview that adds or removes input assets.
+_INPUT_ASSETS_NOTE = " Input assets change, so the input volume is sized for the new set and billed by size."
+# remove_input_assets drops the row from the pod's configuration; the files of an asset that was added while the pod
+# ran can stay in the pod until it is next re-created.
+_REMOVE_INPUT_ASSETS_NOTE = (" Removing an asset that was added while the pod was running may leave its files in the "
+                             "pod until the pod is next re-created; to delete them now, use remove_pod_asset while "
+                             "the pod runs.")
+# After the edit: the asset's connection is released, so remove_pod_asset has nothing to act on, and the restart of
+# this edit doesn't remove the files either.
+_REMOVE_INPUT_ASSETS_DONE_NOTE = (" The files of an asset that was added while the pod was running may stay in the "
+                                  "pod until it is re-created again (this edit's restart doesn't remove them).")
 
 
 # update_pod arguments that guard an edit rather than change the pod.
@@ -402,7 +424,7 @@ def register(server: MCPServer) -> None:
                            model_set: _ModelSet = None, hf_token_id: _HfTokenId = None,
                            lock_public_ports: _LockPublicPorts = True) -> dict[str, Any]:
         """Estimate the hourly price of a pod before creating it; nothing is created and no credit is spent.
-        Call this first, show the user the price and hardware, then call create_pod with the same arguments.
+        Takes the same arguments as create_pod and returns the price and hardware a pod with them would get.
         `locked_ports` and `open_ports` list the ports the pod would expose over HTTPS, by the lock each would get
         (`open_by_template`: open because the template sets them so, not because of this call).
         """
@@ -461,7 +483,7 @@ def register(server: MCPServer) -> None:
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Create a pod. This spends the user's credit every hour while the pod runs.
         With confirm=false (default) it only returns the estimate and creates nothing; call again with confirm=true
-        after the user explicitly agreed to the price. The pod starts asynchronously — poll the pods tool for status.
+        after the user explicitly agreed to the price. The pod starts asynchronously; its status appears in pods.
         With `model_set` or `hf_token_id` the confirmed call returns only after the set's files were added, which can
         take minutes.
         The preview's `locked_ports` and `open_ports` list the ports the pod exposes over HTTPS, by the lock each
@@ -659,21 +681,23 @@ def register(server: MCPServer) -> None:
                          allow_node_migration: bool = False, allow_data_loss: bool = False,
                          drop_watched_folders: list[str] | None = None, max_price_per_hour: float | None = None,
                          enable_folder_saving: bool = False, lock_public_ports: _LockNewPublicPorts = True,
+                         add_input_assets: _InputAssets = None, remove_input_assets: _RemoveInputAssets = None,
                          confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:
         """Change an existing pod like the console's Edit: pass only what changes. `pod` is the pod_name from the pods tool (its display name works on the preview; confirm with the returned `pod_name`).
         With confirm=false (default) it only returns the server's estimate (the `changes`, the hourly price before and after, and whether the pod `restarts`) and changes nothing; call again with confirm=true after the user agreed.
-        A running pod restarts with the new settings and a stopped pod uses them at its next start; renaming alone (`name`) doesn't restart it. Input assets and watched folders are kept.
+        A running pod restarts with the new settings and a stopped pod uses them at its next start; renaming alone (`name`) doesn't restart it. Watched folders are kept.
         Locked like the console: the pod type (GPU or CPU), premiums and the image can't change.
         Hardware: `gpu_model`/`gpu_vram_gb`/`gpu_count` for GPU pods, `cpu_line` for CPU pods, `rental_type` demand or spot. Changing the GPU resets vCPU and RAM per GPU to the new GPU's recommended sizes, changing only `gpu_count` keeps the per-GPU ratio, and changing the CPU line resets cores and RAM to the console's default. `vcpu` and `ram_gb` are pod totals and must be sizes the console offers. An older pod may need `ram_gb` passed with any change.
         `template_id` moves the pod to another template; its variables, ports and command then start from that template,
         and the preview's changes list what was added before that doesn't carry over.
         `env` sets or adds variables (`secret_keys` names the secret ones) and `remove_env` removes variables the user added. `ports` opens new ports, `template_ports` renames, renumbers or exposes/hides current ports ([{"port": 8188, "name": "ui", "new_port": 8189, "external": false}]) and `remove_ports` closes ports the user added. Template variables and ports can't be removed. `command` replaces the start command ("" = back to the template's).
-        Port locks: a port this edit newly exposes over HTTPS (an external port in `ports`, a port set to "external": true) is locked, so only signed-in workspace members and requests with the port's access key get through; a new template's ports follow that template (`open_by_template` in the preview). `lock_public_ports=false`, or "locked": false on its item, leaves it open to anyone who knows the URL: only when the user explicitly asks. A port that is exposed already keeps its lock; set_port_lock changes it without a restart. The preview lists `locked_ports` and `open_ports`.
+        Port locks: a port this edit newly exposes over HTTPS is locked (see `lock_public_ports`); a new template's ports follow that template (`open_by_template` in the preview). A port that is exposed already keeps its lock; set_port_lock changes it without a restart. The preview lists `locked_ports` and `open_ports`.
         Storage: `volumes` attaches existing network storage ([{"storage": pv_name, "mount_path": "/data"}]) or local storage on the pod's current machine; `local_volumes` creates new local storage like create_pod (at least 10 GiB, billed hourly until deleted); `detach_storages` lists pv_names to detach (the storage and its data stay). Names work on previews; confirm with the returned ids. Spot pods can't have local storage, so detach it to switch to spot.
         If the pod's machine can't fit the change, the call fails with node_migration_required and nothing changes. Only after the user agrees to a move, call again with allow_node_migration=true. A move permanently deletes any scratch disk the pod has; then allow_data_loss=true is also needed, only after separate explicit consent (it is only sent together with allow_node_migration).
         If the edit would leave watched folders on no attached storage, it fails with harvest_roots_orphaned and their `paths`; after the user agrees to remove them, pass them as `drop_watched_folders`.
         `enable_folder_saving=true` adds the uploader to an older pod that has none (watched_folders shows editable false with reason no_sidecar), so its folders can be watched; it needs storage on the pod and restarts a running pod once.
-        `max_price_per_hour` refuses the edit when the new estimate is above it."""
+        `max_price_per_hour` refuses the edit when the new estimate is above it.
+        `add_input_assets` and `remove_input_assets` (connection_ids from pods include_assets) change the pod's input assets with a restart; add_pod_asset adds one without."""
         changes = _pod_kwargs(name=name, template_id=template_id, rental_type=rental_type, gpu_model=gpu_model,
                               gpu_vram_gb=gpu_vram_gb, gpu_count=gpu_count, vcpu=vcpu, ram_gb=ram_gb,
                               cpu_line=cpu_line, env=env, secret_keys=secret_keys, remove_env=remove_env, ports=ports,
@@ -681,6 +705,7 @@ def register(server: MCPServer) -> None:
                               volumes=volumes, local_volumes=local_volumes, detach_storages=detach_storages,
                               drop_watched_folders=drop_watched_folders, max_price_per_hour=max_price_per_hour,
                               enable_folder_saving=True if enable_folder_saving else None,
+                              add_input_assets=add_input_assets, remove_input_assets=remove_input_assets,
                               lock_public_ports=lock_public_ports)
         async with meshive_client(ctx) as client:
             ws = await resolve(client, workspace)
@@ -722,6 +747,10 @@ def register(server: MCPServer) -> None:
                 else:
                     question += " The pod isn't running; it uses the new settings at its next start."
                 question += _local_storage_note(est) + _ports.preview_note(locks, creating=False)
+                if add_input_assets or remove_input_assets:
+                    question += _INPUT_ASSETS_NOTE
+                if remove_input_assets:
+                    question += _REMOVE_INPUT_ASSETS_NOTE
                 if allow_node_migration:
                     question += " If its machine can't fit the change, the pod moves to another machine."
                 elif allow_data_loss:
@@ -759,6 +788,8 @@ def register(server: MCPServer) -> None:
         if tx is not None:
             step += (f" If it doesn't come back as expected, call the transactions tool with transaction_id={tx}: it "
                      "shows the current step and why it failed.")
+        if remove_input_assets:
+            step += _REMOVE_INPUT_ASSETS_DONE_NOTE
         out["next_step"] = step + _ports.result_note(locks)
         return out
 
@@ -780,7 +811,8 @@ def register(server: MCPServer) -> None:
         out["revision"] = result.revision
         return out
 
-    @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=DESTRUCTIVE)
+    @meshive_tool(server, "set_watched_folders", title="Set Watched Folders", annotations=DESTRUCTIVE,
+                  conditional_confirm=True)
     async def set_watched_folders(ctx: Context[Any, Any], pod: str, expected_version: int, workspace: str | None = None,
                                   template: dict[str, Any] | None = None, user: list[Any] | None = None,
                                   confirm: bool = False, operation_id: str | None = None) -> dict[str, Any]:

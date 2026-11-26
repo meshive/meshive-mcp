@@ -18,10 +18,12 @@ WRITE_TOOLS = {"set_port_lock", "set_port_preflight", "revoke_browser_sessions",
                "set_watched_folders", "ssh_access", "create_workspace", "update_workspace", "delete_workspace",
                "schedule_maintenance", "maintenance_window", "set_machine_listing", "retry_machine_setup",
                "delete_machine", "send_host_message", "mark_host_messages_read", "machine_credentials",
-               "host_install_command", "run_command", "upload_asset", "finish_upload", "send_feedback"}
+               "host_install_command", "run_command", "upload_asset", "finish_upload", "send_feedback",
+               "update_asset", "delete_asset", "delete_asset_files"}
 DESTRUCTIVE = {"delete_pod", "delete_storage", "delete_serving", "delete_model", "delete_workspace", "delete_machine",
-               "run_command", "revoke_access_key", "revoke_browser_sessions", "finish_upload", "maintenance_window",
-               "start_pod", "update_pod", "set_watched_folders", "roll_access_key", "scale_serving", "stop_task"}
+               "run_command", "revoke_access_key", "revoke_browser_sessions", "delete_asset", "delete_asset_files",
+               "finish_upload", "maintenance_window", "start_pod", "update_pod", "set_watched_folders",
+               "roll_access_key", "scale_serving", "stop_task"}
 # Repeating one of these does more than the first call: it creates another resource or sends another message, or it
 # reveals a login again or issues a new one-time password or install command (machine logins and install commands
 # also email the account owner every time). An access key call issues another key value every time.
@@ -29,6 +31,36 @@ NOT_IDEMPOTENT = {"create_pod", "create_storage", "deploy_serving", "submit_task
                   "create_workspace", "schedule_maintenance", "send_host_message", "machine_credentials",
                   "host_install_command", "ssh_access", "connect_storage", "run_command", "upload_asset",
                   "create_access_key", "roll_access_key", "send_feedback"}
+# Asset files, buckets and exports.
+READ_TOOLS |= {"buckets", "asset_files"}
+WRITE_TOOLS |= {"export_asset"}
+NOT_IDEMPOTENT |= {"export_asset"}
+# Assets in an existing pod.
+WRITE_TOOLS |= {"add_pod_asset", "remove_pod_asset"}
+DESTRUCTIVE |= {"remove_pod_asset"}
+NOT_IDEMPOTENT |= {"add_pod_asset"}
+# Custom pod templates.
+WRITE_TOOLS |= {"save_template", "delete_template"}
+DESTRUCTIVE |= {"delete_template"}
+# Deleting finished tasks and stopping a task's output upload.
+WRITE_TOOLS |= {"delete_tasks", "cancel_task_upload"}
+DESTRUCTIVE |= {"delete_tasks", "cancel_task_upload"}
+# Inference requests, webhooks and inference keys. A new webhook endpoint is another resource, and an inference key
+# call issues another key value every time, like an access key call.
+READ_TOOLS |= {"inference_requests", "webhooks", "inference_keys"}
+WRITE_TOOLS |= {"cancel_inference_request", "save_webhook", "delete_webhook", "create_inference_key",
+                "roll_inference_key", "revoke_inference_key"}
+DESTRUCTIVE |= {"delete_webhook", "revoke_inference_key"}
+NOT_IDEMPOTENT |= {"save_webhook", "create_inference_key", "roll_inference_key"}
+# Saved credentials and where task outputs go by default. A deleted token, key or login can't be brought back.
+WRITE_TOOLS |= {"delete_credential", "set_default_output_bucket"}
+DESTRUCTIVE |= {"delete_credential"}
+# A pod's history, members and invitations, and the account's display name. A removed member has to be invited again.
+READ_TOOLS |= {"pod_history"}
+WRITE_TOOLS |= {"remove_member", "update_account"}
+DESTRUCTIVE |= {"remove_member"}
+# A hosted GPU machine's fan curve.
+WRITE_TOOLS |= {"set_fan_curve"}
 # Claude Code keeps at most this many characters (UTF-16 code units) of a tool description.
 DESCRIPTION_LIMIT = 4096
 
@@ -45,7 +77,7 @@ def _payload(result):
 async def test_tool_list_and_annotations(mcp_client):
     tools = (await mcp_client.list_tools()).tools
     names = {t.name for t in tools}
-    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 71
+    assert names == READ_TOOLS | WRITE_TOOLS and len(tools) == 98
     for t in tools:
         assert t.annotations is not None, t.name
         assert t.annotations.read_only_hint is (t.name in READ_TOOLS), t.name
@@ -970,10 +1002,11 @@ async def test_server_instructions_cover_creating_a_workspace():
 
 # Tools whose `confirm` applies only to some calls; the server instructions name each exception.
 CONFIRM_EXCEPTIONS = {"pause_serving", "scale_serving", "set_machine_listing", "set_watched_folders", "set_port_lock",
-                      "set_port_preflight"}
+                      "set_port_preflight", "save_webhook", "import_asset"}
 # Writes without `confirm`, as in the console.
-NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "import_asset", "ssh_access",
-                     "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload"}
+NO_CONFIRM_WRITES = {"stop_pod", "restart_pod", "stop_task", "register_model", "ssh_access",
+                     "retry_machine_setup", "mark_host_messages_read", "run_command", "upload_asset", "finish_upload",
+                     "update_asset", "save_template", "cancel_inference_request", "update_account"}
 
 
 async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_client):
@@ -996,7 +1029,8 @@ async def test_server_instructions_cover_every_tool_that_takes_confirm(mcp_clien
 
 # Writes whose SDK call keeps no operation record on the server: a repeated call runs again.
 UNRECORDED_TOOLS = {"ssh_access", "connect_storage", "machine_credentials", "host_install_command", "run_command",
-                    "upload_asset", "finish_upload", "create_access_key", "roll_access_key"}
+                    "upload_asset", "finish_upload", "create_access_key", "roll_access_key", "create_inference_key",
+                    "roll_inference_key"}
 
 
 def _sdk_calls_per_tool() -> dict[str, set[str]]:

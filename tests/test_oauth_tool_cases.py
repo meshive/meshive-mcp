@@ -8,11 +8,13 @@ from meshive import AsyncMeshive
 from oauth_tool_cases import CASES, VARIANTS
 from meshive_mcp.tools._common import _UNRECORDED, _WRITES
 
+pytest_plugins = ("oauth_case_fixtures",)
+
 
 @pytest.mark.anyio
 async def test_every_registered_tool_has_one_base_case(mcp_client):
     tools = (await mcp_client.list_tools()).tools
-    assert len(tools) == 71
+    assert len(tools) == 98
     assert Counter(t.name for t in tools) == Counter(case.tool for case in CASES)
     by_name = {tool.name: tool for tool in tools}
     for case in (*CASES, *VARIANTS):
@@ -28,17 +30,18 @@ async def test_every_registered_tool_has_one_base_case(mcp_client):
         elif case.sdk in _UNRECORDED:
             assert case.scope == "read write" and case.retry == "reconcile before retry", case
         else:
-            assert case.effect == "none" and case.retry == "read again", case
+            assert case.retry == "read again", case
+            assert case.effect == ("create a referral code on first lookup" if case.sdk == "get_referral" else "none"), case
 
 
 def test_argument_sensitive_permissions_and_delivery():
     cases = (*CASES, *VARIANTS)
     assert {c.tool for c in cases if c.delivery == "console"} == {
         "pods", "ssh_access", "connect_storage", "machine_credentials", "host_install_command",
-        "create_access_key", "roll_access_key",
+        "create_access_key", "roll_access_key", "create_inference_key", "roll_inference_key",
     }
     assert {(c.arguments.get("rental_type", "demand"), c.scope) for c in cases if c.tool == "gpus"} == {
-        ("demand", "public"), ("spot", "public"), ("demand", "read"), ("spot", "read"),
+        ("demand", "public"), ("spot", "public"), ("demand", "read"), ("spot", "read"), ("task", "read"),
     }
     assert {(c.scope, c.delivery) for c in cases if c.tool == "pods"} == {
         ("read", "tool"), ("read write", "console"),
@@ -49,7 +52,7 @@ def test_argument_sensitive_permissions_and_delivery():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("case", [c for c in (*CASES, *VARIANTS) if c.sdk], ids=lambda c: c.tool)
-async def test_case_reaches_its_sdk_operation(case, mcp_client, fake, with_key, monkeypatch):
+async def test_case_reaches_its_sdk_operation(case, mcp_client, fake, with_key, monkeypatch, case_prerequisites):
     """Stop at the expected SDK boundary, before it can produce a side effect."""
     from conftest import FakeMeshive
     from meshive.exceptions import AuthenticationError

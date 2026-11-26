@@ -640,7 +640,7 @@ async def test_public_gpu_prices_and_private_availability_share_one_endpoint(htt
     assert [i["price_per_hour"] for i in demand["items"]] == ["0.60", "0.10"]
     assert [(i["gpu_model"], i["price_per_hour"]) for i in spot["items"]] == [("GPU A", "0.30")]
     assert all(i["availability"] == "unknown" for i in demand["items"] + spot["items"])
-    assert (await call({"rental_type": "task"}))["code"] == "invalid_argument"
+    assert (await call({"rental_type": "task"}))["code"] == "no_api_key"
     assert "last" not in fake
 
     live = await call({}, {**HEADERS, "Authorization": "Bearer meshive_" + "a" * 64})

@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from test_http import HEADERS, _rpc, http
+from oauth_tool_cases import CASES
 from meshive_mcp import oauth
 from meshive_mcp.settings import settings
 
@@ -45,15 +46,12 @@ async def test_discovery_and_tool_schemes(private, http):
         metadata = (await http.get(path)).json()
         assert metadata["resource"] == RESOURCE and metadata["authorization_servers"] == [ISSUER]
     tools = (await http.post("/mcp", headers=HEADERS, json=_rpc("tools/list"))).json()["result"]["tools"]
-    from test_tools import READ_TOOLS, WRITE_TOOLS
-    assert len(tools) == 71 and {t["name"] for t in tools} == READ_TOOLS | WRITE_TOOLS
+    assert len(tools) == 98
     by_name = {t["name"]: t for t in tools}
-    assert oauth.READ == READ_TOOLS - {"command_status"}
-    for t in tools:
-        scope = ["read"] if t["name"] in oauth.READ else ["read", "write"]
-        expected = [{"type": "oauth2", "scopes": scope}]
-        if t["name"] == "gpus":
-            expected.insert(0, {"type": "noauth"})
+    for case in CASES:
+        t = by_name[case.tool]
+        expected = ([{"type": "noauth"}, {"type": "oauth2", "scopes": ["read"]}] if case.scope == "public"
+                    else [{"type": "oauth2", "scopes": case.scope.split()}])
         assert t["securitySchemes"] == t["_meta"]["securitySchemes"] == expected
     for name in oauth.ACTION_PATHS:
         assert "console_url" in by_name[name]["description"]
@@ -128,3 +126,34 @@ async def test_disabled_oauth_keeps_public_and_manual_service_but_rejects_issued
     r = await http.post("/mcp", headers={**HEADERS, "Authorization": "Bearer meshive_manual"},
                         json=_rpc("tools/call", {"name": "account", "arguments": {}}))
     assert r.status_code == 200 and not r.json()["result"].get("isError")
+
+
+@pytest.mark.parametrize("step", ["part-urls", "complete", "abort"])
+async def test_collection_upload_capability_forwarded_only_to_bound_request(private, step):
+    import json
+    calls = []
+    token = "local-upload-capability"
+    target = "/v1/sdk/assets/asset-a/uploads/batch-b/" + step
+    async def service(request):
+        calls.append(request)
+        if request.url.path.endswith("/exchange"):
+            packet = json.loads(request.content)
+            assert packet["upload_token_hash"] == hashlib.sha256(token.encode()).hexdigest()
+            assert token.encode() not in request.content
+            return httpx.Response(200, json={"credential": "mshod_bound"})
+        assert request.url.path == target and request.headers["X-Asset-Upload-Token"] == token
+        return httpx.Response(200, json={})
+    async with httpx.AsyncClient(base_url=settings.oauth_internal_url, transport=httpx.MockTransport(service)) as backend:
+        transport = oauth.DelegatedTransport(backend, "mshoa_reader", "finish_upload")
+        from meshive import AsyncMeshive
+        sdk = AsyncMeshive("delegated", base_url=settings.oauth_internal_url, transport=transport, max_retries=0)
+        try:
+            if step == "part-urls":
+                await sdk.asset_file_upload_part_urls("asset-a", "batch-b", token, "file-test", [1])
+            elif step == "complete":
+                await sdk.complete_asset_file_upload("asset-a", "batch-b", token)
+            else:
+                await sdk.abort_asset_file_upload("asset-a", "batch-b", token)
+        finally:
+            await sdk.close()
+    assert len(calls) == 2

@@ -19,6 +19,8 @@ from ._common import CREATE, DESTRUCTIVE, MUTATE, REVEAL, call, meshive_tool, pr
 # after about 100 seconds, so a call never waits longer than this and tells the agent to call again instead.
 _CONNECT_WAIT_DEFAULT = 60.0
 _CONNECT_WAIT_MAX = 90.0
+# The smallest network storage volume, in GiB (the console's and the server's minimum).
+_MIN_SIZE_GB = 10
 
 _SSH_NOTE = ("This password opens a shell with access to the files on this storage. Give it only to the user who "
              "asked; never run the command yourself or put the password in files, commits or other tools. It expires in "
@@ -63,6 +65,9 @@ def register(server: MCPServer) -> None:
         `storage_type` stays "nfs" ("hostPath" is refused); `disk_type` and `region` are accepted for compatibility
         and ignored.
         The volume appears in the storages tool shortly after; attach it to a pod with create_pod `volumes`."""
+        if size_gb < _MIN_SIZE_GB:
+            # The server's own refusal names its field (sizeGb); this one names the argument, and nothing is sent.
+            raise invalid_argument(f"`size_gb` must be at least {_MIN_SIZE_GB} (GiB); {size_gb} was given.")
         # disk_type and region are ignored by the server, so they are accepted here and not sent.
         kwargs: dict[str, Any] = dict(storage_type=storage_type, encrypted=encrypted,
                                       max_price_per_hour=max_price_per_hour)
@@ -84,8 +89,10 @@ def register(server: MCPServer) -> None:
                                + (f" A usage warning is sent when it is {threshold:.0%} full." if usage_warning else ""))
             created = await call(client.create_storage, name, size_gb, workspace=ws, **kwargs)
         out = to_dict(created)
-        out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Find its pv_name in "
-                            "the storages tool once it is `running`.")
+        out["next_step"] = (f"Storage '{name}' is being created (transaction {created.transaction_id}). Poll "
+                            f"transactions with transaction_id={created.transaction_id} until status is done or failed "
+                            "(the list shows a storage operation only for its first 3 minutes), and find its pv_name "
+                            "in the storages tool once it is `running`.")
         return out
 
     @meshive_tool(server, "delete_storage", title="Delete Storage", annotations=DESTRUCTIVE)
@@ -156,8 +163,10 @@ def register(server: MCPServer) -> None:
             result = await call(client.update_storage, storage, ws, **kwargs)
         out = to_dict(result)
         tx = result.transaction_id
-        out["next_step"] = (f"Growing the volume runs asynchronously (transaction {tx}); the storages tool shows the new "
-                            "size when it is done." if tx is not None else "Saved; the change applies right away.")
+        out["next_step"] = (f"Growing the volume runs asynchronously (transaction {tx}): poll transactions with "
+                            f"transaction_id={tx} until status is done or failed (the list shows a storage operation "
+                            "only for its first 3 minutes); the storages tool shows the new size when it is done."
+                            if tx is not None else "Saved; the change applies right away.")
         return out
 
     @meshive_tool(server, "connect_storage", title="Connect to Storage", annotations=REVEAL, operation_record=False)
