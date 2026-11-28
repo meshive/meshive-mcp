@@ -3,6 +3,15 @@
 All notable changes to the Meshive MCP server. The hosted server at `https://mcp.meshive.ai/mcp` always runs the
 latest release; self-hosted images are published to Docker Hub as `meshive/meshive-mcp:<version>`.
 
+## Unreleased
+
+`host_install_command` reports the server's refusals with their own error codes instead of `invalid_request`, whose
+advice to fix the arguments and retry was wrong for them: `host_approval_required` (the user applies in the console's
+Host dashboard), `host_application_under_review`, `hosting_not_available`, `registration_closed`,
+`storage_hosting_not_available`, and the install limits `too_many_pending_installs`, `daily_install_limit_reached`
+and `machines_still_setting_up`. Each says not to retry and what to tell the user. The tool no longer offers storage
+machines unasked: storage hosting is by invitation.
+
 ## v1.11.0
 
 Assets can be renamed, retyped and deleted, whole or file by file, and the assets tool shows more of what an asset

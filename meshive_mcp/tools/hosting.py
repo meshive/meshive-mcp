@@ -18,7 +18,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ..client import meshive_client
-from ..errors import NEXT_STEP_INVALID_FAN_CURVE, NEXT_STEP_LISTING_REFUSED, invalid_argument, tool_error
+from ..errors import (NEXT_STEP_INVALID_FAN_CURVE, NEXT_STEP_LISTING_REFUSED, host_install_error, invalid_argument,
+                      tool_error)
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import needs_input, resolve, resolve_pod, resolve_target
@@ -865,19 +866,25 @@ def register(server: MCPServer) -> None:
 
     @meshive_tool(server, "host_install_command", title="Get Host Install Command", annotations=REVEAL,
                   operation_record=False, arg_docs={
-        "agent_type": '"compute" (default) for a GPU or CPU machine, or "storage".',
+        "agent_type": ('"compute" (default) for a GPU or CPU machine; "storage" only when the user asks for a storage '
+                       'machine.'),
     })
     async def host_install_command(ctx: Context[Any, Any], agent_type: str = "compute", confirm: bool = False,
                                    operation_id: str | None = None) -> dict[str, Any]:
         """Get the command that installs the Meshive agent on a new machine and registers it to the user's account,
-        like the console's Add machine: `agent_type` "compute" for a GPU or CPU machine, "storage" for a storage
-        machine (storage hosting is invitation only; other accounts get Storage Hosting Not Available).
+        like the console's Add machine. `agent_type` is "compute" for a GPU or CPU machine; pass "storage" only when
+        the user asks for a storage machine, since storage hosting is by invitation.
         For about 10 minutes, whoever has the command can register machines to this account, so it is a secret. The
         account owner is emailed each time one is issued.
         With confirm=false (default) it only says what it is and issues nothing; call again with confirm=true after the
         user agreed. Run it only on the machine the user named, as root, and only when they asked you to; otherwise
         give it to that user alone. Never put it in files, commits or other tools. The machine shows up in the machines
-        tool once its agent connects."""
+        tool once its agent connects.
+        The server may refuse to issue one, by error `code`: host_approval_required (the account isn't an approved
+        host; the user applies in the console's Host dashboard), host_application_under_review,
+        hosting_not_available, registration_closed (adding machines is closed for now),
+        storage_hosting_not_available (the account isn't enabled for storage), or an install limit. Neither other
+        arguments nor calling again fixes any of them: tell the user what the error's `message` says."""
         agent_type = _choice(agent_type, _AGENT_TYPES, "agent_type", "compute")
         async with meshive_client(ctx) as client:
             if not confirm:
@@ -885,7 +892,13 @@ def register(server: MCPServer) -> None:
                                f"Get the install command for a new {agent_type} machine? For about 10 minutes it lets "
                                "whoever has it register machines to this account, so share it with no one. The account "
                                "owner is emailed when it is issued.")
-            issued = await call(client.issue_install_command, agent_type)
+            try:
+                issued = await call(client.issue_install_command, agent_type)
+            except ToolError as exc:
+                mapped = host_install_error(exc.__cause__)
+                if mapped is None:
+                    raise
+                raise mapped from exc.__cause__
         return {"agent_type": issued.agent_type or agent_type, "command": issued.command,
                 "expires_at": issued.expires_at.isoformat() if issued.expires_at else None, "note": _INSTALL_NOTE,
                 "next_step": ("Give the command to the user, or run it on the machine they named if they asked you to. "

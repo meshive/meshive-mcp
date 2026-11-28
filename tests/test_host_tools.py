@@ -682,20 +682,67 @@ async def test_install_command_rejects_an_unknown_agent_type(mcp_client, fake, w
     assert result.is_error and body["code"] == "invalid_argument" and "last" not in fake
 
 
-async def test_install_command_says_storage_hosting_is_invitation_only(mcp_client):
-    desc = {t.name: t.description for t in (await mcp_client.list_tools()).tools}["host_install_command"]
-    assert "storage hosting is invitation only" in desc and "Storage Hosting Not Available" in desc
-    assert len(desc.encode("utf-16-le")) // 2 < 4096
+async def test_install_command_does_not_advertise_storage_hosting(mcp_client):
+    tool = {t.name: t for t in (await mcp_client.list_tools()).tools}["host_install_command"]
+    desc = " ".join(tool.description.split())
+    assert "only when the user asks for a storage machine" in desc and "storage_hosting_not_available" in desc
+    assert '"storage" for a storage machine' not in desc and ', or "storage"' not in json.dumps(tool.input_schema)
+    assert "only when the user asks for a storage machine" in json.dumps(tool.input_schema)
+    assert len(tool.description.encode("utf-16-le")) // 2 < 4096
 
 
-async def test_install_command_storage_refusal_reaches_the_model(mcp_client, fake, with_key):
-    # An account without storage hosting permission gets the backend's 400; its message must not be lost.
-    message = ("Storage node hosting is available by invitation only. "
-               "You can still add this machine as a compute node.")
-    _fail(fake, "issue_install_command", _api(MeshiveAPIError, 400, "Storage Hosting Not Available", message))
-    result, body = await _call(mcp_client, "host_install_command", {"agent_type": "storage", "confirm": True,
+async def test_install_command_describes_refusals_by_code_and_never_suggests_retrying(mcp_client):
+    desc = " ".join({t.name: t.description for t in (await mcp_client.list_tools()).tools}["host_install_command"]
+                    .split())
+    for code in ("host_approval_required", "host_application_under_review", "hosting_not_available",
+                 "registration_closed", "storage_hosting_not_available"):
+        assert code in desc, code
+    assert "Host dashboard" in desc and "Neither other arguments nor calling again fixes" in desc
+    # Refusal titles never reach the agent; it sees code, message and next_step.
+    assert "Host Approval Required" not in desc and "Storage Hosting Not Available" not in desc
+
+
+# What the backend sends (400, detail {title, message}, no machine-readable code) for each refusal of a new install
+# command, and what the agent must get instead of the general "fix the arguments and retry once".
+CONSOLE_HOST = "https://console.meshive.ai/host/dashboard"
+INSTALL_REFUSALS = [
+    ("Host Approval Required", "Adding machines needs an approved host account. Apply in the Host console "
+                               f"(Machines → Apply to host): {CONSOLE_HOST}", "host_approval_required", "Host dashboard"),
+    ("Host Application Under Review", "Your application to host on Meshive is being reviewed. We'll email you when "
+                                      "it's decided — you can add machines after it's approved.",
+     "host_application_under_review", "being reviewed"),
+    ("Hosting Not Available", f"This account can't add machines right now. See the Host console for details: "
+                              f"{CONSOLE_HOST}", "hosting_not_available", "message"),
+    ("Registration Closed", "New machine registration is temporarily closed.", "registration_closed", "closed"),
+    ("Storage Hosting Not Available", "Storage node hosting is available by invitation only. You can still add this "
+                                      "machine as a compute node.", "storage_hosting_not_available", "compute"),
+    ("Too Many Pending Installs", "You already have install commands waiting to be used. Run one of them, or wait 3 "
+                                  "minutes and try again.", "too_many_pending_installs", "3 minutes"),
+    ("Daily Install Limit Reached", "You have reached today's limit for new install commands. Please try again "
+                                    "tomorrow.", "daily_install_limit_reached", "tomorrow"),
+    ("Machines Still Setting Up", "Some of your machines have not finished setup. Finish or delete them before adding "
+                                  "more.", "machines_still_setting_up", "machines tool"),
+]
+
+
+@pytest.mark.parametrize("title,message,code,hint", INSTALL_REFUSALS, ids=[r[2] for r in INSTALL_REFUSALS])
+async def test_install_command_refusals_reach_the_model_as_stable_codes(mcp_client, fake, with_key, title, message,
+                                                                        code, hint):
+    agent_type = "storage" if code == "storage_hosting_not_available" else "compute"
+    _fail(fake, "issue_install_command", _api(MeshiveAPIError, 400, title, message))
+    result, body = await _call(mcp_client, "host_install_command", {"agent_type": agent_type, "confirm": True,
                                                                     "operation_id": OP})
-    assert result.is_error and body["message"] == message and INSTALL_TOKEN not in json.dumps(body)
+    assert result.is_error and body["code"] == code and body["message"] == message
+    step = body["next_step"]
+    assert step.startswith("Nothing was issued.") and "Do not retry" in step and hint in step
+    assert "Fix the arguments" not in step and INSTALL_TOKEN not in json.dumps(body)
+
+
+async def test_install_refusal_titles_keep_the_general_reading_on_other_tools(mcp_client, fake, with_key):
+    # The same title on another route isn't a hosting refusal: only host_install_command reads it so.
+    _fail(fake, "list_pods", _api(MeshiveAPIError, 400, "Registration Closed", "m"))
+    result, body = await _call(mcp_client, "pods", {})
+    assert result.is_error and body["code"] == "invalid_request"
 
 
 def test_secrets_never_go_out_through_to_dict():

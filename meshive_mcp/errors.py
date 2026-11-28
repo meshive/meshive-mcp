@@ -772,6 +772,57 @@ def serving_write_error(exc: BaseException | None) -> ToolError | None:
     return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
 
 
+# --- host_install_command ---
+# The server refuses a new install command with a 400 whose detail has only a title and a message, no code of its
+# own, so these are told apart by the title, for this tool only. No argument fixes any of them, and calling again
+# gets the same answer until something changes on the account or the platform.
+_HOST_INSTALL_CODES = {
+    "host approval required": ("host_approval_required",
+                               "Nothing was issued. Do not retry. Adding machines needs an approved host account and "
+                               "this one isn't approved yet. Tell the user that they apply in the console's Host "
+                               "dashboard (the message has the link); no tool can apply for them."),
+    "host application under review": ("host_application_under_review",
+                                      "Nothing was issued. Do not retry. Tell the user that their application to host "
+                                      "is being reviewed and that they are emailed when it is decided; machines can be "
+                                      "added once it is approved."),
+    # An application that was declined or revoked, or an approved account that is blocked: the message says where to
+    # look or whom to ask.
+    "hosting not available": ("hosting_not_available",
+                              "Nothing was issued. Do not retry. This account can't add machines. Tell the user what "
+                              "the message says; no tool can change it."),
+    "registration closed": ("registration_closed",
+                            "Nothing was issued. Do not retry. Adding new machines is closed on Meshive for now. Tell "
+                            "the user; they can try again another day."),
+    "storage hosting not available": ("storage_hosting_not_available",
+                                      "Nothing was issued. Do not retry with \"storage\": storage hosting is by "
+                                      "invitation and this account isn't enabled for it. Tell the user. The same "
+                                      "machine can be added as a compute machine, but only if the user chooses that."),
+    # Account limits on install commands, when the platform has them turned on.
+    "too many pending installs": ("too_many_pending_installs",
+                                  "Nothing was issued. Do not retry now. Unused install commands of this account are "
+                                  "still waiting; tell the user to run one of them or wait 3 minutes for them to "
+                                  "expire."),
+    "daily install limit reached": ("daily_install_limit_reached",
+                                    "Nothing was issued. Do not retry today. Tell the user this account reached "
+                                    "today's limit of install commands; they can get one tomorrow."),
+    "machines still setting up": ("machines_still_setting_up",
+                                  "Nothing was issued. Do not retry. Some of this account's machines haven't finished "
+                                  "setup (see the machines tool). Tell the user to finish or remove them first; remove "
+                                  "one with delete_machine only if the user asks."),
+}
+
+
+def host_install_error(exc: BaseException | None) -> ToolError | None:
+    """host_install_command's own reading of a server refusal, or None to keep the general one."""
+    if not isinstance(exc, MeshiveAPIError) or exc.status_code != 400:
+        return None
+    found = _HOST_INSTALL_CODES.get((exc.title or "").strip().lower())
+    if found is None:
+        return None
+    code, next_step = found
+    return tool_error(code, exc.message or exc.title, next_step, **_detail_extras(exc))
+
+
 def _server_code(exc: MeshiveAPIError) -> str | None:
     detail = exc.raw.get("detail") if isinstance(exc.raw, dict) else None
     return detail.get("code") if isinstance(detail, dict) else None
