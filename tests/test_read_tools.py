@@ -254,6 +254,38 @@ async def test_serving_replica_still_setting_up_is_unavailable(mcp_client, fake,
     assert body["code"] == "replica_logs_unavailable" and not _calls(fake, "get_pod_logs")
 
 
+async def test_replica_still_setting_up_says_which_stage(mcp_client, fake, servings_fake, with_key):
+    """A replica without a pod or a log yet: the error names the stage the console shows, so the agent can tell the
+    user what is happening instead of only "no log yet"."""
+    serving = _serving()
+    serving["replicas"][1].update({"logReplicaId": None, "stage": None, "setupStep": "allocated"})
+    servings_fake["serving"] = serving
+    body = _payload(await mcp_client.call_tool("logs", {"serving": 42, "replica": 0}))
+    assert body["code"] == "replica_logs_unavailable"
+    assert "Booting instance & pulling image" in body["message"]
+
+
+async def test_replica_without_a_log_names_only_setup_steps(mcp_client, fake, servings_fake, with_key):
+    """A raw step name (not one of the setup steps) is not put in the sentence as if it were the console's label."""
+    serving = _serving()
+    serving["replicas"][1].update({"logReplicaId": None, "stage": "update_db", "setupStep": None})
+    servings_fake["serving"] = serving
+    body = _payload(await mcp_client.call_tool("logs", {"serving": 42, "replica": 0}))
+    assert body["code"] == "replica_logs_unavailable" and body["message"] == "This replica has no log to read yet."
+
+
+@pytest.mark.parametrize("step, label", [("create_requested", "Requesting GPU capacity"),
+                                         ("allocated", "Booting instance & pulling image"),
+                                         ("bootstrapping", "Preparing instance"),
+                                         ("sanity_checking", "Downloading model & starting engine")])
+async def test_servings_show_setup_steps_in_the_consoles_words(mcp_client, fake, servings_fake, with_key, step, label):
+    serving = _serving()
+    serving["replicas"][1].update({"stage": None, "setupStep": step})
+    servings_fake["serving"] = serving
+    item, = _payload(await mcp_client.call_tool("servings", {"workspace": WS}))["items"]
+    assert {r["replica_index"]: r for r in item["replicas"]}[0]["stage"] == label
+
+
 async def test_serving_failed_and_stopped_replicas(mcp_client, fake, servings_fake, with_key):
     servings_fake["serving"] = _serving(status="error", replicas=[])
     body = _payload(await mcp_client.call_tool("logs", {"serving": 42}))

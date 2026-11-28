@@ -198,6 +198,27 @@ def bind_pod(out: dict[str, Any], pod_name: str, *, retries: bool = True) -> dic
     return out
 
 
+# What the console shows for a serving replica that is still being set up and has no pod (the server's setup steps,
+# in order). Any other stage value passes through unchanged.
+SETUP_STAGE_LABELS = {
+    "create_requested": "Requesting GPU capacity",
+    "allocated": "Booting instance & pulling image",
+    "bootstrapping": "Preparing instance",
+    "sanity_checking": "Downloading model & starting engine",
+}
+
+
+def replica_stage(replica: Any) -> str | None:
+    """A serving replica's stage, with the setup steps of a replica without a pod in the console's words."""
+    stage = getattr(replica, "current_stage", None)
+    return SETUP_STAGE_LABELS.get(stage, stage) if stage else stage
+
+
+def setup_stage_label(replica: Any) -> str | None:
+    """The console's label when the replica is in one of the setup steps above, else None."""
+    return SETUP_STAGE_LABELS.get(getattr(replica, "current_stage", None) or "")
+
+
 def price_change(est: Any) -> str:
     """Sentence with the hourly price before and after an edit, from a pod or storage update estimate."""
     after = money.hourly(est.price_per_hour)

@@ -13,7 +13,7 @@ from ..errors import invalid_argument, tool_error
 from ..paging import paginate
 from ..serialize import to_dict
 from ..workspace import ALL, in_workspace, needs_input, resolve, resolve_many
-from ._common import READ_ONLY, call, meshive_tool
+from ._common import READ_ONLY, call, meshive_tool, replica_stage
 from .credentials import credential_usage
 
 
@@ -46,7 +46,7 @@ def _serving_dict(serving: Any, *, detail: bool = False) -> dict[str, Any]:
     if out.get("failed_replica") is not None:
         out["failed_replica"] = {"replica_index": serving.failed_replica.replica_index}
     for item, replica in zip(out.get("replicas") or [], serving.replicas):
-        item["stage"] = replica.current_stage
+        item["stage"] = replica_stage(replica)
         if detail:
             item["failure"] = to_dict(replica.failure)
             item["metrics"] = to_dict(replica.metrics)

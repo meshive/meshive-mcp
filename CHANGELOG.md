@@ -12,6 +12,10 @@ Host dashboard), `host_application_under_review`, `hosting_not_available`, `regi
 and `machines_still_setting_up`. Each says not to retry and what to tell the user. The tool no longer offers storage
 machines unasked: storage hosting is by invitation.
 
+A serving replica that is still being set up without a pod shows its stage in the console's words in `servings`
+(for example "Booting instance & pulling image" instead of `allocated`), and `logs` says which stage such a replica
+is in when it has no log to read yet.
+
 ## v1.11.0
 
 Assets can be renamed, retyped and deleted, whole or file by file, and the assets tool shows more of what an asset
